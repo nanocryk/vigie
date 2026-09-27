@@ -20,6 +20,7 @@ use crate::store::{SessionRow, Store, StoredEvent};
 
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const CHANGES_CAPACITY: usize = 256;
 
 /// Cheap to clone; every clone shares the same sessions.
 #[derive(Clone)]
@@ -32,6 +33,7 @@ struct Inner {
     program: Program,
     /// Sessions spawned by this manager, closed ones included until reopened.
     live: Mutex<HashMap<Uuid, Session>>,
+    changes: broadcast::Sender<Uuid>,
     sampler: AbortHandle,
 }
 
@@ -50,6 +52,7 @@ impl SessionManager {
             store,
             program,
             live: Mutex::new(HashMap::new()),
+            changes: broadcast::channel(CHANGES_CAPACITY).0,
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
         });
         Ok(Self { inner })
@@ -59,13 +62,43 @@ impl SessionManager {
         &self.inner.store
     }
 
+    /// Receives the id of a session each time it is spawned, changes activity, or
+    /// ends. The store already reflects the change when the id arrives.
+    pub fn subscribe_changes(&self) -> broadcast::Receiver<Uuid> {
+        self.inner.changes.subscribe()
+    }
+
     /// Starts a new Claude session in `cwd`, with the same id on both sides.
     pub async fn create(&self, cwd: PathBuf) -> Result<Session> {
         let id = Uuid::new_v4();
         let mut live = self.inner.live.lock().await;
         let session = self.spawn(id, cwd, Launch::New(id), 0)?;
         live.insert(id, session.clone());
+        let _ = self.inner.changes.send(id);
         Ok(session)
+    }
+
+    /// The session if its child is running, without spawning one.
+    pub async fn live(&self, id: Uuid) -> Option<Session> {
+        self.inner
+            .live
+            .lock()
+            .await
+            .get(&id)
+            .filter(|session| !session.is_closed())
+            .cloned()
+    }
+
+    /// Activity of every session whose child is running.
+    pub async fn activities(&self) -> HashMap<Uuid, Activity> {
+        self.inner
+            .live
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, session)| !session.is_closed())
+            .map(|(id, session)| (*id, *session.activity().borrow()))
+            .collect()
     }
 
     /// The live session, or a known ended one resumed with `--resume`.
@@ -82,6 +115,7 @@ impl SessionManager {
             .with_context(|| format!("unknown session {id}"))?;
         let session = self.spawn(id, row.cwd, Launch::Resume(id), row.last_seq)?;
         live.insert(id, session.clone());
+        let _ = self.inner.changes.send(id);
         Ok(session)
     }
 
@@ -124,8 +158,26 @@ impl SessionManager {
             events,
             Arc::downgrade(&self.inner),
         ));
+        tokio::spawn(announce_changes(
+            id,
+            session.activity(),
+            self.inner.changes.clone(),
+        ));
         Ok(session)
     }
+}
+
+/// The activity channel closes when the session actor ends, after its final
+/// state is queued to the store.
+async fn announce_changes(
+    id: Uuid,
+    mut activity: watch::Receiver<Activity>,
+    changes: broadcast::Sender<Uuid>,
+) {
+    while activity.changed().await.is_ok() {
+        let _ = changes.send(id);
+    }
+    let _ = changes.send(id);
 }
 
 /// Samples usage each time the session goes idle after a turn, until it ends.

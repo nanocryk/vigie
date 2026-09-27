@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -57,7 +58,8 @@ pub struct Store {
     jobs: mpsc::Sender<Job>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionState {
     Running,
     /// The host closed the child's stdin.
@@ -82,7 +84,8 @@ pub struct SessionRow {
     pub state: SessionState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventKind {
     /// `payload` is a CLI stdout line exactly as received.
     Line,
