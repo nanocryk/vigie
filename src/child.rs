@@ -24,6 +24,8 @@ const STRIPPED_ENV: [&str; 5] = [
 ];
 /// Vigie's hook variables; without them its hook does nothing.
 const STRIPPED_ENV_PREFIX: &str = "VIGIE_";
+/// Set to false so claude.ai connectors are not loaded; an unauthorized one otherwise gets reported by the model.
+const CONNECTORS_ENV: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
 const FLAGS: [&str; 10] = [
     "-p",
@@ -93,7 +95,7 @@ pub fn args(launch: Launch) -> Vec<OsString> {
         .collect()
 }
 
-/// The child environment: `parent` minus the stripped variables, plus `SESSION_ENV`.
+/// The child environment: `parent` minus the stripped variables, plus `SESSION_ENV` and `CONNECTORS_ENV`.
 /// Names compare case-insensitively, as Windows treats them.
 pub fn env(
     parent: impl IntoIterator<Item = (OsString, OsString)>,
@@ -101,9 +103,12 @@ pub fn env(
 ) -> Vec<(OsString, OsString)> {
     let mut vars: Vec<(OsString, OsString)> = parent
         .into_iter()
-        .filter(|(name, _)| !is_stripped(name) && !same_name(name, SESSION_ENV))
+        .filter(|(name, _)| {
+            !is_stripped(name) && !same_name(name, SESSION_ENV) && !same_name(name, CONNECTORS_ENV)
+        })
         .collect();
     vars.push((SESSION_ENV.into(), host_session.to_string().into()));
+    vars.push((CONNECTORS_ENV.into(), "false".into()));
     vars
 }
 
@@ -247,6 +252,7 @@ mod tests {
             var("VIGIE_HOOK_URL", "https://x"),
             var("vigie_hook_secret", "s"),
             var("VIGIE2_SESSION_ID", "parent-session"),
+            var("enable_claudeai_mcp_servers", "true"),
             var("CLAUDE_CONFIG_DIR", "/c"),
             var("ANTHROPIC_MODEL", "m"),
         ];
@@ -258,6 +264,7 @@ mod tests {
                 var("CLAUDE_CONFIG_DIR", "/c"),
                 var("ANTHROPIC_MODEL", "m"),
                 var(SESSION_ENV, &session.to_string()),
+                var(CONNECTORS_ENV, "false"),
             ]
         );
     }

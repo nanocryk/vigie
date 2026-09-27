@@ -1,6 +1,11 @@
-import { type ReactNode, use } from "react";
+import { type ReactNode, use, useEffect } from "react";
 
+import { getClient } from "@/client";
+import { SessionList } from "@/components/SessionList";
+import { SessionScreen } from "@/components/SessionScreen";
 import type { BootResult } from "@/pairing";
+import { useRoute } from "@/route";
+import { trackVisualViewport } from "@/viewport";
 
 function Gate({ children }: { children: ReactNode }) {
   return (
@@ -14,15 +19,19 @@ function Gate({ children }: { children: ReactNode }) {
 }
 
 function Shell({ label }: { label: string | null }) {
+  const client = getClient();
+  useEffect(() => {
+    trackVisualViewport();
+    client.start();
+  }, [client]);
+  const route = useRoute();
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="flex items-center justify-between border-b px-4 py-3">
-        <span className="text-primary voice-heading text-lg">vigie2</span>
-        {label !== null && <span className="text-muted-foreground voice-ui text-sm">{label}</span>}
-      </header>
-      <main className="flex flex-1 items-center justify-center p-6">
-        <p className="text-muted-foreground">No sessions yet</p>
-      </main>
+    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
+      {route.kind === "session" ? (
+        <SessionScreen key={route.id} client={client} id={route.id} />
+      ) : (
+        <SessionList client={client} label={label} />
+      )}
     </div>
   );
 }

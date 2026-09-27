@@ -10,4 +10,4 @@
 # ---
 set -euo pipefail
 cd "$CANIF_PROJECT"
-cargo run --release -- serve ${CANIF_BIND:+--bind "$CANIF_BIND"}
+cargo run --release --bin vigie2 -- serve ${CANIF_BIND:+--bind "$CANIF_BIND"}

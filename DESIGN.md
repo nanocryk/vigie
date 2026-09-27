@@ -55,6 +55,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Discussion view
 
+- Classic chat layout: Claude's text in bubbles on the left, the user's on the right. A bubble spans the full width minus a fixed margin on the side opposite its sender. Bubbles are rectangular with small rounded corners (about 5px) and no speech tail.
+- Bubbles hold text only; tool uses appear outside bubbles.
 - Scroll never yanked: new content arriving while the view is scrolled up does not move the view.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
 - Approvals by swipe: one side accepts, the other rejects, with a way to add notes.
@@ -118,6 +120,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
 - History in SQLite, for queries and search.
 - Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children, so hooks can detect which host runs them.
+- Children run without claude.ai connectors (`ENABLE_CLAUDEAI_MCP_SERVERS=false`): an unauthorized connector otherwise gets reported by the model in its replies.
 
 ## Frontend stack
 
