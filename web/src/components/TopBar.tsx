@@ -1,10 +1,4 @@
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useClock } from "@/components/useNow";
 import {
@@ -14,7 +8,6 @@ import {
   formatPercent,
   formatSpan,
   formatTokens,
-  formatTtl,
   isStale,
   readingAge,
   type Tone,
@@ -22,7 +15,6 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
-import { formatExact, formatStamp } from "@/format";
 import type { Confidence, ContextView, SessionView, UsageSnapshot, WindowReport } from "@/wire";
 
 const TWEEN_MS = 700;
@@ -152,34 +144,7 @@ function WindowRow({ kind, report, now }: { kind: WindowKind; report: WindowRepo
   );
 }
 
-function windowDetails(label: string, report: WindowReport | null, now: number): string[] {
-  if (report === null) return [`${label}: no reading in this window`];
-  const resets = Date.parse(report.resets_at);
-  const lines = [
-    `${label}: ${formatPercent(report.used)} used, ${formatPercent(report.projected)} projected (${report.confidence}), rate ×${report.rate.toFixed(2)}`,
-    `    resets ${formatStamp(resets, now)} (in ${formatSpan(resets - now)})`,
-  ];
-  if (report.work_left_hours !== null) {
-    lines.push(`    work left ${report.work_left_hours.toFixed(1)} h`);
-  }
-  if (report.deadline !== null) {
-    const deadline = Date.parse(report.deadline);
-    lines.push(`    limit reached ${formatStamp(deadline, now)} (in ${formatSpan(deadline - now)})`);
-  }
-  return lines;
-}
-
-function AccountColumn({
-  usage,
-  error,
-  now,
-  expanded,
-}: {
-  usage: UsageSnapshot | null;
-  error: string | null;
-  now: number;
-  expanded: boolean;
-}) {
+function AccountColumn({ usage, now }: { usage: UsageSnapshot | null; now: number }) {
   const age = readingAge(usage, now);
   const stale = isStale(age);
   const fiveHour = usage?.five_hour ?? null;
@@ -190,18 +155,6 @@ function AccountColumn({
       {sevenDay === null ? <EmptyRow label="7d" /> : <WindowRow kind="7d" report={sevenDay} now={now} />}
       {stale && age !== null && (
         <div className="text-muted-foreground">readings {formatSpan(age)} old</div>
-      )}
-      {expanded && (
-        <div className="text-muted-foreground mt-1 whitespace-pre-wrap">
-          {[
-            ...windowDetails("5h", fiveHour, now),
-            ...windowDetails("7d", sevenDay, now),
-            age === null
-              ? "no reading yet"
-              : `newest reading ${formatStamp(now - age, now)} (${formatSpan(age)} ago)`,
-            ...(error === null ? [] : [error]),
-          ].join("\n")}
-        </div>
       )}
     </div>
   );
@@ -258,80 +211,32 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
   }
 }
 
-function sessionDetails(session: SessionView | null, gauge: CacheGauge, now: number): string[] {
-  const context = session?.context ?? null;
-  const lines = [
-    context === null
-      ? "context: unknown until a turn ends"
-      : `context: ${context.used_tokens.toLocaleString()} / ${context.max_tokens.toLocaleString()} tokens (${formatPercent(context.percentage)}, ${context.source})`,
-  ];
-  const cache = session?.cache ?? null;
-  switch (gauge.kind) {
-    case "unknown":
-      lines.push("cache: no request with a known TTL yet");
-      break;
-    case "warm":
-      lines.push(
-        `cache: ${formatTtl(gauge.ttlMs)} TTL, last request ${cache === null ? "?" : formatExact(Date.parse(cache.last_request_at))}`,
-        `    cold at ${formatStamp(gauge.coldAt, now)} (in ${formatSpan(gauge.remainingMs)})`,
-      );
-      break;
-    case "cold":
-      lines.push(
-        `cache: ${formatTtl(gauge.ttlMs)} TTL, cold since ${formatStamp(gauge.coldAt, now)} (${formatSpan(now - gauge.coldAt)} ago)`,
-      );
-      break;
-  }
-  return lines;
-}
-
 /**
  * Account usage windows, then the session's context and cache when `session` is
- * given (undefined on Home). Side by side from 600 px, stacked below; a tap
- * shows every detail.
+ * given (undefined on Home). Side by side from 600 px, stacked below.
  */
 export function TopBar({
   usage,
-  usageError,
   session,
   className = "",
 }: {
   usage: UsageSnapshot | null;
-  usageError: string | null;
   session?: SessionView | null;
   className?: string;
 }) {
   const now = useClock(1000);
-  const [expanded, setExpanded] = useState(false);
-  const toggle = () => setExpanded((current) => !current);
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      toggle();
-    }
-  };
   const gauge = cacheGauge(session?.cache ?? null, now);
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-expanded={expanded}
       aria-label="Usage, context and cache"
-      onClick={toggle}
-      onKeyDown={onKeyDown}
-      className={`voice-code grid cursor-pointer grid-cols-1 gap-x-4 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 ${className}`}
+      className={`voice-code grid grid-cols-1 gap-x-4 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 ${className}`}
     >
-      <AccountColumn usage={usage} error={usageError} now={now} expanded={expanded} />
+      <AccountColumn usage={usage} now={now} />
       {session !== undefined && (
         <div className="min-w-0">
           <ContextRow context={session?.context ?? null} />
           <CacheRow gauge={gauge} />
-          {expanded && (
-            <div className="text-muted-foreground mt-1 whitespace-pre-wrap">
-              {sessionDetails(session, gauge, now).join("\n")}
-            </div>
-          )}
         </div>
       )}
     </div>

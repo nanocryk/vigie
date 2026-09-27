@@ -271,7 +271,26 @@ def cd(s, cwd):
     s.turn("Use the Bash tool to run exactly: pwd. Reply with its output.", allow)
 
 
-SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd)}
+def context(s, cwd):
+    s.control("initialize")
+    s.note("context before any turn")
+    s.control("get_context_usage")
+    s.turn("Reply with exactly: ok")
+    s.note("context after a turn")
+    s.control("get_context_usage")
+    s.control("get_context_usage", detail="summary")
+    s.user("Use the Bash tool to run exactly: python -c \"import time; time.sleep(8)\". "
+           "Run it in the foreground. Then reply done.")
+    s.pump(lambda m: is_tool_use(m, "Bash"), allow)
+    s.note("context while a tool runs")
+    s.control("get_context_usage", allow)
+    s.pump(lambda m: m.get("type") == "result", allow, 60)
+    s.note("context after the tool turn")
+    s.control("get_context_usage")
+
+
+SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
+                                     context)}
 
 
 def main():

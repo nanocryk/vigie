@@ -22,7 +22,7 @@ Line-delimited JSON on stdin/stdout, the same wire protocol the Agent SDKs use. 
   - `ExitPlanMode` (plan approval) arrives here too.
   - Can stay pending indefinitely. A `PreToolUse` hook returning `defer` lets the process exit and resume later.
   - In `auto` and `bypassPermissions` modes it is never called, so questions and plans skip the host unless a `PreToolUse` hook routes them.
-- Host to CLI: `initialize`, `interrupt` (optional `cancel_queued`), `set_permission_mode`, `set_model`, `get_usage` (experimental), `side_question`, `rewind_files`, `request_user_dialog` answers, and more.
+- Host to CLI: `initialize`, `interrupt` (optional `cancel_queued`), `set_permission_mode`, `set_model`, `get_usage` (experimental), `get_context_usage`, `side_question`, `rewind_files`, `request_user_dialog` answers, and more.
 - `reinitialize` after a transport gap: the response carries the `can_use_tool` requests still pending.
 - `system/init.capabilities` for feature detection: `interrupt_receipt_v1` (interrupt response lists `still_queued`), `interrupt_cancel_queued_v1`.
 - SIGTERM leaves the turn unfinished (exit 143); use `interrupt` to end a turn.
@@ -74,6 +74,8 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - `result.usage.cache_creation`: `ephemeral_1h_input_tokens` holds every cache write, `ephemeral_5m_input_tokens` is 0. Also `iterations[]`, `modelUsage.<model>` with `costUSD`, `contextWindow` (1000000), `costBasis: "list"`.
 - `rate_limit_event` comes after the first `assistant` message of some turns, not every turn. Shape: `status`, `resetsAt` (epoch s), `rateLimitType`, `overageStatus: "rejected"`, `overageDisabledReason: "org_level_disabled"`, `isUsingOverage: false`, `unifiedWindows: {five_hour, seven_day}` each `{utilization, resetsAt}` with utilization a fraction (0.07).
 - `get_usage` (`skip_behaviors: true`, about 230 ms): `subscription_type: "max"`, `rate_limits_available: true`, `rate_limits.five_hour` / `seven_day` `{utilization, resets_at}` with utilization in percent (7) and ISO dates, `extra_usage.is_enabled: false`, `limits[]` (`kind`: `session`, `weekly_all`, `weekly_scoped` with `scope.model.display_name`), `spend`, `seven_day_breakdown`, plus many codename keys set to null.
+- `get_context_usage` (no parameters, 10 to 500 ms): answered before the first turn and while a turn runs. Reply keys: `totalTokens`, `maxTokens`, `rawMaxTokens`, `percentage` (rounded integer), `model` (`claude-opus-5-5[1m]`), `autoCompactThreshold`, `isAutoCompactEnabled`, `autocompactSource`, `apiUsage` (null before the first request, else the last request's `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`), `categories[]` (`name`, `tokens`, `color`, `kind`: `used`, `deferred`, `buffer` or `free`, optional `isDeferred`), plus `memoryFiles`, `skills`, `slashCommands`, `agents`, `mcpTools`, `messageBreakdown`, `gridRows`, which hold the user's configuration.
+- After a request, `totalTokens` equals the last main request's input, cache read and cache creation tokens exactly. Before any request it still counts the system prompt, tools, memory and skills.
 
 ### Background tasks
 

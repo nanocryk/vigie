@@ -93,11 +93,7 @@ export function SessionList({ client, label }: { client: Client; label: string |
     <>
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <span className="text-primary voice-heading flex-1 text-lg min-[600px]:flex-none">vigie2</span>
-        <TopBar
-          usage={snapshot.usage}
-          usageError={snapshot.usageError}
-          className={TOP_BAR_IN_ROW}
-        />
+        <TopBar usage={snapshot.usage} className={TOP_BAR_IN_ROW} />
         <div className="flex min-w-0 items-center gap-3">
           <ConnectionBadge status={snapshot.status} />
           {label !== null && (

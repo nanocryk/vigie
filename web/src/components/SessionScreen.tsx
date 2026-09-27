@@ -199,7 +199,6 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         </div>
         <TopBar
           usage={snapshot.usage}
-          usageError={snapshot.usageError}
           session={view}
           className={TOP_BAR_IN_ROW}
         />

@@ -4,13 +4,16 @@
 //! Each main-conversation request refreshes the cache for the TTL its write
 //! used: `usage.cache_creation` splits the written tokens between the 1 hour and
 //! the 5 minute TTLs. A request that wrote nothing keeps the last known TTL.
-//! The context is the prompt of the newest main request (input, cache read and
-//! cache creation tokens) over the model's `contextWindow` from the `result`.
+//! The context comes from the CLI's `get_context_usage`, asked when the child
+//! starts and after each turn. A later main request replaces its total with the
+//! request's prompt (input, cache read and cache creation tokens), the same
+//! figure, over the CLI's window when known, else the model's `contextWindow`
+//! from the `result`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{AssistantMessage, ResultMessage, Usage};
+use crate::protocol::{AssistantMessage, ContextCategory, ResultMessage, Usage};
 
 pub const ONE_HOUR_TTL_SECS: u32 = 60 * 60;
 pub const FIVE_MINUTE_TTL_SECS: u32 = 5 * 60;
@@ -140,16 +143,26 @@ pub struct Context {
     pub max_tokens: u64,
     pub percentage: f64,
     pub source: ContextSource,
+    /// From the latest `get_context_usage` reply.
+    pub autocompact_threshold: Option<u64>,
+    /// From the latest `get_context_usage` reply; empty while unknown.
+    pub categories: Vec<ContextCategory>,
 }
 
 impl Context {
-    pub fn estimate(used_tokens: u64, max_tokens: u64) -> Option<Self> {
+    pub fn new(used_tokens: u64, max_tokens: u64, source: ContextSource) -> Option<Self> {
         (max_tokens > 0).then(|| Self {
             used_tokens,
             max_tokens,
             percentage: used_tokens as f64 * 100.0 / max_tokens as f64,
-            source: ContextSource::Estimate,
+            source,
+            autocompact_threshold: None,
+            categories: Vec::new(),
         })
+    }
+
+    pub fn estimate(used_tokens: u64, max_tokens: u64) -> Option<Self> {
+        Self::new(used_tokens, max_tokens, ContextSource::Estimate)
     }
 }
 

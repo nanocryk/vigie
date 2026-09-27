@@ -232,6 +232,12 @@ impl SessionManager {
             session.activity(),
             self.inner.changes.clone(),
         ));
+        let (first_ask, store, changes) = (
+            session.clone(),
+            self.inner.store.clone(),
+            self.inner.changes.clone(),
+        );
+        tokio::spawn(async move { ask_context(&first_ask, &store, &changes).await });
         Ok(session)
     }
 }
@@ -249,9 +255,10 @@ async fn announce_changes(
     let _ = changes.send(id);
 }
 
-/// Samples usage each time the session goes idle after a turn, until it ends,
-/// and announces the rate limit readings and finished turns the session reports,
-/// and each main-conversation request, which moves its cache and context gauges.
+/// Samples usage and asks the context each time the session goes idle after a
+/// turn, until it ends. Announces the rate limit readings and finished turns the
+/// session reports, and each main-conversation request, which moves its cache and
+/// context gauges.
 /// A lagged receiver may have missed that moment, so a lag counts as one. Holds
 /// no `Session` handle, so it never keeps a session alive.
 async fn sample_after_turns(
@@ -308,7 +315,27 @@ async fn sample_after_turns(
         drop(inner);
         if let Some(session) = session {
             sample(&session, &store, &usage_changes).await;
+            ask_context(&session, &store, &changes).await;
         }
+    }
+}
+
+/// Stores the CLI's context usage and announces the session when it changed.
+async fn ask_context(session: &Session, store: &Store, changes: &broadcast::Sender<Uuid>) {
+    let id = session.id();
+    let reply = match session.context_usage().await {
+        Ok(reply) => reply,
+        Err(err) => {
+            tracing::debug!("get_context_usage for session {id}: {err:#}");
+            return;
+        }
+    };
+    match store.record_context_usage(id, reply).await {
+        Ok(true) => {
+            let _ = changes.send(id);
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!("store the context of session {id}: {err:#}"),
     }
 }
 

@@ -81,6 +81,8 @@ describe("parseSessionList", () => {
               max_tokens: 1000000,
               percentage: 3.0985,
               source: "estimate",
+              autocompact_threshold: 900000,
+              categories: [{ name: "Messages", tokens: 27985, kind: "used" }],
             },
           },
           {
@@ -102,6 +104,10 @@ describe("parseSessionList", () => {
     expect(list[1]?.permission_mode).toBeNull();
     expect(list[0]?.cache?.ttl_secs).toBe(3600);
     expect(list[0]?.context?.source).toBe("estimate");
+    expect(list[0]?.context?.autocompact_threshold).toBe(900000);
+    expect(list[0]?.context?.categories).toEqual([
+      { name: "Messages", tokens: 27985, kind: "used" },
+    ]);
     expect(list[1]?.cache).toBeNull();
     expect(list[1]?.context).toBeNull();
   });
@@ -120,6 +126,30 @@ describe("parseSessionList", () => {
     };
     expect(() => parseSessionList({ sessions: [session] }, "list")).toThrow(
       /list\.sessions\[0\]\.context\.source: unknown context source: "guess"/,
+    );
+  });
+
+  it("names a bad context category", () => {
+    const session = {
+      id: "a",
+      cwd: "/p",
+      created_at: "c",
+      updated_at: "u",
+      state: { kind: "stopped" },
+      last_seq: 1,
+      live: false,
+      busy: false,
+      context: {
+        used_tokens: 1,
+        max_tokens: 2,
+        percentage: 50,
+        source: "cli",
+        autocompact_threshold: null,
+        categories: [{ name: "Messages", tokens: "1", kind: "used" }],
+      },
+    };
+    expect(() => parseSessionList({ sessions: [session] }, "list")).toThrow(
+      /list\.sessions\[0\]\.context\.categories\[0\]\.tokens: expected a number: "1"/,
     );
   });
 });

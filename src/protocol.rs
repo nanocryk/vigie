@@ -628,6 +628,10 @@ pub enum HostRequest {
         #[serde(flatten)]
         extra: Extra,
     },
+    GetContextUsage {
+        #[serde(flatten)]
+        extra: Extra,
+    },
     #[serde(untagged)]
     Other(Extra),
 }
@@ -819,6 +823,27 @@ pub struct GetUsageResponse {
     pub rate_limits: Option<UsageRateLimits>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// The parts of a `get_context_usage` reply vigie2 reads; the rest describes the
+/// user's configuration and is dropped unread.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsageResponse {
+    pub total_tokens: u64,
+    pub max_tokens: u64,
+    #[serde(default)]
+    pub auto_compact_threshold: Option<u64>,
+    #[serde(default)]
+    pub categories: Vec<ContextCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u64,
+    /// `used`, `deferred`, `buffer` or `free`.
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1058,7 +1083,9 @@ mod tests {
                                         Answers::SetPermissionMode
                                     }
                                     HostRequest::GetUsage { .. } => Answers::GetUsage,
-                                    HostRequest::Other(_) => unreachable!(),
+                                    HostRequest::GetContextUsage { .. } | HostRequest::Other(_) => {
+                                        unreachable!()
+                                    }
                                 };
                                 answers.insert(request.request_id.clone(), kind);
                             }

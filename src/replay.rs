@@ -3,7 +3,8 @@
 //! A recording is the spike driver's ndjson: one `{"t", "dir", "msg"}` per line,
 //! `out` for CLI stdout, `in` for CLI stdin, `note` for annotations. `out`
 //! lines are written as recorded; an `in` line blocks until the host sends a
-//! matching line.
+//! matching line. Unscripted `get_usage` and `get_context_usage` requests are
+//! answered without consuming the script.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -143,8 +144,70 @@ fn is_get_usage(msg: &Value) -> bool {
 }
 
 fn canned_usage_response(request_id: &Value) -> Value {
+    success_response(request_id, CANNED_USAGE.clone())
+}
+
+fn success_response(request_id: &Value, payload: Value) -> Value {
     serde_json::json!({"type": "control_response", "response": {
-        "subtype": "success", "request_id": request_id, "response": CANNED_USAGE.clone()}})
+        "subtype": "success", "request_id": request_id, "response": payload}})
+}
+
+/// Context total of a replay before its first main request.
+pub const CANNED_CONTEXT_START: u64 = 12_000;
+pub const CANNED_CONTEXT_MAX: u64 = 967_000;
+pub const CANNED_AUTOCOMPACT_THRESHOLD: u64 = 900_000;
+const CANNED_SYSTEM_TOKENS: u64 = 3_000;
+const PROMPT_KEYS: [&str; 3] = [
+    "input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+];
+
+fn is_get_context_usage(msg: &Value) -> bool {
+    is_control_request(msg) && msg["request"]["subtype"] == "get_context_usage"
+}
+
+fn prompt_tokens(usage: &Value) -> u64 {
+    PROMPT_KEYS
+        .iter()
+        .map(|key| usage[key].as_u64().unwrap_or(0))
+        .sum()
+}
+
+/// The usage of a main-conversation request an `out` line reports, if any.
+fn main_request_usage(msg: &Value) -> Option<&Value> {
+    let usage = &msg["message"]["usage"];
+    (msg["type"] == "assistant" && msg["parent_tool_use_id"].is_null() && prompt_tokens(usage) > 0)
+        .then_some(usage)
+}
+
+/// A hand-written `get_context_usage` reply whose total is the prompt of the
+/// last main request played, as the CLI reports it.
+fn canned_context_usage(last_usage: Option<&Value>) -> Value {
+    let total = last_usage.map_or(CANNED_CONTEXT_START, prompt_tokens);
+    let api_usage = last_usage.map_or(Value::Null, |usage| {
+        serde_json::json!({
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
+            "cache_read_input_tokens": usage["cache_read_input_tokens"],
+        })
+    });
+    serde_json::json!({
+        "totalTokens": total,
+        "maxTokens": CANNED_CONTEXT_MAX,
+        "rawMaxTokens": 1_000_000,
+        "percentage": (total * 100 + CANNED_CONTEXT_MAX / 2) / CANNED_CONTEXT_MAX,
+        "model": "claude-opus-5-5[1m]",
+        "autoCompactThreshold": CANNED_AUTOCOMPACT_THRESHOLD,
+        "isAutoCompactEnabled": true,
+        "apiUsage": api_usage,
+        "categories": [
+            {"name": "System prompt", "tokens": CANNED_SYSTEM_TOKENS, "kind": "used"},
+            {"name": "Messages", "tokens": total.saturating_sub(CANNED_SYSTEM_TOKENS), "kind": "used"},
+            {"name": "Free space", "tokens": CANNED_CONTEXT_MAX.saturating_sub(total), "kind": "free"},
+        ],
+    })
 }
 
 #[derive(Debug)]
@@ -224,12 +287,16 @@ where
     // Recorded host request id -> id the host used in this run.
     let mut request_ids: HashMap<String, String> = HashMap::new();
     let mut clock = 0;
+    let mut last_usage: Option<Value> = None;
     let initialize = initialize_ids(recording);
     for step in &recording.steps {
         match step.dir {
             Direction::Out => {
                 if options.pace == Pace::Realtime && step.t > clock {
                     tokio::time::sleep(Duration::from_millis(step.t - clock)).await;
+                }
+                if let Some(usage) = main_request_usage(&step.msg) {
+                    last_usage = Some(usage.clone());
                 }
                 let mut msg = with_host_request_id(&step.msg, &request_ids);
                 if let Some(session_id) = &options.session_id
@@ -260,7 +327,7 @@ where
                 };
                 match accept(step, got, &mut request_ids) {
                     Ok(()) => break,
-                    Err(err) => answer_usage_or(err, &mut output).await?,
+                    Err(err) => answer_unscripted_or(err, last_usage.as_ref(), &mut output).await?,
                 }
             },
         }
@@ -268,14 +335,17 @@ where
     }
     output.flush().await?;
     while let Some(got) = next_line(&mut host_lines).await? {
-        answer_usage_or(ReplayError::AfterEnd { got: got.clone() }, &mut output).await?;
+        let err = ReplayError::AfterEnd { got: got.clone() };
+        answer_unscripted_or(err, last_usage.as_ref(), &mut output).await?;
     }
     Ok(())
 }
 
-/// Answers an unscripted `get_usage` request; any other unexpected line is `err`.
-async fn answer_usage_or<W: AsyncWrite + Unpin>(
+/// Answers an unscripted `get_usage` or `get_context_usage` request; any other
+/// unexpected line is `err`.
+async fn answer_unscripted_or<W: AsyncWrite + Unpin>(
     err: ReplayError,
+    last_usage: Option<&Value>,
     output: &mut W,
 ) -> Result<(), ReplayError> {
     let got = match &err {
@@ -285,6 +355,10 @@ async fn answer_usage_or<W: AsyncWrite + Unpin>(
     match serde_json::from_str::<Value>(got) {
         Ok(msg) if is_get_usage(&msg) => {
             write_line(output, &canned_usage_response(&msg["request_id"])).await
+        }
+        Ok(msg) if is_get_context_usage(&msg) => {
+            let reply = success_response(&msg["request_id"], canned_context_usage(last_usage));
+            write_line(output, &reply).await
         }
         _ => Err(err),
     }
@@ -642,6 +716,42 @@ mod tests {
         }
         host.send(&get_usage("u2")).await;
         assert_usage_answer(&host.receive().await.expect("usage answer"), "u2");
+        host.finish().await.expect("replay failed");
+    }
+
+    fn get_context_usage(request_id: &str) -> Value {
+        serde_json::json!({"type": "control_request", "request_id": request_id,
+            "request": {"subtype": "get_context_usage"}})
+    }
+
+    #[tokio::test]
+    async fn unscripted_get_context_usage_reports_the_last_main_prompt() {
+        let recording = recording("basic");
+        let steps = recording.steps.clone();
+        let mut host = Host::start(recording);
+        host.send(&get_context_usage("c1")).await;
+        let before = host.receive().await.expect("context answer");
+        assert_eq!(before["response"]["request_id"], "c1");
+        let reply = &before["response"]["response"];
+        assert_eq!(reply["totalTokens"], CANNED_CONTEXT_START);
+        assert_eq!(reply["maxTokens"], CANNED_CONTEXT_MAX);
+        assert!(reply["apiUsage"].is_null());
+        for step in &steps {
+            match step.dir {
+                Direction::In => host.send(&step.msg).await,
+                Direction::Out => {
+                    host.receive().await.expect("out line");
+                }
+            }
+        }
+        host.send(&get_context_usage("c2")).await;
+        let after = host.receive().await.expect("context answer");
+        // input 2, cache read 29004, cache creation 1979.
+        assert_eq!(after["response"]["response"]["totalTokens"], 30_985);
+        assert_eq!(
+            after["response"]["response"]["apiUsage"]["cache_read_input_tokens"],
+            29_004
+        );
         host.finish().await.expect("replay failed");
     }
 

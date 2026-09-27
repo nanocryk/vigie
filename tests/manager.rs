@@ -9,9 +9,12 @@ use tempfile::TempDir;
 use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
 use vigie2::child::{Launch, Program};
+use vigie2::gauges::ContextSource;
 use vigie2::manager::SessionManager;
 use vigie2::protocol::Inbound;
-use vigie2::replay::{Direction, Recording};
+use vigie2::replay::{
+    CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, Direction, Recording,
+};
 use vigie2::session::{Event, EventBody, HostEvent, Session};
 use vigie2::store::{EventKind, SessionState, Store, StoredEvent};
 
@@ -189,6 +192,21 @@ async fn basic_run_is_persisted_with_usage_samples() {
     assert_eq!(sample.session_id, Some(id));
     let response: Value = serde_json::from_str(&sample.response).unwrap();
     assert_eq!(response["rate_limits_available"], true);
+    // The CLI reports the first prompt: input 2, cache read 13397, cache creation 15607.
+    let context = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if let Some(context) = manager.list().await.unwrap()[0].context.clone()
+                && context.source == ContextSource::Cli
+                && context.used_tokens == 29_006
+            {
+                return context;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no CLI context after the turn");
+    assert_eq!(context.max_tokens, CANNED_CONTEXT_MAX);
 
     session
         .send("Reply with exactly: ok again", None)
@@ -220,10 +238,89 @@ async fn basic_run_is_persisted_with_usage_samples() {
         rows[0].cache.as_ref().map(|cache| cache.ttl_secs),
         Some(3600)
     );
-    let context = rows[0].context.as_ref().expect("a context estimate");
+    let context = rows[0].context.as_ref().expect("a context");
     // The second prompt: input 2, cache read 29004, cache creation 1979.
     assert_eq!(context.used_tokens, 30_985);
-    assert_eq!(context.max_tokens, 1_000_000);
+    assert_eq!(context.max_tokens, CANNED_CONTEXT_MAX);
+    assert!(
+        stored
+            .iter()
+            .all(|event| !event.payload.contains("totalTokens")),
+        "a context usage reply was stored"
+    );
+}
+
+#[tokio::test]
+async fn the_context_is_known_before_the_first_turn() {
+    let env = Env::new();
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let mut changes = manager.subscribe_changes();
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    let context = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            assert_eq!(changes.recv().await.unwrap(), id);
+            if let Some(context) = manager.list().await.unwrap()[0].context.clone() {
+                return context;
+            }
+        }
+    })
+    .await
+    .expect("no announced context before the first turn");
+    assert_eq!(context.source, ContextSource::Cli);
+    assert_eq!(context.used_tokens, CANNED_CONTEXT_START);
+    assert_eq!(context.max_tokens, CANNED_CONTEXT_MAX);
+    assert_eq!(
+        context.autocompact_threshold,
+        Some(CANNED_AUTOCOMPACT_THRESHOLD)
+    );
+    assert_eq!(context.categories.len(), 3);
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
+}
+
+/// Initialization, a failed `get_context_usage`, then a marker line.
+const FAILED_CONTEXT_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "ctx", "request": {"subtype": "get_context_usage"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "error", "request_id": "ctx", "error": "unavailable"}}}
+{"t": 0, "dir": "out", "msg": {"type": "marker"}}
+"#;
+
+#[tokio::test]
+async fn a_failed_context_ask_changes_nothing() {
+    let env = Env::new();
+    let script = env.script("failed.ndjson", FAILED_CONTEXT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let stored = manager.events_after(id, 0, ALL).await.unwrap();
+            if stored.iter().any(|event| event.payload.contains("marker")) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the failed ask was not answered");
+    manager.store().flush().await.unwrap();
+    assert_eq!(manager.list().await.unwrap()[0].context, None);
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert!(
+        stored
+            .iter()
+            .all(|event| !event.payload.contains("unavailable")),
+        "the failed reply was stored"
+    );
+    assert_clean_exit(stored.last().unwrap());
 }
 
 #[tokio::test]

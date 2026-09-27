@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::gauges::{self, Cache, MainRequest, Windows};
-use crate::protocol::{GetUsageResponse, Inbound};
+use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
+use crate::protocol::{ContextUsageResponse, GetUsageResponse, Inbound};
 use crate::session::{Event, EventBody, GateFailure, HostEvent};
 use crate::usage::db::{MessageTokens, UsageDb};
 use crate::usage::inputs::{self, Reading};
@@ -24,7 +24,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -64,6 +64,14 @@ ALTER TABLE sessions ADD COLUMN cache_ttl_secs INTEGER;
 ALTER TABLE sessions ADD COLUMN context_model TEXT;
 ALTER TABLE sessions ADD COLUMN context_tokens INTEGER;
 ALTER TABLE sessions ADD COLUMN context_window INTEGER;
+"#,
+    // The latest `get_context_usage` reply; `context_tokens` holds its total until
+    // the next main request.
+    r#"
+ALTER TABLE sessions ADD COLUMN context_source TEXT CHECK (context_source IN ('cli', 'estimate'));
+ALTER TABLE sessions ADD COLUMN context_max_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN context_autocompact INTEGER;
+ALTER TABLE sessions ADD COLUMN context_categories TEXT;
 "#,
 ];
 
@@ -107,7 +115,8 @@ pub struct SessionRow {
     pub permission_mode: Option<String>,
     /// `None` until a main request reported the TTL of its cache write.
     pub cache: Option<Cache>,
-    /// `None` until a main request and a `result` reported the prompt and the window.
+    /// `None` until a `get_context_usage` reply, or a main request and a
+    /// `result`, reported the total and the window.
     pub context: Option<gauges::Context>,
 }
 
@@ -131,12 +140,14 @@ impl GaugeUpdate {
     fn apply(self, connection: &Connection, session: &str, time: &str) -> Result<()> {
         match self {
             // SQLite evaluates every assignment against the row as it was, so the
-            // time only moves on the first line of a response.
+            // time and the source only move on the first line of a response.
             Self::Request(request) => {
                 connection.execute(
                     "UPDATE sessions SET
                          cache_request_at = CASE WHEN cache_message_id IS ?2
                              THEN cache_request_at ELSE ?3 END,
+                         context_source = CASE WHEN cache_message_id IS ?2
+                             THEN context_source ELSE 'estimate' END,
                          cache_message_id = ?2,
                          cache_ttl_secs = COALESCE(?4, cache_ttl_secs),
                          context_model = COALESCE(?5, context_model),
@@ -379,6 +390,34 @@ impl Store {
         });
     }
 
+    /// Stores a `get_context_usage` reply as the session's context; resolves to
+    /// whether that changed the stored values.
+    pub async fn record_context_usage(
+        &self,
+        session: Uuid,
+        reply: ContextUsageResponse,
+    ) -> Result<bool> {
+        let categories = serde_json::to_string(&reply.categories)?;
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET context_source = 'cli', context_tokens = ?2,
+                     context_max_tokens = ?3, context_autocompact = ?4, context_categories = ?5
+                 WHERE id = ?1 AND NOT (context_source IS 'cli' AND context_tokens IS ?2
+                     AND context_max_tokens IS ?3 AND context_autocompact IS ?4
+                     AND context_categories IS ?5)",
+                params![
+                    session.to_string(),
+                    reply.total_tokens,
+                    reply.max_tokens,
+                    reply.auto_compact_threshold,
+                    categories
+                ],
+            )?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+
     /// Folds what has elapsed and projects both windows, reporting on `sessions`.
     /// Local time decides which hour of the week a moment falls in.
     pub async fn usage_snapshot(
@@ -582,7 +621,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories FROM sessions";
 
 struct RawSession {
     id: String,
@@ -598,6 +637,10 @@ struct RawSession {
     cache_ttl_secs: Option<u32>,
     context_tokens: Option<u64>,
     context_window: Option<u64>,
+    context_source: Option<String>,
+    context_max_tokens: Option<u64>,
+    context_autocompact: Option<u64>,
+    context_categories: Option<String>,
 }
 
 impl RawSession {
@@ -616,6 +659,10 @@ impl RawSession {
             cache_ttl_secs: row.get(10)?,
             context_tokens: row.get(11)?,
             context_window: row.get(12)?,
+            context_source: row.get(13)?,
+            context_max_tokens: row.get(14)?,
+            context_autocompact: row.get(15)?,
+            context_categories: row.get(16)?,
         })
     }
 
@@ -642,10 +689,25 @@ impl RawSession {
             }),
             _ => None,
         };
+        let source = match self.context_source.as_deref() {
+            Some("cli") => ContextSource::Cli,
+            _ => ContextSource::Estimate,
+        };
+        let categories = self
+            .context_categories
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
         let context = self
             .context_tokens
-            .zip(self.context_window)
-            .and_then(|(used, window)| gauges::Context::estimate(used, window));
+            .zip(self.context_max_tokens.or(self.context_window))
+            .and_then(|(used, max)| gauges::Context::new(used, max, source))
+            .map(|context| gauges::Context {
+                autocompact_threshold: self.context_autocompact,
+                categories,
+                ..context
+            });
         Ok(SessionRow {
             id: Uuid::parse_str(&self.id)?,
             cwd: PathBuf::from(self.cwd),
@@ -895,6 +957,78 @@ mod tests {
             })
         );
         assert_eq!(row.context.map(|context| context.used_tokens), Some(40_005));
+    }
+
+    fn context_reply(total_tokens: u64) -> ContextUsageResponse {
+        serde_json::from_value(serde_json::json!({
+            "totalTokens": total_tokens, "maxTokens": 967_000, "rawMaxTokens": 1_000_000,
+            "percentage": 2, "autoCompactThreshold": 900_000, "apiUsage": null,
+            "categories": [{"name": "Messages", "tokens": total_tokens, "color": "x", "kind": "used"}],
+            "skills": [{"name": "unread"}]
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cli_context_until_the_next_request_and_across_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        assert!(
+            store
+                .record_context_usage(id, context_reply(12_000))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .record_context_usage(id, context_reply(12_000))
+                .await
+                .unwrap()
+        );
+        let context = store.session(id).await.unwrap().unwrap().context.unwrap();
+        assert_eq!(context.source, ContextSource::Cli);
+        assert_eq!(context.used_tokens, 12_000);
+        assert_eq!(context.max_tokens, 967_000);
+        assert_eq!(context.autocompact_threshold, Some(900_000));
+        assert_eq!(
+            context.categories,
+            [crate::protocol::ContextCategory {
+                name: "Messages".into(),
+                tokens: 12_000,
+                kind: "used".into(),
+            }]
+        );
+
+        // The `cd` recording ends on a prompt of 31048 over a 1000000 window.
+        record_recording(&store, id, "cd", Utc::now());
+        let context = store.session(id).await.unwrap().unwrap().context.unwrap();
+        assert_eq!(context.source, ContextSource::Estimate);
+        assert_eq!(context.used_tokens, 31_048);
+        assert_eq!(context.max_tokens, 967_000);
+        assert_eq!(context.autocompact_threshold, Some(900_000));
+
+        assert!(
+            store
+                .record_context_usage(id, context_reply(31_048))
+                .await
+                .unwrap()
+        );
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        let context = reopened
+            .session(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .context
+            .unwrap();
+        assert_eq!(context.source, ContextSource::Cli);
+        assert_eq!(context.used_tokens, 31_048);
+        assert_eq!(context.max_tokens, 967_000);
+        assert_eq!(context.categories[0].tokens, 31_048);
     }
 
     #[tokio::test]

@@ -122,6 +122,8 @@ describe("contextTone", () => {
       max_tokens: 1,
       percentage,
       source: "estimate" as const,
+      autocompact_threshold: null,
+      categories: [],
     });
     expect(contextTone(context(3))).toBe("ok");
     expect(contextTone(context(75))).toBe("high");

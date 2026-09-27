@@ -43,7 +43,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. From about 600 px wide (unfolded phone, desktop), the bar sits in the header row right of the title, its two columns side by side; below that width it takes its own row under the header, columns stacked. Tapping the bar expands it to every detail (rate, work left, deadline, TTL). Home shows the account column only.
+- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. From about 600 px wide (unfolded phone, desktop), the bar sits in the header row right of the title, its two columns side by side; below that width it takes its own row under the header, columns stacked. Home shows the account column only.
+- Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.

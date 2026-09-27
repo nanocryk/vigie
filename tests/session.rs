@@ -216,6 +216,9 @@ async fn basic_turns_and_usage() {
 
     let usage = harness.session.usage().await.unwrap();
     assert!(usage.rate_limits_available);
+    // The first prompt: input 2, cache read 13397, cache creation 15607.
+    let context = harness.session.context_usage().await.unwrap();
+    assert_eq!(context.total_tokens, 29_006);
 
     harness
         .session

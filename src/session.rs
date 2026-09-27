@@ -20,9 +20,9 @@ use uuid::Uuid;
 use crate::child::{Child, Launch, Program};
 use crate::danger::{self, Danger};
 use crate::protocol::{
-    CanUseTool, CliRequest, ControlRequest, ControlResponse, Extra, GetUsageResponse, HostRequest,
-    Inbound, InitializeResponse, InterruptResponse, Outbound, PermissionResult, Priority,
-    SetPermissionModeResponse, System, UserMessage,
+    CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse, Extra,
+    GetUsageResponse, HostRequest, Inbound, InitializeResponse, InterruptResponse, Outbound,
+    PermissionResult, Priority, SetPermissionModeResponse, System, UserMessage,
 };
 use crate::store::{SessionState, Store};
 
@@ -267,6 +267,7 @@ impl Session {
             asks: Vec::new(),
             requests: HashMap::new(),
             mode_requests: HashSet::new(),
+            unrecorded_requests: HashSet::new(),
             permission_mode: None,
             next_request: 0,
             state: State::Ready,
@@ -334,6 +335,14 @@ impl Session {
     pub async fn usage_json(&self) -> Result<Value> {
         self.control(HostRequest::GetUsage {
             skip_behaviors: Some(true),
+            extra: Extra::new(),
+        })
+        .await
+    }
+
+    /// Its reply line is not emitted as an event: it lists the user's configuration.
+    pub async fn context_usage(&self) -> Result<ContextUsageResponse> {
+        self.control(HostRequest::GetContextUsage {
             extra: Extra::new(),
         })
         .await
@@ -423,6 +432,8 @@ struct Actor {
     requests: HashMap<String, oneshot::Sender<Result<ControlResponse>>>,
     /// Ids among `requests` that are `set_permission_mode` requests.
     mode_requests: HashSet<String>,
+    /// Ids among `requests` whose reply line is kept out of the events.
+    unrecorded_requests: HashSet<String>,
     /// Last mode announced with `HostEvent::PermissionMode`.
     permission_mode: Option<String>,
     next_request: u64,
@@ -477,6 +488,14 @@ impl Actor {
 
     async fn on_line(&mut self, raw: String) {
         let parsed = serde_json::from_str::<Inbound>(&raw).ok();
+        if let Some(Inbound::ControlResponse(response)) = &parsed
+            && response
+                .request_id()
+                .is_some_and(|id| self.unrecorded_requests.remove(id))
+        {
+            self.on_control_response(response);
+            return;
+        }
         if let Some(line) = &parsed {
             self.tracker.on_line(line);
             self.publish_activity();
@@ -629,12 +648,16 @@ impl Actor {
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
                 let sets_mode = matches!(request, HostRequest::SetPermissionMode { .. });
+                let unrecorded = matches!(request, HostRequest::GetContextUsage { .. });
                 let line =
                     Outbound::ControlRequest(ControlRequest::new(request_id.clone(), request));
                 match self.write(line).await {
                     Ok(()) => {
                         if sets_mode {
                             self.mode_requests.insert(request_id.clone());
+                        }
+                        if unrecorded {
+                            self.unrecorded_requests.insert(request_id.clone());
                         }
                         self.requests.insert(request_id, reply);
                     }

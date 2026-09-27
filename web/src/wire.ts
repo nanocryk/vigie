@@ -42,6 +42,17 @@ export interface ContextView {
   max_tokens: number;
   percentage: number;
   source: "cli" | "estimate";
+  /** From the latest CLI reply; null while unknown. */
+  autocompact_threshold: number | null;
+  /** From the latest CLI reply; empty while unknown. */
+  categories: ContextCategory[];
+}
+
+export interface ContextCategory {
+  name: string;
+  tokens: number;
+  /** `used`, `deferred`, `buffer` or `free`, as the CLI reports it. */
+  kind: string;
 }
 
 export type Confidence = "low" | "medium" | "high";
@@ -241,7 +252,22 @@ function parseContext(raw: unknown, label: string): ContextView | null {
     max_tokens: num(value, "max_tokens", label),
     percentage: num(value, "percentage", label),
     source,
+    autocompact_threshold: optNum(value, "autocompact_threshold", label),
+    categories: parseCategories(value["categories"], `${label}.categories`),
   };
+}
+
+function parseCategories(raw: unknown, label: string): ContextCategory[] {
+  if (!Array.isArray(raw)) fail(label, "expected an array", raw);
+  return raw.map((item: unknown, index) => {
+    const itemLabel = `${label}[${index}]`;
+    const value = record(item, itemLabel);
+    return {
+      name: str(value, "name", itemLabel),
+      tokens: num(value, "tokens", itemLabel),
+      kind: str(value, "kind", itemLabel),
+    };
+  });
 }
 
 function parseWindowReport(raw: unknown, label: string): WindowReport | null {

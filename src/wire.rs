@@ -26,16 +26,22 @@
 //!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
 //! - `sessions_changed`: a session was created, changed activity, ended, had
-//!   the permission mode of its stopped state changed, or its main conversation
-//!   made a request or finished a turn (new `cache` and `context`);
-//!   `GET /api/sessions` has the new list.
+//!   the permission mode of its stopped state changed, its main conversation
+//!   made a request or finished a turn (new `cache` and `context`), or the CLI
+//!   reported a new context usage; `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 //!
 //! Each session of `GET /api/sessions` carries `cache {last_request_at,
-//! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source}`, where
-//! `source` is `cli` or `estimate`; either is null while unknown.
+//! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source,
+//! autocompact_threshold, categories}`; either is null while unknown. `source`
+//! is `cli` when the total comes from the CLI's `get_context_usage` (asked when
+//! the child starts and after each turn), `estimate` when a later main request
+//! replaced it with its prompt tokens. `max_tokens` is the CLI's when known,
+//! else the model's context window. `autocompact_threshold` (nullable) and
+//! `categories [{name, tokens, kind}]` (empty while unknown) come from the
+//! latest CLI reply.
 
 use std::path::PathBuf;
 
