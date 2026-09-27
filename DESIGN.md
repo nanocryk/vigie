@@ -2,7 +2,7 @@
 
 A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`.
 
-Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes".
+Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes". The one exception: Vigie's hook scripts skip unless an env var set by Vigie on its own children is present.
 
 ## Usage profile
 
@@ -81,15 +81,20 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 ## Projects and Home
 
 - Projects Home designed anew. Vigie's Home (file explorer, favorites, discussions per project) is "a bit messy".
+- No workspace concept: commands reach the whole machine anyway. Projects are the folders sessions were started in.
 - Home lists projects and scratch discussions as two kinds of entries.
+- Full directory explorer, built on a tree library unless a fitting file manager component exists. Folders can be opened from discussions.
+- Tabs or similar for multitasking over files and folders. Discussions stay separate from them.
+- Buttons switch between a session and its related folder or file, "so it becomes more fluid to switch between them".
+- Opening a file or folder lands where expected. Vigie often lands in the wrong directory; the navigation logic is designed anew.
 - Handoffs are detected and give their project a special status. Opening the session suggests starting from the handoff. The handoff, clear, read-handoff sequence is integrated as a workflow.
 - canif scripts are first-class: shown with their description and what each argument is.
 - No terminal support.
 
 ## Scratch discussions
 
-- A discussion can start without a project, in a new folder under `<workspace>/.scratch`.
-- A scratch folder can be promoted into the workspace when the idea turns out interesting. vigie2 implements promotion itself; `/cd` is unavailable under `-p`.
+- A discussion can start without a project, in a new folder under a configurable scratch root.
+- A scratch folder can be promoted when the idea turns out interesting: vigie2 moves it to a chosen destination. vigie2 implements promotion itself; `/cd` is unavailable under `-p`.
 - Scratch folders are never deleted automatically; deletion is a manual action.
 - Scratch sessions start in a looser default permission mode than project sessions.
 
@@ -105,33 +110,54 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Usage credits are disabled on the user's account. Their use is detected on a best-effort basis; on detection vigie2 stops the discussion automatically and warns the user so they can investigate.
 - Signals: `rate_limit_event` reporting overage use or an `overage` limit type, main-conversation cache writes moving from the 1 hour to the 5 minute TTL, `get_usage` extra-usage credits increasing.
 
+## Host
+
+- One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart.
+- Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
+- History in SQLite, for queries and search.
+- Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children; hooks use these env vars to detect which host runs them.
+
+## Frontend stack
+
+- React, TypeScript and Vite: a single-page app served by the host server.
+- Tailwind and shadcn/ui, restyled with vigie2's own theme rather than the shadcn defaults.
+- Motion for gestures and animation (swipe cards).
+
 ## Development
 
 - Lots of unit and integration tests. A fake `claude` replays recorded stream-json sessions, so tests cost no usage and stay deterministic. Recordings also catch regressions across Claude Code updates and show what changed.
 - vigie2 is developed with vigie2 (dogfooding), so it must stay usable with degraded features. When it is too broken and a plain Claude Code TUI is used instead, the user's hooks, skills and tools must handle not running under vigie2.
-- The first slice holds the core features the others build on. Authentication is copied from Vigie.
+- The first slice holds the core features the others build on. Authentication is copied from Vigie. Content:
+  - Server with Vigie's authentication.
+  - Sessions: start one in a chosen folder, list, reopen.
+  - Child process with the auth gate: no API key in the child env; `apiKeySource` other than `"none"` stops the session.
+  - SQLite history; clients connect over a websocket and get a replay on reconnect.
+  - Chat view: streamed text, compact tool calls, composer, stop (interrupt).
+  - Permission cards with allow and deny buttons, `AskUserQuestion` answers; one card shown, the rest queued.
+  - Several clients on one session; a card answered on one disappears on the others.
+  - Fake `claude` replaying the recordings in tests.
+- Outside the first slice: directory explorer, swipe, cache and usage header, cold-cache blocking, MCP server, scratch folders.
 
 ## Open
 
 - Swipe details: which side accepts, the notes gesture, an undo window before the answer is sent, handling of asks the CLI flags as dangerous (`default_to_no`), whether questions and plan approval use cards other than swipe.
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
-- Process model: one long-lived child per session or one per turn; reaping idle children.
-- Event schema between server and clients; history storage format.
+- When an idle child is reaped.
+- Event schema between server and clients; SQLite schema.
 - Seed format for continuing in a new session, and the interface `/tail-session` would use.
 - Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
-- Keeping headless children from firing Vigie's Claude Code hooks; ports and state directory next to Vigie.
 - Projects Home design, including how projects and scratch discussions are laid out.
+- Multitasking tabs: how they work on the phone.
+- Which folder or file counts as related to a session (its cwd, the last file referenced, files it edited).
 - Terminals for non-Claude tasks: approach undecided (ideas: fixed size, piping output and showing text instead of a terminal emulator, named run configurations such as canif scripts with live text output).
 - Per-session and per-project notification and visibility settings: which settings.
 - MCP server: tool list and schemas, routing calls to their session, pre-allowing vigie2's own tools, how skills or CLAUDE.md tell Claude when to use them.
 - Sensory features (sound, music, animation): opt-in per device, global mute, reduced motion.
 - Which commands get a custom presentation beyond commits, and how one is defined.
-- Rust wire codec: own implementation, or `claude-wrapper` (MIT/Apache, duplex stream-json session) as dependency or reference.
 - Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, rename and auto-title, Mermaid rendering, QR code pairing.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).
 - How checks are registered per project.
-- Content of the first slice.
 - Claude Code version check at startup (`claude --version`, `system/init.capabilities`), and how features degrade on an unsupported version.
 - Raw protocol log per session: possibly unnecessary, can grow big.
 - Lag when the phone's VPN sleeps. Ideas: self-signed certificate and port forwarding.
