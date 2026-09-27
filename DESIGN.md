@@ -63,6 +63,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Classic chat layout: Claude's text in bubbles on the left, the user's on the right. A bubble spans the full width minus a fixed margin on the side opposite its sender. Bubbles are rectangular with small rounded corners (about 5px) and no speech tail.
 - Bubbles hold text only; tool uses appear outside bubbles.
+- Thinking: while it is the latest item of a running turn, a "thinking" line with one to three dots cycling. An empty thinking (no readable text) disappears once anything follows; one with text stays as a collapsed "thought".
 - Both sides' bubbles render markdown (GFM tables, lists, code blocks with syntax highlighting), at 14 px like the composer. Links open in a new tab on desktop and in the external browser from the installed app.
 - Timestamps, in the device's local time and 24-hour clock: `HH:MM` the same day, `Tue HH:MM` within the last week, `May 12 HH:MM` beyond, with the year added when not the current one. Recomputed when the app comes back to the foreground.
   - Bubbles always show theirs, small and muted in the bottom-right corner, for both sides. The user's bubble shows when the server sent it to Claude; Claude's shows when its text started.

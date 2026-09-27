@@ -206,9 +206,12 @@ const ItemView = memo(function ItemView({
   now,
   toolTime,
   awaiting,
+  thinkingNow,
 }: {
   item: Item;
   last: boolean;
+  /** A thinking item that is the latest of a running turn: animated; an empty one is hidden otherwise. */
+  thinkingNow: boolean;
   /** Reference for the time labels, refreshed on wake. */
   now: number;
   /** A tool row shows its time (the minute differs from the item above). */
@@ -245,11 +248,24 @@ const ItemView = memo(function ItemView({
         </div>
       );
     case "thinking":
-      return item.text === "" ? (
-        <div className="text-muted-foreground voice-ui px-1 text-xs">thinking</div>
-      ) : (
+      if (item.text === "") {
+        return thinkingNow ? (
+          <div className="text-muted-foreground voice-ui px-1 text-xs">
+            thinking<span className="thinking-dots">...</span>
+          </div>
+        ) : null;
+      }
+      return (
         <details className="text-muted-foreground px-1 text-xs">
-          <summary className="voice-ui cursor-pointer">thinking</summary>
+          <summary className="voice-ui cursor-pointer">
+            {thinkingNow ? (
+              <>
+                thinking<span className="thinking-dots">...</span>
+              </>
+            ) : (
+              "thought"
+            )}
+          </summary>
           <div className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{item.text}</div>
         </details>
       );
@@ -326,6 +342,7 @@ export function TranscriptView({
   onRetry,
   onDismiss,
   awaiting,
+  turnOpen,
   overlay,
   tabs,
 }: {
@@ -335,6 +352,8 @@ export function TranscriptView({
   onDismiss: (pending: PendingSend) => void;
   /** Tool use ids with an ask pending: their diff shows in the ask card, not here. */
   awaiting: ReadonlySet<string>;
+  /** A turn is running. */
+  turnOpen: boolean;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
   /** Tabs resting on the bottom edge, over the discussion; the content keeps room for them. */
@@ -416,6 +435,7 @@ export function TranscriptView({
               now={now}
               toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
               awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
+              thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
             />
           ))}
           {pending.map((send) => (

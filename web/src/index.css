@@ -471,6 +471,26 @@
   font-weight: 400;
 }
 
+/* One to three dots in a loop; all three, still, under reduced motion. */
+@utility thinking-dots {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  width: 3ch;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: thinking-dots 1.2s steps(3, jump-none) infinite;
+  }
+}
+
+@keyframes thinking-dots {
+  from {
+    width: 1ch;
+  }
+  to {
+    width: 3ch;
+  }
+}
+
 @utility voice-code {
   --casl: 0;
   font-weight: 400;

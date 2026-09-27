@@ -231,6 +231,7 @@ export function SessionScreen({
         onRetry={retry}
         onDismiss={dismiss}
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
+        turnOpen={transcript.turnOpen}
         tabs={
           <>
             <PermissionMode
