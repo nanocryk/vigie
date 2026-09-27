@@ -231,36 +231,36 @@ export function SessionScreen({
         onRetry={retry}
         onDismiss={dismiss}
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
-        overlay={
-          transcript.turnOpen && (
-            <div className="pointer-events-auto flex items-center gap-2">
-              {stopError !== null && (
-                <span className="bg-background text-destructive rounded-[5px] px-2 py-1 text-xs shadow-sm">
-                  {stopError}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={stop}
-                disabled={stopping}
-                className={`border-destructive text-destructive bg-background ${ACTION_SIZE} border shadow-md disabled:opacity-50`}
-              >
-                {stopping ? "Stopping..." : "Stop"}
-              </button>
-            </div>
-          )
-        }
         tabs={
-          <PermissionMode
-            client={client}
-            session={id}
-            mode={
-              view?.live === true
-                ? transcript.permissionMode
-                : (view?.permission_mode ?? transcript.permissionMode)
-            }
-            enabled={view !== null}
-          />
+          <>
+            <PermissionMode
+              client={client}
+              session={id}
+              mode={
+                view?.live === true
+                  ? transcript.permissionMode
+                  : (view?.permission_mode ?? transcript.permissionMode)
+              }
+              enabled={view !== null}
+            />
+            {transcript.turnOpen && (
+              <div className="pointer-events-auto ml-auto flex items-end gap-2">
+                {stopError !== null && (
+                  <span className="bg-background text-destructive mb-1 rounded-[5px] px-2 py-0.5 text-xs shadow-sm">
+                    {stopError}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={stop}
+                  disabled={stopping}
+                  className="border-destructive bg-destructive voice-ui w-20 text-black shrink-0 rounded-t-[5px] border border-b-0 py-1 text-xs whitespace-nowrap shadow-sm disabled:opacity-50"
+                >
+                  {stopping ? "Stopping..." : "Stop"}
+                </button>
+              </div>
+            )}
+          </>
         }
       />
 

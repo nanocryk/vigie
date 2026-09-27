@@ -438,8 +438,8 @@ export function TranscriptView({
         </div>
       </div>
       {tabs !== undefined && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0">
-          <div className="mx-auto flex max-w-5xl items-end gap-1 px-3">{tabs}</div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3">
+          <div className="mx-auto flex max-w-5xl items-end gap-1">{tabs}</div>
         </div>
       )}
     </div>

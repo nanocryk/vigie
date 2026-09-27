@@ -85,7 +85,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Subagents integrated directly, their discussion visible.
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
 - Session controls: model, effort, permission mode.
-- Stop: a floating button above Send, of Send's size, shown only while a turn runs (not for background tasks alone). Send stays available to queue messages.
+- Stop: a red tab on the session control tab row, at its right end above Send and of Send's width, shown only while a turn runs (not for background tasks alone). It covers nothing, like the other tabs. Send stays available to queue messages.
 - The composer's text area and Send fill the bottom bar's height, making Send a large target.
 - Session control tabs (permission mode first; model, effort, agent later) float over the bottom of the discussion, resting on the composer's top edge on the left, without a solid background line: while scrolling they peek over the bubbles, and the discussion ends with enough space that, scrolled to the bottom, the tabs cover nothing. Tapping a tab opens a list upward to pick directly (mode: Manual, Accept edits, Plan): only the other modes are listed, as square chips of the tab's width in their mode's color. Each mode has its own tab color: yellow for Manual, teal for Accept edits, purple for Plan.
 - With a keyboard, Shift+Tab cycles the permission mode in the TUI order: Manual, Accept edits, Plan, Manual. A mode outside that list cycles as Manual.
