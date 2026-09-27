@@ -74,7 +74,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Every ask takes two swipes in a row in the same direction: one gesture for all asks, so no conflicting muscle memory. The first swipe shows "Confirm?" in that side's color; the second sends the answer at once. A tap, a swipe in the other direction, or waiting 3 s cancels.
   - A swipe can start anywhere on the panel. Its side is chosen by a minimum travel distance, large enough that a movement in that direction is never a fluke: at least 20% of the panel width and 56 px, mostly horizontal (horizontal travel at least twice the vertical) so scrolling never registers. Below the threshold the panel springs back.
   - Dangerous asks force a 1 s cooldown between the two swipes and show "Are you sure?", greyed out until the cooldown ends.
-  - Desktop uses buttons instead: a single press answers. A dangerous ask shows an "Are you sure?" button that can only be pressed after the same cooldown.
+  - The panel swipes with a mouse too. Under it, on every device, a Deny button on the left and an Allow button on the right frame the "swipe twice" hint: a single press answers; a dangerous ask turns the pressed button into "Are you sure?", which can only be pressed after the same cooldown.
   - The swipe is done on the panel representing the choice, so it can never confirm the wrong thing. The whole panel swipes, header included.
   - Panels that accept notes have a button opening a text field; the note is sent with the swipe. A deny note is the deny message; an allow note follows as a queued user message framed as attached to the approval.
   - Dangerous means what the CLI flags, plus vigie2's own checks on top: `rm -r` / `rm -rf`, `git push --force`, `git reset --hard`, writes outside the session folder.
@@ -86,6 +86,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Session controls: model, effort, permission mode.
 - Stop: a floating button above Send, shown only while a turn runs (not for background tasks alone). Send stays available to queue messages.
 - Session control tabs (permission mode first; model, effort, agent later) float over the bottom of the discussion, resting on the composer's top edge on the left, without a solid background line: while scrolling they peek over the bubbles, and the discussion ends with enough space that, scrolled to the bottom, the tabs cover nothing. Tapping a tab opens a list upward to pick directly (mode: Manual, Accept edits, Plan): only the other modes are listed, as square chips of the tab's width in their mode's color. Each mode has its own tab color: yellow for Manual, teal for Accept edits, purple for Plan.
+- With a keyboard, Shift+Tab cycles the permission mode in the TUI order: Manual, Accept edits, Plan, Manual. A mode outside that list cycles as Manual.
 - The permission mode is stored per session and kept current (picked in the tab, or reported by the CLI). Every start of the child (resume after a cold cache, a crash or a server restart) passes it with `--permission-mode`, so a session comes back in its mode. On a stopped session, picking a mode only stores it; the next message starts the child in it. New sessions start in Manual; a cold-cache "continue" inherits the mode of the session it continues.
 - Picker for skills and slash commands.
 - File references (`path:line`) and URLs in messages are links, opened inside the app.
@@ -132,6 +133,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - History stores the raw CLI lines and periodic `get_usage` samples.
 - The usage storage is vigie2's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
 - The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
+- Each window row starts with the time left before its reset over the window length, as in the status bar (`3h55/5h`).
 - Bars use the text color by default (white on the dark theme). Window colors follow the status bar:
   - the spent part is always the text color, red once 100% is used;
   - the projection, from the spent edge to the projected value, is green, yellow or red by the projected share: yellow from 75% and red from 90% on the 5h window, from 85% and 95% on the 7d window; more opaque when well supported and less when barely;

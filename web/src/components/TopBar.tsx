@@ -68,10 +68,23 @@ function useTweened(target: number): number {
   return value;
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+/** Session rows label a gauge; window rows carry the time left, up to `6d23h/7d`. */
+const LABEL_WIDTH = { session: "w-[5ch]", window: "w-[8ch]" };
+
+function Row({
+  label,
+  width = "session",
+  children,
+}: {
+  label: string;
+  width?: keyof typeof LABEL_WIDTH;
+  children: ReactNode;
+}) {
   return (
     <div className="flex h-4 items-center gap-2">
-      <span className="text-muted-foreground w-[5ch] shrink-0">{label}</span>
+      <span className={`text-muted-foreground shrink-0 tabular-nums ${LABEL_WIDTH[width]}`}>
+        {label}
+      </span>
       {children}
     </div>
   );
@@ -83,13 +96,17 @@ function Figures({
   className = "",
 }: {
   main: ReactNode;
-  side: string;
+  side?: string;
   className?: string;
 }) {
   return (
     <>
       <span className={`w-[8ch] shrink-0 text-right tabular-nums ${className}`}>{main}</span>
-      <span className="text-muted-foreground w-[4ch] shrink-0 text-right tabular-nums">{side}</span>
+      {side !== undefined && (
+        <span className="text-muted-foreground w-[4ch] shrink-0 text-right tabular-nums">
+          {side}
+        </span>
+      )}
     </>
   );
 }
@@ -103,12 +120,21 @@ function EmptyRow({ label }: { label: string }) {
   );
 }
 
+function EmptyWindowRow({ kind }: { kind: WindowKind }) {
+  return (
+    <Row label={`--/${kind}`} width="window">
+      <div className={EMPTY_TRACK} />
+      <Figures main="--" />
+    </Row>
+  );
+}
+
 function WindowRow({ kind, report, now }: { kind: WindowKind; report: WindowReport; now: number }) {
   const used = useTweened(report.used);
   const projected = useTweened(report.projected);
   const bar = windowBar(kind, { ...report, used, projected });
   return (
-    <Row label={kind}>
+    <Row label={`${formatSpan(Date.parse(report.resets_at) - now)}/${kind}`} width="window">
       <div className={TRACK}>
         <div
           className={`absolute inset-y-0 left-0 ${bar.full ? "bg-destructive" : "bg-foreground"}`}
@@ -137,7 +163,6 @@ function WindowRow({ kind, report, now }: { kind: WindowKind; report: WindowRepo
             </span>
           </>
         }
-        side={formatSpan(Date.parse(report.resets_at) - now)}
       />
     </Row>
   );
@@ -149,8 +174,16 @@ function AccountColumn({ usage, now }: { usage: UsageSnapshot | null; now: numbe
   const sevenDay = usage?.seven_day ?? null;
   return (
     <div className={`min-w-0 transition-opacity duration-500 ${stale ? "opacity-50" : ""}`}>
-      {fiveHour === null ? <EmptyRow label="5h" /> : <WindowRow kind="5h" report={fiveHour} now={now} />}
-      {sevenDay === null ? <EmptyRow label="7d" /> : <WindowRow kind="7d" report={sevenDay} now={now} />}
+      {fiveHour === null ? (
+        <EmptyWindowRow kind="5h" />
+      ) : (
+        <WindowRow kind="5h" report={fiveHour} now={now} />
+      )}
+      {sevenDay === null ? (
+        <EmptyWindowRow kind="7d" />
+      ) : (
+        <WindowRow kind="7d" report={sevenDay} now={now} />
+      )}
     </div>
   );
 }
@@ -258,13 +291,13 @@ export function Header({
   const now = useClock(1000);
   return (
     <header className="shrink-0">
-      <div className="flex items-start gap-2 border-b px-2 py-1.5">
+      <div className="flex items-start gap-4 border-b px-2 py-1.5">
         <div className="flex w-24 shrink-0 items-center self-center overflow-hidden whitespace-nowrap">
           {left}
         </div>
         <div
           aria-label="Usage, context and cache"
-          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-4 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2"
+          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2"
         >
           <AccountColumn usage={usage} now={now} />
           {column}

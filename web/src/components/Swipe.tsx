@@ -12,7 +12,6 @@ import {
   swipeView,
 } from "@/swipe";
 
-const COARSE_POINTER = "(pointer: coarse)";
 /** Controls inside the panel keep their own pointer handling. */
 const OWN_POINTER = "button, a, input, textarea, select, [data-swipe-ignore]";
 const SPRING_BACK = "transform 200ms ease-out";
@@ -35,17 +34,6 @@ const BUTTON_STYLE: Record<Side, string> = {
   left: "border-swipe-deny-strong text-swipe-deny-strong border",
   right: "bg-swipe-accept-strong text-card",
 };
-
-function useCoarsePointer(): boolean {
-  const [coarse, setCoarse] = useState(() => window.matchMedia(COARSE_POINTER).matches);
-  useEffect(() => {
-    const query = window.matchMedia(COARSE_POINTER);
-    const change = () => setCoarse(query.matches);
-    query.addEventListener("change", change);
-    return () => query.removeEventListener("change", change);
-  }, []);
-  return coarse;
-}
 
 const UNDECIDED = "var(--swipe-undecided)";
 
@@ -82,11 +70,10 @@ export interface SwipeProps {
 }
 
 /**
- * A panel confirmed by two swipes in the same direction on touch screens, or by
- * buttons on a fine pointer. Remount it (new `key`) to start over.
+ * A panel confirmed by two swipes in the same direction, or by the buttons under
+ * it. Remount it (new `key`) to start over.
  */
 export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
-  const coarse = useCoarsePointer();
   const [state, setState] = useState<SwipeState>(idle);
   const [now, setNow] = useState(() => performance.now());
   const [width, setWidth] = useState(0);
@@ -126,7 +113,7 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
 
   useEffect(() => {
     const element = surface.current;
-    if (!coarse || element === null) return;
+    if (element === null) return;
     let active: number | null = null;
     let startX = 0;
     let startY = 0;
@@ -169,10 +156,23 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
       element.removeEventListener("pointerup", up);
       element.removeEventListener("pointercancel", cancel);
     };
-  }, [coarse, dispatch]);
+  }, [dispatch]);
 
   const view = swipeView(state, now, { width, dangerous });
   const press = (side: Side) => dispatch({ type: "press", side, t: performance.now() });
+  const sideButton = (side: Side) => {
+    const armed = view.armed?.side === side ? view.armed : null;
+    return (
+      <button
+        type="button"
+        disabled={armed === null ? view.fired !== null : !armed.ready}
+        onClick={() => press(side)}
+        className={`${BUTTON_STYLE[side]} ${BUTTON}`}
+      >
+        {armed === null ? labels[side] : armed.label}
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-2">
@@ -180,7 +180,7 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
         ref={surface}
         // touch-action only reaches down to the nearest scroll container, so inner
         // scroll boxes (a long plan) need pan-y too or the browser takes the swipe.
-        className={`relative overflow-hidden rounded-[5px] border ${coarse ? "touch-pan-y select-none [&_*]:touch-pan-y" : ""}`}
+        className="relative touch-pan-y overflow-hidden rounded-[5px] border select-none [&_*]:touch-pan-y"
         style={{ background: background(view) }}
       >
         <div
@@ -192,7 +192,7 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
         >
           {children}
         </div>
-        {coarse && view.armed !== null && (
+        {view.armed !== null && (
           <span
             className={`bg-card voice-heading pointer-events-none absolute top-1.5 rounded-[5px] px-2 py-0.5 text-sm shadow-sm ${view.armed.side === "right" ? "right-2" : "left-2"} ${view.armed.ready ? TEXT[view.armed.side] : "text-muted-foreground opacity-60"}`}
           >
@@ -201,39 +201,11 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
         )}
       </div>
 
-      {coarse ? (
-        <div className="voice-ui flex justify-between text-xs">
-          <span className={TEXT.left}>&lsaquo; {labels.left}</span>
-          <span className="text-muted-foreground">swipe twice</span>
-          <span className={TEXT.right}>{labels.right} &rsaquo;</span>
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {(["right", "left"] as const).map((side) =>
-            view.armed?.side === side ? (
-              <button
-                key={side}
-                type="button"
-                disabled={!view.armed.ready}
-                onClick={() => press(side)}
-                className={`${BUTTON_STYLE[side]} ${BUTTON}`}
-              >
-                {view.armed.label}
-              </button>
-            ) : (
-              <button
-                key={side}
-                type="button"
-                disabled={view.fired !== null}
-                onClick={() => press(side)}
-                className={`${BUTTON_STYLE[side]} ${BUTTON}`}
-              >
-                {labels[side]}
-              </button>
-            ),
-          )}
-        </div>
-      )}
+      <div className="flex items-center justify-between gap-2">
+        {sideButton("left")}
+        <span className="text-muted-foreground voice-ui text-xs">swipe twice</span>
+        {sideButton("right")}
+      </div>
     </div>
   );
 }

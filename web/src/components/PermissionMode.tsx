@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Client } from "@/client";
 
@@ -21,6 +21,14 @@ const TAB_WIDTH = "w-[calc(14ch+1.25rem+2px)]";
 export function modeLabel(mode: string | null): string {
   if (mode === null) return "mode unknown";
   return CHOICES.find((choice) => choice.mode === mode)?.label ?? mode;
+}
+
+/** Shift+Tab order, as in the TUI; a mode outside the picker cycles as manual. */
+export function nextMode(mode: string | null): string {
+  const index = CHOICES.findIndex((choice) => choice.mode === mode);
+  const next = CHOICES[(Math.max(index, 0) + 1) % CHOICES.length];
+  if (next === undefined) throw new Error(`nextMode: no choice after ${JSON.stringify(mode)}`);
+  return next.mode;
 }
 
 function errorMessage(err: unknown): string {
@@ -77,6 +85,23 @@ export function PermissionMode({
       .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setPending(false));
   };
+  const pickRef = useRef(pick);
+  useLayoutEffect(() => {
+    pickRef.current = pick;
+  });
+
+  useEffect(() => {
+    if (!enabled || pending) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
+        return;
+      }
+      event.preventDefault();
+      pickRef.current(nextMode(mode));
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [enabled, pending, mode]);
 
   return (
     <div ref={root} className="pointer-events-auto relative flex items-end gap-2">
