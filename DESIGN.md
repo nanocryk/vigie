@@ -2,7 +2,7 @@
 
 A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`.
 
-Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes". The one exception: Vigie's hook scripts skip unless an env var set by Vigie on its own children is present.
+Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes". Vigie's hook already does nothing without the `VIGIE_HOOK_URL` and `VIGIE_HOOK_SECRET` env vars, so vigie2 removes every `VIGIE_*` var from its children's env.
 
 ## Usage profile
 
@@ -102,6 +102,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Usage module inside the app, doing what the custom Claude status bar does today, and more: 5h and 7d windows with projections, stats. Remade in this service to avoid useless dependencies, porting the existing Rust code from `../claude-projection-status`.
 - Estimates are calibrated from the tokens each turn reports, window usage measured before and after turns, and history. The same data feeds stats and projections.
+- History stores the raw CLI lines and periodic `get_usage` samples from the first slice on, so the usage module starts with data.
+- The usage storage stays compatible with `claude-projection-status`'s `state.db`, so its learned profile and priors are imported.
 - Fit check: before starting a phase or task, warn when it likely does not fit in the remaining 5h window, with the reset time.
 - Cost per phase or task, as a share of the usage windows.
 
@@ -115,7 +117,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart.
 - Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
 - History in SQLite, for queries and search.
-- Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children; hooks use these env vars to detect which host runs them.
+- Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children, so hooks can detect which host runs them.
 
 ## Frontend stack
 
@@ -143,7 +145,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Swipe details: which side accepts, the notes gesture, an undo window before the answer is sent, handling of asks the CLI flags as dangerous (`default_to_no`), whether questions and plan approval use cards other than swipe.
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
 - When an idle child is reaped.
-- Event schema between server and clients; SQLite schema.
+- Server to client events: raw CLI lines plus thin host events; their exact shape and the SQLite schema.
 - Seed format for continuing in a new session, and the interface `/tail-session` would use.
 - Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
