@@ -43,7 +43,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The session header shows, easily visible, the cache TTL and the context usage: the two session-level metrics.
+- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below. Tapping the bar expands it to every detail (rate, work left, deadline, TTL). Home shows the account column only.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.
@@ -53,6 +53,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - blank: a new empty session.
 - The choice shows the context usage % and, when available, the estimated cost of rewarming in the 5h and 7d usage windows. At low %, rewarming costs about what a new session plus recovering the context costs; at high %, it costs too much.
 - vigie2 never picks for the user; it only prevents interacting with a cold cache by accident.
+- The choice is one panel replacing the composer, shared with archived sessions.
 
 ## Discussion view
 
@@ -109,6 +110,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Opening a file or folder lands where expected. Vigie often lands in the wrong directory; the navigation logic is designed anew.
 - Handoffs are detected and give their project a special status. Opening the session suggests starting from the handoff. The handoff, clear, read-handoff sequence is integrated as a workflow.
 - canif scripts are first-class: shown with their description and what each argument is.
+- Session rows on Home: a double swipe left kills a live session (stops its Claude process; it stays listed), a single swipe left archives a stopped one. No swipe right. Desktop has a Kill button on live rows and an Archive button on stopped rows. The session screen has no kill.
+- Archived sessions sit in their own collapsed section of Home. Opening one shows it read-only, with the cold-cache panel (rewarm, continue, blank) in place of the composer; any choice unarchives it.
 - No terminal support.
 
 ## Scratch discussions
@@ -123,7 +126,10 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Usage module inside the app, doing what the custom Claude status bar does today, and more: 5h and 7d windows with projections, stats. Remade in this service to avoid useless dependencies, porting the existing Rust code from `../claude-projection-status`.
 - Estimates are calibrated from the tokens each turn reports, window usage measured before and after turns, and history. The same data feeds stats and projections.
 - History stores the raw CLI lines and periodic `get_usage` samples from the first slice on, so the usage module starts with data.
-- The usage storage stays compatible with `claude-projection-status`'s `state.db`, so its learned profile and priors are imported.
+- The usage storage is vigie2's own schema, starting from fresh data; nothing is imported from `claude-projection-status`'s `state.db`.
+- The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
+- Window bars: the spent part solid, the projection radiating horizontally from its edge toward the right, brighter when well supported and fainter when barely. Values animate when they change.
+- Readings are `get_usage` samples, taken only while a session is live, and `rate_limit_event` lines. When the newest is older than 10 minutes, the account column dims and shows its age.
 - Fit check: before starting a phase or task, warn when it likely does not fit in the remaining 5h window, with the reset time.
 - Cost per phase or task, as a share of the usage windows.
 
@@ -163,6 +169,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Outside the first slice: directory explorer, swipe, cache and usage header, cold-cache blocking, MCP server, scratch folders.
 - Second slice, making vigie2 the daily tool:
   - Markdown rendering in bubbles; diffs for Edit and Write.
+  - Usage module (see Account usage).
   - Cache and context header with cold-cache blocking.
   - Session controls (model, effort, permission mode) and the slash command picker.
   - In-app pairing with a QR code.
