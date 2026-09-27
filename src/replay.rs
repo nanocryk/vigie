@@ -8,6 +8,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -80,6 +81,54 @@ pub enum Pace {
     Realtime,
 }
 
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub pace: Pace,
+    /// Replaces the recorded `session_id` of every emitted line.
+    pub session_id: Option<String>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            pace: Pace::Instant,
+            session_id: None,
+        }
+    }
+}
+
+/// The `get_usage` answer of the `basic` recording, served for any `get_usage`
+/// the script does not expect.
+static CANNED_USAGE: LazyLock<Value> = LazyLock::new(|| {
+    let recording = Recording::parse(include_str!("../spike/runs/basic.ndjson"))
+        .expect("basic recording parses");
+    let request_id = recording
+        .steps
+        .iter()
+        .find(|step| step.dir == Direction::In && is_get_usage(&step.msg))
+        .and_then(|step| step.msg["request_id"].as_str())
+        .expect("basic recording has a get_usage request");
+    recording
+        .steps
+        .iter()
+        .find(|step| {
+            step.dir == Direction::Out
+                && step.msg["type"] == "control_response"
+                && step.msg["response"]["request_id"] == request_id
+        })
+        .map(|step| step.msg["response"]["response"].clone())
+        .expect("basic recording answers get_usage")
+});
+
+fn is_get_usage(msg: &Value) -> bool {
+    is_control_request(msg) && msg["request"]["subtype"] == "get_usage"
+}
+
+fn canned_usage_response(request_id: &Value) -> Value {
+    serde_json::json!({"type": "control_response", "response": {
+        "subtype": "success", "request_id": request_id, "response": CANNED_USAGE.clone()}})
+}
+
 #[derive(Debug)]
 pub enum ReplayError {
     Mismatch {
@@ -145,7 +194,7 @@ fn shorten(text: &str) -> String {
 /// waits for `input` to close. Returns on the first mismatch.
 pub async fn replay<R, W>(
     recording: &Recording,
-    pace: Pace,
+    options: &Options,
     input: R,
     mut output: W,
 ) -> Result<(), ReplayError>
@@ -160,32 +209,61 @@ where
     for step in &recording.steps {
         match step.dir {
             Direction::Out => {
-                if pace == Pace::Realtime && step.t > clock {
+                if options.pace == Pace::Realtime && step.t > clock {
                     tokio::time::sleep(Duration::from_millis(step.t - clock)).await;
                 }
-                let msg = with_host_request_id(&step.msg, &request_ids);
-                let mut bytes = serde_json::to_vec(&msg).map_err(std::io::Error::other)?;
-                bytes.push(b'\n');
-                output.write_all(&bytes).await?;
-                output.flush().await?;
+                let mut msg = with_host_request_id(&step.msg, &request_ids);
+                if let Some(session_id) = &options.session_id
+                    && let Some(slot) = msg.get_mut("session_id")
+                {
+                    *slot = Value::String(session_id.clone());
+                }
+                write_line(&mut output, &msg).await?;
             }
-            Direction::In => {
+            Direction::In => loop {
                 let Some(got) = next_line(&mut host_lines).await? else {
                     return Err(ReplayError::UnexpectedEof {
                         line: step.line,
                         expected: step.msg.clone(),
                     });
                 };
-                accept(step, got, &mut request_ids)?;
-            }
+                match accept(step, got, &mut request_ids) {
+                    Ok(()) => break,
+                    Err(err) => answer_usage_or(err, &mut output).await?,
+                }
+            },
         }
         clock = step.t;
     }
     output.flush().await?;
-    drop(output);
-    if let Some(got) = next_line(&mut host_lines).await? {
-        return Err(ReplayError::AfterEnd { got });
+    while let Some(got) = next_line(&mut host_lines).await? {
+        answer_usage_or(ReplayError::AfterEnd { got: got.clone() }, &mut output).await?;
     }
+    Ok(())
+}
+
+/// Answers an unscripted `get_usage` request; any other unexpected line is `err`.
+async fn answer_usage_or<W: AsyncWrite + Unpin>(
+    err: ReplayError,
+    output: &mut W,
+) -> Result<(), ReplayError> {
+    let got = match &err {
+        ReplayError::Mismatch { got, .. } | ReplayError::AfterEnd { got } => got,
+        _ => return Err(err),
+    };
+    match serde_json::from_str::<Value>(got) {
+        Ok(msg) if is_get_usage(&msg) => {
+            write_line(output, &canned_usage_response(&msg["request_id"])).await
+        }
+        _ => Err(err),
+    }
+}
+
+async fn write_line<W: AsyncWrite + Unpin>(output: &mut W, msg: &Value) -> Result<(), ReplayError> {
+    let mut bytes = serde_json::to_vec(msg).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    output.write_all(&bytes).await?;
+    output.flush().await?;
     Ok(())
 }
 
@@ -339,12 +417,16 @@ mod tests {
 
     impl Host {
         fn start(recording: Recording) -> Self {
+            Self::start_with(recording, Options::default())
+        }
+
+        fn start_with(recording: Recording, options: Options) -> Self {
             let (stdin, fake_stdin) = duplex(1 << 16);
             let (fake_stdout, stdout) = duplex(1 << 16);
             let fake = tokio::spawn(async move {
                 replay(
                     &recording,
-                    Pace::Instant,
+                    &options,
                     BufReader::new(fake_stdin),
                     fake_stdout,
                 )
@@ -387,9 +469,18 @@ mod tests {
         rewrite_in: impl Fn(&Value) -> Value,
         rewrite_out: impl Fn(&Value) -> Value,
     ) {
+        drive_with(name, Options::default(), rewrite_in, rewrite_out).await;
+    }
+
+    async fn drive_with(
+        name: &str,
+        options: Options,
+        rewrite_in: impl Fn(&Value) -> Value,
+        rewrite_out: impl Fn(&Value) -> Value,
+    ) {
         let recording = recording(name);
         let steps = recording.steps.clone();
-        let mut host = Host::start(recording);
+        let mut host = Host::start_with(recording, options);
         let mut outs = 0;
         for step in &steps {
             match step.dir {
@@ -456,6 +547,54 @@ mod tests {
             msg
         };
         drive("interrupt", rewrite_in, rewrite_out).await;
+    }
+
+    #[tokio::test]
+    async fn host_session_id_is_substituted() {
+        let options = Options {
+            pace: Pace::Instant,
+            session_id: Some("host-session".into()),
+        };
+        let rewrite_out = |msg: &Value| {
+            let mut msg = msg.clone();
+            if msg.get("session_id").is_some() {
+                msg["session_id"] = Value::String("host-session".into());
+            }
+            msg
+        };
+        drive_with("permissions", options, Value::clone, rewrite_out).await;
+    }
+
+    fn get_usage(request_id: &str) -> Value {
+        serde_json::json!({"type": "control_request", "request_id": request_id,
+            "request": {"subtype": "get_usage", "skip_behaviors": true}})
+    }
+
+    fn assert_usage_answer(got: &Value, request_id: &str) {
+        assert_eq!(got["type"], "control_response");
+        assert_eq!(got["response"]["request_id"], request_id);
+        assert_eq!(got["response"]["response"]["rate_limits_available"], true);
+    }
+
+    #[tokio::test]
+    async fn unscripted_get_usage_is_answered_without_consuming_the_script() {
+        let recording = recording("interrupt");
+        let steps = recording.steps.clone();
+        let mut host = Host::start(recording);
+        host.send(&get_usage("u1")).await;
+        assert_usage_answer(&host.receive().await.expect("usage answer"), "u1");
+        for step in &steps {
+            match step.dir {
+                Direction::In => host.send(&step.msg).await,
+                Direction::Out => {
+                    let got = host.receive().await.expect("out line");
+                    assert_eq!(got, step.msg, "interrupt:{}", step.line);
+                }
+            }
+        }
+        host.send(&get_usage("u2")).await;
+        assert_usage_answer(&host.receive().await.expect("usage answer"), "u2");
+        host.finish().await.expect("replay failed");
     }
 
     #[tokio::test]

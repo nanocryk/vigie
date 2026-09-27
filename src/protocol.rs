@@ -547,34 +547,36 @@ pub enum CliRequest {
     Other(Extra),
 }
 
+/// Only the three identifying fields are typed strictly; the rest accept any
+/// JSON shape so a new CLI version never turns an ask into an unknown request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanUseTool {
     pub tool_name: String,
     pub input: Value,
     pub tool_use_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub title: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
+    pub display_name: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_reason: Option<String>,
+    pub decision_reason: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_reason_type: Option<String>,
+    pub decision_reason_type: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_suggestions: Option<Vec<Value>>,
+    pub permission_suggestions: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_path: Option<String>,
+    pub blocked_path: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_to_no: Option<bool>,
+    pub default_to_no: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub suppress_always_allow_rule: Option<bool>,
+    pub suppress_always_allow_rule: Option<Value>,
     /// Set on `AskUserQuestion` and `ExitPlanMode`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires_user_interaction: Option<bool>,
+    pub requires_user_interaction: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_id: Option<Value>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -1115,6 +1117,25 @@ mod tests {
         let line = serde_json::json!({"type": "system", "subtype": "brand_new", "x": 1});
         let typed: Inbound = serde_json::from_value(line.clone()).unwrap();
         assert!(matches!(typed, Inbound::System(System::Other(_))));
+        assert_eq!(serde_json::to_value(&typed).unwrap(), line);
+    }
+
+    #[test]
+    fn odd_shaped_ask_fields_stay_an_ask() {
+        let line = serde_json::json!({"type": "control_request", "request_id": "r1",
+            "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                "input": {"command": "ls"}, "tool_use_id": "t1",
+                "decision_reason": {"type": "rule", "rule": {"source": "project"}},
+                "default_to_no": "yes", "display_name": 3, "brand_new": [1]}});
+        let typed: Inbound = serde_json::from_value(line.clone()).unwrap();
+        let Inbound::ControlRequest(request) = &typed else {
+            panic!("not a control request: {typed:?}");
+        };
+        let CliRequest::CanUseTool(ask) = &request.request else {
+            panic!("fell back to Other: {:?}", request.request);
+        };
+        assert_eq!(ask.tool_name, "Bash");
+        assert_eq!(ask.decision_reason.as_ref().unwrap()["type"], "rule");
         assert_eq!(serde_json::to_value(&typed).unwrap(), line);
     }
 
