@@ -267,7 +267,8 @@ async fn permissions_deny_and_question_answer() {
             .answer(
                 request_id,
                 Answer::Allow {
-                    updated_input: None
+                    updated_input: None,
+                    note: None,
                 }
             )
             .await
@@ -334,6 +335,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
             request_id,
             Answer::Allow {
                 updated_input: None,
+                note: None,
             },
         )
         .await
@@ -508,6 +510,7 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
     );
     let allow = Answer::Allow {
         updated_input: None,
+        note: None,
     };
     assert!(
         harness
@@ -517,5 +520,77 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
             .is_err()
     );
     harness.session.answer("cli-3", allow).await.unwrap();
+    harness.finish().await;
+}
+
+/// A dangerous ask allowed with a note, which follows as a queued user message,
+/// then a safe ask allowed with a blank note, which sends nothing more.
+const NOTE_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "git reset --hard"}, "tool_use_id": "t1"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"command": "git reset --hard"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "user", "message": {"role": "user", "content": "(Note attached to my approval of your Bash call) Then run the tests."}, "parent_tool_use_id": null, "session_id": "s", "priority": "next"}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "a"}, "tool_use_id": "t2"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"file_path": "a"}}}}}
+"#;
+
+#[tokio::test]
+async fn an_allow_note_follows_as_a_queued_user_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.ndjson");
+    std::fs::write(&path, NOTE_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let HostEvent::AskQueued { danger, .. } = harness
+        .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(danger.dangerous);
+    assert_eq!(danger.reasons, ["Hard reset: git reset --hard"]);
+
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: Some("Then run the tests.".into()),
+    };
+    harness
+        .session
+        .answer("cli-1", allow.clone())
+        .await
+        .unwrap();
+    let resolved = harness
+        .until_host(|host| matches!(host, HostEvent::AskResolved { .. }))
+        .await;
+    assert_eq!(
+        resolved,
+        HostEvent::AskResolved {
+            request_id: "cli-1".into(),
+            resolution: Resolution::Answered { answer: allow },
+        }
+    );
+    let sent = harness
+        .until_host(|host| matches!(host, HostEvent::UserSent { .. }))
+        .await;
+    assert_eq!(
+        sent,
+        HostEvent::UserSent {
+            text: "(Note attached to my approval of your Bash call) Then run the tests.".into(),
+            client_id: None,
+        }
+    );
+
+    let HostEvent::AskQueued { danger, .. } = harness
+        .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert!(!danger.dangerous);
+    let blank = Answer::Allow {
+        updated_input: None,
+        note: Some("  ".into()),
+    };
+    harness.session.answer("cli-2", blank).await.unwrap();
     harness.finish().await;
 }

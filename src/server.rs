@@ -54,6 +54,7 @@ pub fn build_app(state: AppState) -> Router {
             get(api::list_sessions).post(api::create_session),
         )
         .route("/api/ws", get(ws::handler))
+        .route("/api/version", get(api::version))
         .layer(from_fn_with_state(state.clone(), auth::require_auth));
 
     let public = Router::new()
@@ -123,6 +124,7 @@ mod auth_gate_tests {
             (Method::GET, "/api/sessions"),
             (Method::POST, "/api/sessions"),
             (Method::GET, "/api/ws"),
+            (Method::GET, "/api/version"),
         ]
     }
 

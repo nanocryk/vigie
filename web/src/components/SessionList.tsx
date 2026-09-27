@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { Client, ConnectionStatus } from "@/client";
+import { ReloadButton } from "@/components/Reload";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo, stateLabel } from "@/format";
 import { navigate } from "@/route";
@@ -96,6 +97,7 @@ export function SessionList({ client, label }: { client: Client; label: string |
           {label !== null && (
             <span className="text-muted-foreground voice-ui truncate text-sm">{label}</span>
           )}
+          <ReloadButton />
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">

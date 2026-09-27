@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import type { Client } from "@/client";
+import { Swipe } from "@/components/Swipe";
+import type { Side } from "@/swipe";
 import { type PendingAsk, toolSummary } from "@/transcript";
 import { type Answer, isRecord } from "@/wire";
 
@@ -98,6 +100,175 @@ function QuestionView({
   );
 }
 
+function InputView({ ask }: { ask: PendingAsk }) {
+  if (ask.input === undefined) {
+    return <p className="text-muted-foreground text-sm">Input not received.</p>;
+  }
+  return (
+    <>
+      <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {toolSummary(ask.toolName, ask.input)}
+      </div>
+      <details className="mt-1">
+        <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
+          full input
+        </summary>
+        <pre className="bg-muted mt-1 max-h-60 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {JSON.stringify(ask.input, null, 2)}
+        </pre>
+      </details>
+    </>
+  );
+}
+
+function CardFrame({
+  title,
+  queued,
+  children,
+}: {
+  /** Null when the children draw their own header. */
+  title: string | null;
+  queued: number;
+  children: ReactNode;
+}) {
+  return (
+    <section className="bg-card border-primary/40 max-h-[50%] shrink-0 overflow-y-auto border-t-2 px-3 py-3">
+      <div className="mx-auto max-w-5xl space-y-3">
+        {title !== null && (
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="voice-heading text-sm">{title}</h2>
+            {queued > 0 && (
+              <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
+            )}
+          </div>
+        )}
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function useAnswer(client: Client, session: string, requestId: string) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const answer = async (value: Answer): Promise<boolean> => {
+    setSending(true);
+    setError(null);
+    try {
+      await client.command({
+        type: "answer",
+        session,
+        request_id: requestId,
+        answer: value,
+        client_id: client.newClientId(),
+      });
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSending(false);
+      return false;
+    }
+  };
+  return { sending, error, answer };
+}
+
+/** An allow or deny ask (tool use or plan approval), answered by swipe. */
+function ApprovalCard({
+  client,
+  session,
+  ask,
+  queued,
+}: {
+  client: Client;
+  session: string;
+  ask: PendingAsk;
+  queued: number;
+}) {
+  const { sending, error, answer } = useAnswer(client, session, ask.requestId);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState("");
+  // A failed answer remounts the swipe so it can be done again.
+  const [attempt, setAttempt] = useState(0);
+  const plan = ask.toolName === "ExitPlanMode" ? planText(ask.input) : null;
+
+  const confirm = (side: Side) => {
+    const text = note.trim();
+    const value: Answer =
+      side === "right"
+        ? text === ""
+          ? { kind: "allow" }
+          : { kind: "allow", note: text }
+        : { kind: "deny", message: text === "" ? DEFAULT_DENY : text };
+    void answer(value).then((ok) => {
+      if (!ok) setAttempt((count) => count + 1);
+    });
+  };
+
+  // The whole panel is the swipe surface; its own controls keep their taps.
+  return (
+    <CardFrame title={null} queued={0}>
+      {/* Keyed by the ask: another ask on screen means a fresh gesture. */}
+      <Swipe
+        key={`${ask.requestId}:${attempt}`}
+        labels={plan !== null ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
+        dangerous={ask.danger.dangerous}
+        onConfirm={confirm}
+      >
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="voice-heading text-sm">
+              {plan !== null ? "Plan approval" : `Allow ${ask.toolName}?`}
+            </h2>
+            {queued > 0 && (
+              <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
+            )}
+          </div>
+          {ask.danger.dangerous && (
+            <div className="border-destructive bg-destructive/15 text-destructive rounded-[5px] border px-3 py-2 text-sm">
+              <p className="voice-heading">Dangerous</p>
+              <ul className="list-disc pl-5">
+                {ask.danger.reasons.map((reason) => (
+                  <li key={reason} className="[overflow-wrap:anywhere]">
+                    {reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {plan !== null ? (
+            <div className="bg-background voice-prose max-h-[40dvh] overflow-y-auto rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {plan}
+            </div>
+          ) : (
+            <InputView ask={ask} />
+          )}
+          {noteOpen ? (
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              disabled={sending}
+              rows={2}
+              placeholder="Note sent with the answer: the deny reason, or a follow-up after allowing"
+              className="bg-background focus:ring-ring voice-prose w-full resize-y rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => setNoteOpen(true)}
+              className="text-primary voice-ui bg-card/60 rounded-[5px] px-2 py-1 text-sm disabled:opacity-50"
+            >
+              + Note
+            </button>
+          )}
+        </div>
+      </Swipe>
+      {sending && <p className="text-muted-foreground voice-ui text-sm">Sending...</p>}
+      {error !== null && <p className="text-destructive text-sm">{error}</p>}
+    </CardFrame>
+  );
+}
+
 export function AskCard({
   client,
   session,
@@ -110,31 +281,29 @@ export function AskCard({
   /** Asks waiting behind this one. */
   queued: number;
 }) {
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  if (ask.toolName !== "AskUserQuestion") {
+    return <ApprovalCard client={client} session={session} ask={ask} queued={queued} />;
+  }
+  return <DecisionCard client={client} session={session} ask={ask} queued={queued} />;
+}
+
+/** Questions. */
+function DecisionCard({
+  client,
+  session,
+  ask,
+  queued,
+}: {
+  client: Client;
+  session: string;
+  ask: PendingAsk;
+  queued: number;
+}) {
+  const { sending, error, answer } = useAnswer(client, session, ask.requestId);
   const [denyMessage, setDenyMessage] = useState("");
   const [selections, setSelections] = useState<Record<string, string[]>>({});
 
   const questions = ask.toolName === "AskUserQuestion" ? parseQuestions(ask.input) : null;
-  const plan = ask.toolName === "ExitPlanMode" ? planText(ask.input) : null;
-  const known = ask.input !== undefined;
-
-  const answer = async (value: Answer) => {
-    setSending(true);
-    setError(null);
-    try {
-      await client.command({
-        type: "answer",
-        session,
-        request_id: ask.requestId,
-        answer: value,
-        client_id: client.newClientId(),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setSending(false);
-    }
-  };
 
   const deny = () => {
     const message = denyMessage.trim();
@@ -154,92 +323,64 @@ export function AskCard({
     void answer({ kind: "questions", answers });
   };
 
-  const title =
-    questions !== null ? "Question" : plan !== null ? "Plan approval" : `Allow ${ask.toolName}?`;
+  const title = questions !== null ? "Question" : `Allow ${ask.toolName}?`;
 
   return (
-    <section className="bg-card border-primary/40 max-h-[50%] shrink-0 overflow-y-auto border-t-2 px-3 py-3">
-      <div className="mx-auto max-w-5xl space-y-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <h2 className="voice-heading text-sm">{title}</h2>
-          {queued > 0 && (
-            <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
-          )}
-        </div>
+    <CardFrame title={title} queued={queued}>
+      {questions !== null ? (
+        questions.map((question) => (
+          <QuestionView
+            key={question.question}
+            question={question}
+            disabled={sending}
+            selected={selections[question.question] ?? []}
+            onChange={(labels) =>
+              setSelections((current) => ({ ...current, [question.question]: labels }))
+            }
+          />
+        ))
+      ) : (
+        <InputView ask={ask} />
+      )}
 
+      <input
+        value={denyMessage}
+        onChange={(event) => setDenyMessage(event.target.value)}
+        disabled={sending}
+        placeholder="Deny message for Claude (optional)"
+        className="bg-background focus:ring-ring w-full rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
+      />
+
+      <div className="flex flex-wrap gap-2">
         {questions !== null ? (
-          questions.map((question) => (
-            <QuestionView
-              key={question.question}
-              question={question}
-              disabled={sending}
-              selected={selections[question.question] ?? []}
-              onChange={(labels) =>
-                setSelections((current) => ({ ...current, [question.question]: labels }))
-              }
-            />
-          ))
-        ) : plan !== null ? (
-          <div className="bg-background voice-prose max-h-[40dvh] overflow-y-auto rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {plan}
-          </div>
-        ) : known ? (
-          <>
-            <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {toolSummary(ask.toolName, ask.input)}
-            </div>
-            <details>
-              <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
-                full input
-              </summary>
-              <pre className="bg-muted mt-1 max-h-60 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {JSON.stringify(ask.input, null, 2)}
-              </pre>
-            </details>
-          </>
+          <button
+            type="button"
+            disabled={sending || !complete}
+            onClick={submitQuestions}
+            className={`bg-primary text-primary-foreground ${BUTTON}`}
+          >
+            Answer
+          </button>
         ) : (
-          <p className="text-muted-foreground text-sm">Input not received.</p>
-        )}
-
-        <input
-          value={denyMessage}
-          onChange={(event) => setDenyMessage(event.target.value)}
-          disabled={sending}
-          placeholder="Deny message for Claude (optional)"
-          className="bg-background focus:ring-ring w-full rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
-        />
-
-        <div className="flex flex-wrap gap-2">
-          {questions !== null ? (
-            <button
-              type="button"
-              disabled={sending || !complete}
-              onClick={submitQuestions}
-              className={`bg-primary text-primary-foreground ${BUTTON}`}
-            >
-              Answer
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={sending}
-              onClick={() => void answer({ kind: "allow" })}
-              className={`bg-primary text-primary-foreground ${BUTTON}`}
-            >
-              Allow
-            </button>
-          )}
           <button
             type="button"
             disabled={sending}
-            onClick={deny}
-            className={`border-destructive text-destructive border ${BUTTON}`}
+            onClick={() => void answer({ kind: "allow" })}
+            className={`bg-primary text-primary-foreground ${BUTTON}`}
           >
-            Deny
+            Allow
           </button>
-        </div>
-        {error !== null && <p className="text-destructive text-sm">{error}</p>}
+        )}
+        <button
+          type="button"
+          disabled={sending}
+          onClick={deny}
+          className={`border-destructive text-destructive border ${BUTTON}`}
+        >
+          Deny
+        </button>
       </div>
-    </section>
+      {error !== null && <p className="text-destructive text-sm">{error}</p>}
+    </CardFrame>
   );
 }

@@ -18,9 +18,10 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::child::{Child, Launch, Program};
+use crate::danger::{self, Danger};
 use crate::protocol::{
     CanUseTool, CliRequest, ControlRequest, ControlResponse, Extra, GetUsageResponse, HostRequest,
-    Inbound, InitializeResponse, InterruptResponse, Outbound, PermissionResult,
+    Inbound, InitializeResponse, InterruptResponse, Outbound, PermissionResult, Priority,
     SetPermissionModeResponse, System, UserMessage,
 };
 use crate::store::{SessionState, Store};
@@ -90,6 +91,8 @@ pub enum HostEvent {
         request_id: String,
         tool_name: String,
         tool_use_id: String,
+        #[serde(default)]
+        danger: Danger,
     },
     AskResolved {
         request_id: String,
@@ -122,10 +125,13 @@ pub enum GateFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Answer {
-    /// `updated_input` defaults to the input the CLI sent.
+    /// `updated_input` defaults to the input the CLI sent. A non-blank `note`
+    /// follows the answer as a user message queued for the running turn.
     Allow {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         updated_input: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// The message is shown to the model.
     Deny { message: String },
@@ -236,6 +242,7 @@ impl Session {
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let actor = Actor {
             id: config.id,
+            cwd: config.cwd,
             launch: config.launch,
             child,
             events: events.clone(),
@@ -251,7 +258,7 @@ impl Session {
             kill_at: None,
             stderr_tail: VecDeque::new(),
         };
-        tokio::spawn(actor.run(command_receiver, config.cwd));
+        tokio::spawn(actor.run(command_receiver));
         let session = Self {
             id: config.id,
             commands,
@@ -385,6 +392,7 @@ struct PendingAsk {
 
 struct Actor {
     id: Uuid,
+    cwd: PathBuf,
     launch: Launch,
     child: Child,
     events: broadcast::Sender<Arc<Event>>,
@@ -405,10 +413,10 @@ struct Actor {
 }
 
 impl Actor {
-    async fn run(mut self, mut commands: mpsc::Receiver<Command>, cwd: PathBuf) {
+    async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
         self.emit_host(HostEvent::Started {
             launch: self.launch,
-            cwd,
+            cwd: self.cwd.clone(),
         });
         let request_id = self.next_request_id();
         let initialize = ControlRequest::new(
@@ -497,6 +505,7 @@ impl Actor {
                     request_id: request.request_id.clone(),
                     tool_name: ask.tool_name.clone(),
                     tool_use_id: ask.tool_use_id.clone(),
+                    danger: danger::classify(ask, &self.cwd),
                 });
             }
             CliRequest::Other(fields) => {
@@ -568,7 +577,7 @@ impl Actor {
                 client_id,
                 reply,
             } => {
-                let _ = reply.send(self.send_user(text, client_id).await);
+                let _ = reply.send(self.send_user(text, client_id, None).await);
             }
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
@@ -594,15 +603,23 @@ impl Actor {
         }
     }
 
-    async fn send_user(&mut self, text: String, client_id: Option<String>) -> Result<()> {
+    async fn send_user(
+        &mut self,
+        text: String,
+        client_id: Option<String>,
+        priority: Option<Priority>,
+    ) -> Result<()> {
         // Emitted before the write, so it precedes the CLI's echo in seq order.
         self.emit_host(HostEvent::UserSent {
             text: text.clone(),
             client_id,
         });
         let session_id = self.launch.claude_session_id().to_string();
-        self.write(Outbound::User(UserMessage::text(session_id, text)))
-            .await?;
+        let mut message = UserMessage::text(session_id, text);
+        if let Some(priority) = priority {
+            message = message.with_priority(priority);
+        }
+        self.write(Outbound::User(message)).await?;
         self.tracker.on_send();
         self.publish_activity();
         Ok(())
@@ -615,11 +632,20 @@ impl Actor {
         let result = permission_result(&self.asks[index].request, &answer)?;
         let response = ControlResponse::permission(request_id.clone(), &result);
         self.write(Outbound::ControlResponse(response)).await?;
-        self.asks.remove(index);
+        let ask = self.asks.remove(index);
+        let note = match &answer {
+            Answer::Allow {
+                note: Some(note), ..
+            } if !note.trim().is_empty() => Some(allow_note(&ask.request.tool_name, note)),
+            _ => None,
+        };
         self.emit_host(HostEvent::AskResolved {
             request_id,
             resolution: Resolution::Answered { answer },
         });
+        if let Some(note) = note {
+            self.send_user(note, None, Some(Priority::Next)).await?;
+        }
         Ok(())
     }
 
@@ -722,9 +748,22 @@ impl Actor {
     }
 }
 
+/// Frames an allow note so the model reads it as tied to the approval, not as a stray mid-turn message.
+fn allow_note(tool_name: &str, note: &str) -> String {
+    let what = if tool_name == "ExitPlanMode" {
+        "plan".to_string()
+    } else {
+        format!("{tool_name} call")
+    };
+    format!(
+        "(Note attached to my approval of your {what}) {}",
+        note.trim()
+    )
+}
+
 fn permission_result(ask: &CanUseTool, answer: &Answer) -> Result<PermissionResult> {
     Ok(match answer {
-        Answer::Allow { updated_input } => {
+        Answer::Allow { updated_input, .. } => {
             PermissionResult::allow(updated_input.clone().unwrap_or_else(|| ask.input.clone()))
         }
         Answer::Deny { message } => PermissionResult::deny(message.clone()),
@@ -810,13 +849,52 @@ mod tests {
     }
 
     #[test]
+    fn answers_and_asks_read_the_wire() {
+        let with_note: Answer =
+            serde_json::from_value(serde_json::json!({"kind": "allow", "note": "then test"}))
+                .unwrap();
+        assert_eq!(
+            with_note,
+            Answer::Allow {
+                updated_input: None,
+                note: Some("then test".into()),
+            }
+        );
+        let bare: Answer = serde_json::from_value(serde_json::json!({"kind": "allow"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(bare).unwrap(),
+            serde_json::json!({"kind": "allow"})
+        );
+
+        let queued = HostEvent::AskQueued {
+            request_id: "r".into(),
+            tool_name: "Bash".into(),
+            tool_use_id: "t".into(),
+            danger: Danger::from_reasons(vec!["Hard reset: git reset --hard".into()]),
+        };
+        assert_eq!(
+            serde_json::to_value(&queued).unwrap(),
+            serde_json::json!({"event": "ask_queued", "request_id": "r", "tool_name": "Bash",
+                "tool_use_id": "t", "danger": {"dangerous": true,
+                "reasons": ["Hard reset: git reset --hard"]}}),
+        );
+        let stored: HostEvent = serde_json::from_value(serde_json::json!({"event": "ask_queued",
+            "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
+        .unwrap();
+        assert!(
+            matches!(stored, HostEvent::AskQueued { danger, .. } if danger == Danger::default())
+        );
+    }
+
+    #[test]
     fn answers_map_to_permission_results() {
         let bash = ask("Bash", serde_json::json!({"command": "ls"}));
         assert_eq!(
             permission_result(
                 &bash,
                 &Answer::Allow {
-                    updated_input: None
+                    updated_input: None,
+                    note: Some("then stop".into()),
                 }
             )
             .unwrap(),

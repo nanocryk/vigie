@@ -1,6 +1,7 @@
 import { type ReactNode, use, useEffect } from "react";
 
 import { getClient } from "@/client";
+import { NewVersionBanner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
 import type { BootResult } from "@/pairing";
@@ -27,6 +28,7 @@ function Shell({ label }: { label: string | null }) {
   const route = useRoute();
   return (
     <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
+      <NewVersionBanner />
       {route.kind === "session" ? (
         <SessionScreen key={route.id} client={client} id={route.id} />
       ) : (

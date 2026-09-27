@@ -27,7 +27,7 @@ export interface SessionView {
 }
 
 export type Answer =
-  | { kind: "allow"; updated_input?: unknown }
+  | { kind: "allow"; updated_input?: unknown; note?: string }
   | { kind: "deny"; message: string }
   | { kind: "questions"; answers: Record<string, string> };
 
@@ -41,10 +41,22 @@ export type ClientMessage =
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
 
+/** Why an ask deserves a second look; `reasons` has one line per matched rule. */
+export interface Danger {
+  dangerous: boolean;
+  reasons: string[];
+}
+
 export type HostEvent =
   | { event: "started"; cwd: string }
   | { event: "user_sent"; text: string; client_id: string | null }
-  | { event: "ask_queued"; request_id: string; tool_name: string; tool_use_id: string }
+  | {
+      event: "ask_queued";
+      request_id: string;
+      tool_name: string;
+      tool_use_id: string;
+      danger: Danger;
+    }
   | { event: "ask_resolved"; request_id: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
   | { event: "child_exited"; code: number | null; stderr_tail: string[] }
@@ -173,6 +185,18 @@ export function parseErrorBody(raw: unknown): string | null {
   return typeof error === "string" ? error : null;
 }
 
+/** History recorded before danger checks existed has no `danger`: not dangerous. */
+export function parseDanger(raw: unknown): Danger {
+  if (!isRecord(raw)) return { dangerous: false, reasons: [] };
+  const reasons = raw["reasons"];
+  return {
+    dangerous: raw["dangerous"] === true,
+    reasons: Array.isArray(reasons)
+      ? reasons.filter((reason): reason is string => typeof reason === "string")
+      : [],
+  };
+}
+
 export function parseHostEvent(raw: unknown): HostEvent {
   if (!isRecord(raw)) return { event: "unknown", raw };
   const text = (key: string): string | null => {
@@ -202,6 +226,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         request_id: requestId,
         tool_name: toolName,
         tool_use_id: toolUseId,
+        danger: parseDanger(raw["danger"]),
       };
     }
     case "ask_resolved": {

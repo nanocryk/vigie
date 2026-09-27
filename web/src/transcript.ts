@@ -1,6 +1,7 @@
 import {
   type CliLine,
   type ContentBlock,
+  type Danger,
   type GateFailure,
   type HostEvent,
   type WireEvent,
@@ -38,6 +39,7 @@ export interface PendingAsk {
   toolUseId: string;
   /** Undefined when the matching `can_use_tool` line was not seen. */
   input: unknown;
+  danger: Danger;
 }
 
 export interface TranscriptState {
@@ -209,6 +211,7 @@ class Draft {
           toolName: event.tool_name,
           toolUseId: event.tool_use_id,
           input: request?.input,
+          danger: event.danger,
         });
         return;
       }

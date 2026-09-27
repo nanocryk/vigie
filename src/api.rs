@@ -7,6 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 use crate::AppState;
@@ -40,6 +43,25 @@ pub async fn create_session(
         Ok(view) => (StatusCode::CREATED, Json(view)).into_response(),
         Err(err) => internal_error("create session", &err),
     }
+}
+
+/// Differs from process to process, so a server restart counts as a new build.
+static PROCESS_STAMP: LazyLock<u128> = LazyLock::new(|| {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos())
+});
+
+/// Build id of what is served now: the web build's `index.html` (its asset names
+/// carry content hashes) and the server process. Clients reload when it changes.
+pub async fn version(State(state): State<AppState>) -> Response {
+    let index = tokio::fs::read(state.web_dir.join("index.html"))
+        .await
+        .unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    index.hash(&mut hasher);
+    PROCESS_STAMP.hash(&mut hasher);
+    Json(json!({"build": format!("{:016x}", hasher.finish())})).into_response()
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {

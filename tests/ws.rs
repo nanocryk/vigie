@@ -303,6 +303,7 @@ fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
         request_id: request_id.into(),
         answer: Answer::Allow {
             updated_input: None,
+            note: None,
         },
         client_id: client_id.into(),
     }

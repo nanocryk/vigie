@@ -129,6 +129,13 @@
     --color-background: var(--background);
     --color-bubble-claude: var(--bubble-claude);
     --color-bubble-user: var(--bubble-user);
+    --color-swipe-undecided: var(--swipe-undecided);
+    --color-swipe-accept: var(--swipe-accept);
+    --color-swipe-deny: var(--swipe-deny);
+    --color-swipe-accept-strong: var(--swipe-accept-strong);
+    --color-swipe-deny-strong: var(--swipe-deny-strong);
+    --color-swipe-accept-latched: var(--swipe-accept-latched);
+    --color-swipe-deny-latched: var(--swipe-deny-latched);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -175,6 +182,14 @@
     --sidebar-ring: oklch(0.62 0.1 190);
     --bubble-claude: oklch(0.93 0 0);
     --bubble-user: oklch(0.93 0 0);
+    /* Swipe panels: pale fills behind text, strong tones for labels and buttons. */
+    --swipe-undecided: oklch(0.93 0.09 95);
+    --swipe-accept: oklch(0.9 0.1 150);
+    --swipe-deny: oklch(0.89 0.08 25);
+    --swipe-accept-strong: oklch(0.5 0.13 150);
+    --swipe-deny-strong: oklch(0.54 0.19 28);
+    --swipe-accept-latched: oklch(0.8 0.17 150);
+    --swipe-deny-latched: oklch(0.78 0.15 25);
 }
 
 /* Dark: deep slate night, warm text, brighter teal and amber. */
@@ -214,6 +229,13 @@
         --sidebar-ring: oklch(0.68 0.1 185);
         --bubble-claude: oklch(0.26 0 0);
         --bubble-user: oklch(0.26 0 0);
+        --swipe-undecided: oklch(0.38 0.07 95);
+        --swipe-accept: oklch(0.38 0.08 150);
+        --swipe-deny: oklch(0.37 0.09 25);
+        --swipe-accept-strong: oklch(0.78 0.15 150);
+        --swipe-deny-strong: oklch(0.72 0.17 25);
+        --swipe-accept-latched: oklch(0.5 0.15 150);
+        --swipe-deny-latched: oklch(0.49 0.16 25);
     }
 }
 

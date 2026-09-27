@@ -3,6 +3,7 @@ import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from
 import type { Client } from "@/client";
 import { AskCard } from "@/components/AskCard";
 import { BusyDot, ConnectionBadge } from "@/components/SessionList";
+import { ReloadButton } from "@/components/Reload";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
@@ -55,6 +56,8 @@ function Composer({
     if (text.trim() === "") return;
     onSend(text);
     change("");
+    // On touch, dropping focus closes the virtual keyboard so the reply is visible.
+    if (coarsePointer()) area.current?.blur();
   };
 
   // Desktop: Enter sends, Shift+Enter inserts a newline. Touch: Enter inserts a
@@ -186,6 +189,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         </div>
         <ConnectionBadge status={snapshot.status} />
         <BusyDot busy={busy} />
+        <ReloadButton />
       </header>
 
       {serverError !== null && (

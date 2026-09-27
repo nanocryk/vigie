@@ -46,6 +46,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - The session header shows, easily visible, the cache TTL and the context usage: the two session-level metrics.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
+- Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.
 - Cold cache: sending and approving are blocked until the user picks one of:
   - rewarm: send on the cold cache;
   - continue: a new session seeded with past context from vigie2's history;
@@ -59,7 +60,17 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Bubbles hold text only; tool uses appear outside bubbles.
 - Scroll never yanked: new content arriving while the view is scrolled up does not move the view.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
-- Approvals by swipe: one side accepts, the other rejects, with a way to add notes.
+- Approvals by swipe: right accepts, left rejects, with a way to add notes.
+  - Tool-use asks and plan approval are swiped, notes included.
+  - Every ask takes two swipes in a row in the same direction: one gesture for all asks, so no conflicting muscle memory. The first swipe shows "Confirm?" in that side's color; the second sends the answer at once. A tap, a swipe in the other direction, or waiting 3 s cancels.
+  - A swipe can start anywhere on the panel. Its side is chosen by a minimum travel distance, large enough that a movement in that direction is never a fluke: at least 20% of the panel width and 56 px, mostly horizontal (horizontal travel at least twice the vertical) so scrolling never registers. Below the threshold the panel springs back.
+  - Dangerous asks force a 1 s cooldown between the two swipes and show "Are you sure?", greyed out until the cooldown ends.
+  - Desktop uses buttons instead: a single press answers. A dangerous ask shows an "Are you sure?" button that can only be pressed after the same cooldown.
+  - The swipe is done on the panel representing the choice, so it can never confirm the wrong thing. The whole panel swipes, header included.
+  - Panels that accept notes have a button opening a text field; the note is sent with the swipe. A deny note is the deny message; an allow note follows as a queued user message framed as attached to the approval.
+  - Dangerous means what the CLI flags, plus vigie2's own checks on top: `rm -r` / `rm -rf`, `git push --force`, `git reset --hard`, writes outside the session folder.
+  - The swipe is a shared component, used elsewhere in the app too (e.g. swipe left on a discussion to archive it).
+  - Animation: at rest the panel is undecided yellow, the "waiting for a decision" color. While the finger moves, it goes toward the decision's green or red, and snaps to a more intense shade on reaching the threshold, like a latch. After the first swipe, the yellow fills back in over the 3 s, showing the choice fading away. The fill sweeps toward the chosen side: left to right after a right swipe, right to left after a left swipe.
 - Diffs viewable like a developer reads code.
 - Subagents integrated directly, their discussion visible.
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
@@ -143,10 +154,18 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Several clients on one session; a card answered on one disappears on the others.
   - Fake `claude` replaying the recordings in tests.
 - Outside the first slice: directory explorer, swipe, cache and usage header, cold-cache blocking, MCP server, scratch folders.
+- Second slice, making vigie2 the daily tool:
+  - Markdown rendering in bubbles; diffs for Edit and Write.
+  - Cache and context header with cold-cache blocking.
+  - Session controls (model, effort, permission mode) and the slash command picker.
+  - In-app pairing with a QR code.
+  - Push notifications.
+  - Session management: archive a session (hidden from Home, restorable) and kill it (stop its Claude process; the session stays listed).
+  - Swipe approvals.
 
 ## Open
 
-- Swipe details: which side accepts, the notes gesture, an undo window before the answer is sent, handling of asks the CLI flags as dangerous (`default_to_no`), whether questions and plan approval use cards other than swipe.
+- Swipe details: whether questions use a card other than swipe.
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
 - When an idle child is reaped.
 - Server to client events: raw CLI lines plus thin host events; their exact shape and the SQLite schema.

@@ -12,13 +12,15 @@
 //!   session emits a `user_sent {text, client_id}` host event before writing the text.
 //! - `interrupt {session, client_id}`
 //! - `answer {session, request_id, answer, client_id}`: `answer` is `allow
-//!   {updated_input?}`, `deny {message}` or `questions {answers}`, tagged by `kind`.
+//!   {updated_input?, note?}`, `deny {message}` or `questions {answers}`, tagged by
+//!   `kind`. A non-blank allow `note` is then sent as a user message queued for the
+//!   running turn, with its own `user_sent` event.
 //! - `set_permission_mode {session, mode, client_id}`
 //!
 //! Server to client:
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
-//!   event tagged by `event`.
+//!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
 //! - `sessions_changed`: a session was created, changed activity or ended;
 //!   `GET /api/sessions` has the new list.

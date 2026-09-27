@@ -369,8 +369,20 @@ pub struct UserMessage {
     pub is_replay: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Priority>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// When a host message sent during a turn reaches the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Priority {
+    Now,
+    /// At the next point the turn can take input, without interrupting it.
+    Next,
+    Later,
 }
 
 impl UserMessage {
@@ -387,7 +399,15 @@ impl UserMessage {
             timestamp: None,
             is_replay: None,
             tool_use_result: None,
+            priority: None,
             extra: Extra::new(),
+        }
+    }
+
+    pub fn with_priority(self, priority: Priority) -> Self {
+        Self {
+            priority: Some(priority),
+            ..self
         }
     }
 }
@@ -570,6 +590,8 @@ pub struct CanUseTool {
     pub blocked_path: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_to_no: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier_approvable: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppress_always_allow_rule: Option<Value>,
     /// Set on `AskUserQuestion` and `ExitPlanMode`.
@@ -1162,6 +1184,12 @@ mod tests {
             serde_json::to_value(&user).unwrap(),
             serde_json::json!({"type": "user", "message": {"role": "user", "content": "hi"},
                 "parent_tool_use_id": null, "session_id": "s"}),
+        );
+        let queued = Outbound::User(UserMessage::text("s", "hi").with_priority(Priority::Next));
+        assert_eq!(
+            serde_json::to_value(&queued).unwrap(),
+            serde_json::json!({"type": "user", "message": {"role": "user", "content": "hi"},
+                "parent_tool_use_id": null, "session_id": "s", "priority": "next"}),
         );
         let interrupt = Outbound::ControlRequest(ControlRequest::new(
             "r1",

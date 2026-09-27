@@ -30,6 +30,20 @@ describe("parseServerMessage", () => {
     });
   });
 
+  it("reads the danger of a queued ask, defaulting to safe", () => {
+    const ask = { event: "ask_queued", request_id: "r", tool_name: "Bash", tool_use_id: "t" };
+    const queued = (payload: unknown) =>
+      parseServerMessage(
+        { type: "event", session: "s", seq: 1, time: "t", kind: "host", payload },
+        "msg",
+      );
+    const danger = { dangerous: true, reasons: ["Hard reset: git reset --hard"] };
+    expect(queued({ ...ask, danger })).toMatchObject({ event: { payload: { danger } } });
+    expect(queued(ask)).toMatchObject({
+      event: { payload: { danger: { dangerous: false, reasons: [] } } },
+    });
+  });
+
   it("reads an ack without an error", () => {
     expect(parseServerMessage({ type: "ack", client_id: "c", ok: true }, "msg")).toEqual({
       type: "ack",
