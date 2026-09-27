@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "Phone-reachable chat UI driving Claude Code headlessly"
 
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake_claude.rs"
+
 [dependencies]
 anyhow = "1"
 axum = "0.8"
