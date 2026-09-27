@@ -17,22 +17,34 @@
 //!   {updated_input?, note?}`, `deny {message}` or `questions {answers}`, tagged by
 //!   `kind`. A non-blank allow `note` is then sent as a user message queued for the
 //!   running turn, with its own `user_sent` event.
-//! - While the discussion's cache is cold (`gauges::is_cold`), a `send` or an
-//!   `answer` without `rewarm: true` is refused with the ack error `cache_cold`
-//!   and has no effect. `restart` and `interrupt` are always accepted.
+//! - While the discussion's cache is cold (`gauges::is_cold`), or a model or
+//!   effort change awaits its first main request (`settings_changed_at` set), a
+//!   `send` or an `answer` without `rewarm: true` is refused with the ack error
+//!   `cache_cold` and has no effect. `restart` and `interrupt` are always accepted.
 //! - `set_permission_mode {session, mode, client_id}`: a live session asks the CLI;
 //!   a stopped one only stores the mode (`default`, `acceptEdits` or `plan`) for its
 //!   next launch and announces `sessions_changed`.
+//! - `set_settings {session, model?, effort?, client_id}`: stores the model and
+//!   the effort level (`low`, `medium`, `high`, `xhigh` or `max`) every launch
+//!   passes as `--model` and `--effort`; an absent field keeps its value, `null`
+//!   lets the CLI pick. Settings equal to the stored ones change nothing. A
+//!   change sets `settings_changed_at`, clears `applied_model` and
+//!   `applied_effort`, and announces `sessions_changed`; on a live child it also
+//!   interrupts the running turn, if any, then applies the new model with
+//!   `set_model` and a new effort level with `apply_flag_settings`, and asks
+//!   `get_settings` again.
 //! - `restart {session, mode, text?, client_id}`: moves the discussion to a fresh
-//!   Claude session in the same permission mode, and announces `sessions_changed`.
+//!   Claude session in the same permission mode, model and effort, and announces
+//!   `sessions_changed`.
 //!   The live child, if any, is stopped first, its pending asks dropped. The
 //!   session then records a `restarted {mode, exchanges, total_exchanges, seed?}`
 //!   host event and forgets its `cache` and `context`. `mode` `continue` launches
 //!   the new session with one message: `seed`, a blank line, then `text`, or
 //!   "Say what you want to do next." when `text` is blank; `seed` renders the
 //!   last `exchanges` of the discussion's `total_exchanges`. `blank` launches it
-//!   with `text` when not blank, else only at the next `send`. The `user_sent`
-//!   event carries `text` alone, and there is none for a blank `text`.
+//!   with `text` when not blank, else only at the next `send`; `clear` does the
+//!   same and is recorded as the Clear command. The `user_sent` event carries
+//!   `text` alone, and there is none for a blank `text`.
 //! - `kill {session, client_id}`: stops the live child the graceful way; the
 //!   discussion stays listed and the next `send` resumes it. Acked without effect
 //!   when not live.
@@ -46,19 +58,41 @@
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
 //!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
+//!   `catalog {models, commands}` follows each accepted `initialize`: `models
+//!   [{value, resolved_model?, display_name, description?, effort_levels}]`
+//!   (`resolved_model` the model id `value` stands for, `effort_levels` empty
+//!   for a model without effort) and `commands [{name, description,
+//!   argument_hint}]`, the CLI's slash commands and skills.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
 //! - `sessions_changed`: a session was created, changed activity or its count
 //!   of pending asks, ended, had
-//!   the permission mode of its stopped state changed, its main conversation
+//!   the permission mode of its stopped state or its model or effort changed, its main conversation
 //!   made a request or finished a turn (new `cache` and `context`), or the CLI
-//!   reported a new context usage, it restarted on a fresh Claude session, or it
+//!   reported a new context usage or new applied settings, it restarted on a fresh Claude session, or it
 //!   was killed, archived or restored; `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
+//! - `catalog_changed`: the shared catalog or default settings changed;
+//!   `GET /api/catalog` has the new ones.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 //!
+//! `GET /api/catalog` is what all discussions share, persisted: `models` and
+//! `commands` (shaped as in `catalog`) from the latest `initialize` of any
+//! Claude start, `terminal_commands` (names of the commands that only work in
+//! the terminal) from the latest `system/init`, and `defaults {model, effort}`,
+//! what `get_settings` reports applying for a child launched without a model or
+//! effort whose discussion still has none. Each is null until first reported.
+//! With `models` or `defaults` unknown at launch, the server starts one Claude
+//! in its state folder to read them (`initialize` and `get_settings`, no user
+//! message), then stops it; a failure waits for the next launch.
+//!
 //! Each session of `GET /api/sessions` carries `archived_at` (null while not
-//! archived), `live`, `busy`, `asks` (the
+//! archived), `model` and `effort` (null when the CLI picks),
+//! `settings_changed_at` (null unless a model or effort change awaits its first
+//! main request), `applied_model` and `applied_effort` (what the CLI reports
+//! applying through `get_settings`, asked when the child starts, after each turn
+//! and after a change, e.g. `claude-opus-5-5[1m]` and `medium`; kept once the
+//! child stops, null while unknown), `live`, `busy`, `asks` (the
 //! permission, question and plan approval asks its running child awaits an
 //! answer to, 0 when not live), `cache {last_request_at,
 //! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source,
@@ -123,6 +157,23 @@ pub enum ClientMessage {
         mode: String,
         client_id: String,
     },
+    /// An absent field keeps its setting; `null` goes back to the CLI's default.
+    SetSettings {
+        session: Uuid,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        model: Option<Option<String>>,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        effort: Option<Option<String>>,
+        client_id: String,
+    },
     Restart {
         session: Uuid,
         mode: RestartMode,
@@ -144,6 +195,15 @@ pub enum ClientMessage {
     },
 }
 
+/// Tells a field sent as `null` from an absent one, which `default` leaves `None`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
@@ -156,6 +216,7 @@ pub enum ServerMessage {
     },
     SessionsChanged,
     UsageChanged,
+    CatalogChanged,
     Error {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -232,6 +293,16 @@ pub struct SessionView {
     pub context: Option<Context>,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
+    /// Stored model and effort, passed at every launch; `None` lets the CLI pick.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// When a model or effort change made the cache count cold; `None` once a
+    /// main request or a restart followed.
+    pub settings_changed_at: Option<DateTime<Utc>>,
+    /// What the CLI last reported applying, such as `claude-opus-5-5[1m]` and
+    /// `medium`; `None` while unknown.
+    pub applied_model: Option<String>,
+    pub applied_effort: Option<String>,
 }
 
 impl SessionView {
@@ -251,6 +322,11 @@ impl SessionView {
             cache: row.cache,
             context: row.context,
             archived_at: row.archived_at,
+            model: row.settings.model,
+            effort: row.settings.effort,
+            settings_changed_at: row.settings_changed_at,
+            applied_model: row.applied.model,
+            applied_effort: row.applied.effort,
         }
     }
 }

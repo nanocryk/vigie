@@ -1,4 +1,4 @@
-//! REST routes over the sessions and the account usage.
+//! REST routes over the sessions, the account usage and the shared catalog.
 
 use axum::{
     Json,
@@ -48,6 +48,13 @@ pub async fn usage(State(state): State<AppState>) -> Response {
     match state.manager.usage().await {
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(err) => internal_error("usage snapshot", &err),
+    }
+}
+
+pub async fn catalog(State(state): State<AppState>) -> Response {
+    match state.manager.catalog().await {
+        Ok(catalog) => Json(catalog).into_response(),
+        Err(err) => internal_error("shared catalog", &err),
     }
 }
 

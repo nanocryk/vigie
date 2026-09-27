@@ -632,6 +632,23 @@ pub enum HostRequest {
         #[serde(flatten)]
         extra: Extra,
     },
+    GetSettings {
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    /// `None` goes back to the CLI's default model.
+    SetModel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    /// `settings` holds settings keys, such as `effortLevel`.
+    ApplyFlagSettings {
+        settings: Value,
+        #[serde(flatten)]
+        extra: Extra,
+    },
     #[serde(untagged)]
     Other(Extra),
 }
@@ -773,6 +790,43 @@ pub struct InitializeResponse {
     pub current_permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// Slash commands and skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<InitCommand>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<InitModel>>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitCommand {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitModel {
+    /// Passed to `--model` and `set_model`.
+    pub value: String,
+    /// The model id `value` stands for, such as `claude-opus-5-5` for `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_effort: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_effort_levels: Option<Vec<String>>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -836,6 +890,22 @@ pub struct ContextUsageResponse {
     pub auto_compact_threshold: Option<u64>,
     #[serde(default)]
     pub categories: Vec<ContextCategory>,
+}
+
+/// The part of a `get_settings` reply vigie2 reads; the rest holds the user's
+/// settings and is dropped unread.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SettingsResponse {
+    pub applied: AppliedSettings,
+}
+
+/// The model and effort the CLI runs on, such as `claude-opus-5-5[1m]` and `medium`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedSettings {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1083,9 +1153,11 @@ mod tests {
                                         Answers::SetPermissionMode
                                     }
                                     HostRequest::GetUsage { .. } => Answers::GetUsage,
-                                    HostRequest::GetContextUsage { .. } | HostRequest::Other(_) => {
-                                        unreachable!()
-                                    }
+                                    HostRequest::GetContextUsage { .. }
+                                    | HostRequest::GetSettings { .. }
+                                    | HostRequest::SetModel { .. }
+                                    | HostRequest::ApplyFlagSettings { .. }
+                                    | HostRequest::Other(_) => unreachable!(),
                                 };
                                 answers.insert(request.request_id.clone(), kind);
                             }
@@ -1229,6 +1301,76 @@ mod tests {
             serde_json::to_value(&interrupt).unwrap(),
             serde_json::json!({"type": "control_request", "request_id": "r1",
                 "request": {"subtype": "interrupt"}}),
+        );
+        let model = Outbound::ControlRequest(ControlRequest::new(
+            "r2",
+            HostRequest::SetModel {
+                model: Some("sonnet".into()),
+                extra: Extra::new(),
+            },
+        ));
+        assert_eq!(
+            serde_json::to_value(&model).unwrap(),
+            serde_json::json!({"type": "control_request", "request_id": "r2",
+                "request": {"subtype": "set_model", "model": "sonnet"}}),
+        );
+        let effort = Outbound::ControlRequest(ControlRequest::new(
+            "r3",
+            HostRequest::ApplyFlagSettings {
+                settings: serde_json::json!({"effortLevel": "high"}),
+                extra: Extra::new(),
+            },
+        ));
+        assert_eq!(
+            serde_json::to_value(&effort).unwrap(),
+            serde_json::json!({"type": "control_request", "request_id": "r3",
+                "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": "high"}}}),
+        );
+    }
+
+    #[test]
+    fn initialize_lists_models_and_commands() {
+        let text = std::fs::read_to_string(runs_dir().join("basic.ndjson")).unwrap();
+        let initialize = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|record| record["msg"]["response"]["response"]["models"].is_array())
+            .expect("initialize reply");
+        let reply: InitializeResponse =
+            serde_json::from_value(initialize["msg"]["response"]["response"].clone()).unwrap();
+        let models = reply.models.expect("models");
+        let opus = models.iter().find(|model| model.value == "opus").unwrap();
+        assert_eq!(opus.supports_effort, Some(true));
+        assert!(
+            opus.supported_effort_levels
+                .as_ref()
+                .is_some_and(|levels| levels.iter().any(|level| level == "max"))
+        );
+        assert_eq!(opus.resolved_model.as_deref(), Some("claude-opus-5-5"));
+        let haiku = models.iter().find(|model| model.value == "haiku").unwrap();
+        assert_eq!(haiku.supports_effort, None);
+        let commands = reply.commands.expect("commands");
+        let design = commands
+            .iter()
+            .find(|command| command.name == "design")
+            .unwrap();
+        assert_eq!(design.argument_hint.as_deref(), Some("consent | revoke"));
+    }
+
+    #[test]
+    fn settings_reply_keeps_only_the_applied_values() {
+        let reply: SettingsResponse = serde_json::from_value(serde_json::json!({
+            "applied": {"model": "claude-opus-5-5[1m]", "effort": "medium", "other": 1},
+            "effective": {"theme": "dark"},
+            "sources": [{"source": "userSettings", "settings": {}}],
+        }))
+        .unwrap();
+        assert_eq!(
+            reply.applied,
+            AppliedSettings {
+                model: Some("claude-opus-5-5[1m]".into()),
+                effort: Some("medium".into()),
+            }
         );
     }
 }

@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use vigie2::BASE_PATH_SLASH;
 use vigie2::auth::{Auth, Registry, state_dir};
 use vigie2::child::Program;
-use vigie2::manager::SessionManager;
+use vigie2::manager::{Probe, SessionManager};
 use vigie2::net;
 use vigie2::server::{AppState, build_app};
 use vigie2::store::Store;
@@ -199,8 +199,20 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
     let scheme = if tls_on { "https" } else { "http" };
     let loopback_origin = format!("{scheme}://127.0.0.1:{}", bind.port());
 
-    let store = Store::open(&Store::default_path()?)?;
+    let store_path = Store::default_path()?;
+    let store = Store::open(&store_path)?;
     let manager = SessionManager::start(store, Program::claude()).await?;
+    let probe_dir = store_path.with_file_name("probe");
+    tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            match manager.probe_catalog(probe_dir).await {
+                Ok(Probe::Ran) => info!("catalog probe stored the shared catalog"),
+                Ok(Probe::Skipped) => {}
+                Err(err) => warn!("catalog probe: {err:#}"),
+            }
+        }
+    });
 
     let state = AppState {
         auth: Arc::clone(&auth),

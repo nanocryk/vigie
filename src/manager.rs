@@ -13,13 +13,13 @@ use tokio::task::AbortHandle;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use crate::child::{Launch, Program};
+use crate::child::{Launch, ModelSettings, Program};
 use crate::gauges::{self, MainRequest};
-use crate::protocol::Inbound;
+use crate::protocol::{Inbound, System};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session,
 };
-use crate::store::{SessionRow, Store, StoredEvent};
+use crate::store::{SessionRow, SharedCatalog, Store, StoredEvent};
 use crate::usage::{SessionContext, Snapshot};
 use crate::{seed, wire};
 
@@ -30,6 +30,10 @@ const CHANGES_CAPACITY: usize = 256;
 const DEFAULT_MODE: &str = "default";
 /// Modes a stopped session accepts; any other would only fail at the next launch.
 const STORED_MODES: [&str; 3] = [DEFAULT_MODE, "acceptEdits", "plan"];
+/// Values `--effort` accepts.
+const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Time the catalog probe gets to initialize and answer `get_settings`.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Cheap to clone; every clone shares the same sessions.
 #[derive(Clone)]
@@ -44,7 +48,16 @@ struct Inner {
     live: Mutex<HashMap<Uuid, Session>>,
     changes: broadcast::Sender<Uuid>,
     usage_changes: broadcast::Sender<()>,
+    catalog_changes: broadcast::Sender<()>,
     sampler: AbortHandle,
+}
+
+/// Whether `SessionManager::probe_catalog` started a Claude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    /// The catalog and the default settings were already stored.
+    Skipped,
+    Ran,
 }
 
 impl Drop for Inner {
@@ -64,6 +77,7 @@ impl SessionManager {
             live: Mutex::new(HashMap::new()),
             changes: broadcast::channel(CHANGES_CAPACITY).0,
             usage_changes: broadcast::channel(CHANGES_CAPACITY).0,
+            catalog_changes: broadcast::channel(CHANGES_CAPACITY).0,
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
         });
         Ok(Self { inner })
@@ -84,6 +98,55 @@ impl SessionManager {
     /// a snapshot taken on receipt includes it.
     pub fn subscribe_usage(&self) -> broadcast::Receiver<()> {
         self.inner.usage_changes.subscribe()
+    }
+
+    /// Ticks after the shared catalog or default settings changed in the store.
+    pub fn subscribe_catalog(&self) -> broadcast::Receiver<()> {
+        self.inner.catalog_changes.subscribe()
+    }
+
+    pub async fn catalog(&self) -> Result<SharedCatalog> {
+        self.inner.store.shared_catalog().await
+    }
+
+    /// With no catalog or default settings stored, starts a Claude in `dir`
+    /// without a pick, stores its `initialize` catalog and its `get_settings`
+    /// values, and stops it. It sends no user message.
+    pub async fn probe_catalog(&self, dir: PathBuf) -> Result<Probe> {
+        let stored = self.inner.store.shared_catalog().await?;
+        if stored.models.is_some() && stored.defaults.is_some() {
+            return Ok(Probe::Skipped);
+        }
+        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        let id = Uuid::new_v4();
+        let (session, mut events) = Session::spawn(Config {
+            id,
+            cwd: dir,
+            launch: Launch::New(id),
+            program: self.inner.program.clone(),
+            history: None,
+            last_seq: 0,
+            permission_mode: None,
+            settings: ModelSettings::default(),
+        })?;
+        let applied = tokio::time::timeout(PROBE_TIMEOUT, session.applied_settings()).await;
+        let mut catalog = None;
+        while let Ok(event) = events.try_recv() {
+            if let EventBody::Host(HostEvent::Catalog { models, commands }) = &event.body {
+                catalog = Some((models.clone(), commands.clone()));
+            }
+        }
+        session.stop().await;
+        let applied = applied.context("get_settings timed out")??;
+        let store = &self.inner.store;
+        let mut changed = store.record_default_settings(&applied).await?;
+        if let Some((models, commands)) = catalog {
+            changed |= store.record_catalog(&models, &commands).await?;
+        }
+        if changed {
+            let _ = self.inner.catalog_changes.send(());
+        }
+        Ok(Probe::Ran)
     }
 
     /// The usage snapshot, reporting on every session whose child is running.
@@ -108,7 +171,14 @@ impl SessionManager {
     pub async fn create(&self, cwd: PathBuf) -> Result<Session> {
         let id = Uuid::new_v4();
         let mut live = self.inner.live.lock().await;
-        let session = self.spawn(id, cwd, Launch::New(id), 0, Some(DEFAULT_MODE.into()))?;
+        let session = self.spawn(
+            id,
+            cwd,
+            Launch::New(id),
+            0,
+            Some(DEFAULT_MODE.into()),
+            ModelSettings::default(),
+        )?;
         live.insert(id, session.clone());
         let _ = self.inner.changes.send(id);
         Ok(session)
@@ -169,13 +239,21 @@ impl SessionManager {
             .session(id)
             .await?
             .with_context(|| format!("unknown session {id}"))?;
-        let session = self.spawn(id, row.cwd, row.launch, row.last_seq, row.permission_mode)?;
+        let session = self.spawn(
+            id,
+            row.cwd,
+            row.launch,
+            row.last_seq,
+            row.permission_mode,
+            row.settings,
+        )?;
         live.insert(id, session.clone());
         let _ = self.inner.changes.send(id);
         Ok(session)
     }
 
-    /// Fails with `wire::CACHE_COLD` while the discussion's cache is cold.
+    /// Fails with `wire::CACHE_COLD` while the discussion's cache is cold, or a
+    /// model or effort change awaits its first main request.
     pub async fn ensure_warm(&self, id: Uuid) -> Result<()> {
         let row = self
             .inner
@@ -183,9 +261,81 @@ impl SessionManager {
             .session(id)
             .await?
             .with_context(|| format!("unknown session {id}"))?;
-        if gauges::is_cold(row.cache.as_ref(), row.updated_at, Utc::now()) {
+        if row.settings_changed_at.is_some()
+            || gauges::is_cold(row.cache.as_ref(), row.updated_at, Utc::now())
+        {
             bail!(wire::CACHE_COLD);
         }
+        Ok(())
+    }
+
+    /// Stores the model and effort, `None` fields keeping theirs. When one
+    /// changed and the child runs, interrupts its turn if any, then applies the
+    /// change through the CLI and reads back what it applies. Going back to the CLI's default effort only takes
+    /// effect at the next launch.
+    pub async fn set_settings(
+        &self,
+        id: Uuid,
+        model: Option<Option<String>>,
+        effort: Option<Option<String>>,
+    ) -> Result<()> {
+        if let Some(Some(level)) = &effort
+            && !EFFORT_LEVELS.contains(&level.as_str())
+        {
+            bail!("unknown effort level {level}");
+        }
+        if let Some(Some(name)) = &model
+            && name.trim().is_empty()
+        {
+            bail!("blank model name");
+        }
+        let live = self.inner.live.lock().await;
+        let row = self
+            .inner
+            .store
+            .session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))?;
+        let settings = ModelSettings {
+            model: model.unwrap_or(row.settings.model.clone()),
+            effort: effort.unwrap_or(row.settings.effort.clone()),
+        };
+        // Held while storing, so a concurrent `open` launches with the new settings.
+        let changed = self
+            .inner
+            .store
+            .set_model_settings(id, settings.clone(), Utc::now())
+            .await?;
+        let session = live
+            .get(&id)
+            .filter(|session| !session.is_closed())
+            .cloned();
+        drop(live);
+        if !changed {
+            return Ok(());
+        }
+        let _ = self.inner.changes.send(id);
+        let Some(session) = session else {
+            return Ok(());
+        };
+        if session.status().borrow().turn {
+            session.interrupt().await?;
+        }
+        if settings.model != row.settings.model {
+            session.set_model(settings.model).await?;
+        }
+        if settings.effort != row.settings.effort
+            && let Some(effort) = settings.effort
+        {
+            session.set_effort(effort).await?;
+        }
+        ask_settings(
+            &session,
+            &self.inner.store,
+            &self.inner.changes,
+            &self.inner.catalog_changes,
+        )
+        .await;
         Ok(())
     }
 
@@ -263,7 +413,7 @@ impl SessionManager {
             RestartMode::Continue => {
                 Some(history.seed(&row.cwd, row.created_at.with_timezone(&Local).date_naive()))
             }
-            RestartMode::Blank => None,
+            RestartMode::Blank | RestartMode::Clear => None,
         };
         let claude_session = Uuid::new_v4();
         store.restart_claude_session(id, claude_session).await?;
@@ -289,6 +439,7 @@ impl SessionManager {
                 Launch::New(claude_session),
                 seq,
                 row.permission_mode,
+                row.settings,
             )?;
             live.insert(id, session.clone());
             Some(session)
@@ -335,6 +486,7 @@ impl SessionManager {
         launch: Launch,
         last_seq: u64,
         permission_mode: Option<String>,
+        settings: ModelSettings,
     ) -> Result<Session> {
         let (session, events) = Session::spawn(Config {
             id,
@@ -344,6 +496,7 @@ impl SessionManager {
             history: Some(self.inner.store.clone()),
             last_seq,
             permission_mode,
+            settings,
         })?;
         tokio::spawn(sample_after_turns(
             id,
@@ -352,18 +505,23 @@ impl SessionManager {
             Arc::downgrade(&self.inner),
             self.inner.usage_changes.clone(),
             self.inner.changes.clone(),
+            self.inner.catalog_changes.clone(),
         ));
         tokio::spawn(announce_changes(
             id,
             session.status(),
             self.inner.changes.clone(),
         ));
-        let (first_ask, store, changes) = (
+        let (first_ask, store, changes, catalog_changes) = (
             session.clone(),
             self.inner.store.clone(),
             self.inner.changes.clone(),
+            self.inner.catalog_changes.clone(),
         );
-        tokio::spawn(async move { ask_context(&first_ask, &store, &changes).await });
+        tokio::spawn(async move {
+            ask_context(&first_ask, &store, &changes).await;
+            ask_settings(&first_ask, &store, &changes, &catalog_changes).await;
+        });
         Ok(session)
     }
 }
@@ -381,7 +539,7 @@ async fn announce_changes(
     let _ = changes.send(id);
 }
 
-/// Samples usage and asks the context each time the session goes idle after a
+/// Samples usage and asks the context and the applied settings each time the session goes idle after a
 /// turn, until it ends. Announces the rate limit readings and finished turns the
 /// session reports, and each main-conversation request, which moves its cache and
 /// context gauges.
@@ -394,13 +552,32 @@ async fn sample_after_turns(
     inner: Weak<Inner>,
     usage_changes: broadcast::Sender<()>,
     changes: broadcast::Sender<Uuid>,
+    catalog_changes: broadcast::Sender<()>,
 ) {
     let mut last_request: Option<String> = None;
     loop {
         let turn_ended = match events.recv().await {
             Ok(event) => match &event.body {
                 EventBody::Host(HostEvent::ChildExited { .. }) => return,
+                EventBody::Host(HostEvent::Catalog { models, commands }) => {
+                    let Some(store) = inner.upgrade().map(|inner| inner.store.clone()) else {
+                        return;
+                    };
+                    let recorded = store.record_catalog(models, commands).await;
+                    announce_catalog(recorded, &catalog_changes, "catalog");
+                    false
+                }
                 EventBody::Line(line) => match &line.parsed {
+                    Some(Inbound::System(System::Init(init))) => {
+                        let Some(store) = inner.upgrade().map(|inner| inner.store.clone()) else {
+                            return;
+                        };
+                        let recorded = store
+                            .record_terminal_commands(&init.terminal_slash_commands)
+                            .await;
+                        announce_catalog(recorded, &catalog_changes, "terminal-only commands");
+                        false
+                    }
                     Some(Inbound::Result(_)) => {
                         let _ = usage_changes.send(());
                         let _ = changes.send(id);
@@ -442,7 +619,18 @@ async fn sample_after_turns(
         if let Some(session) = session {
             sample(&session, &store, &usage_changes).await;
             ask_context(&session, &store, &changes).await;
+            ask_settings(&session, &store, &changes, &catalog_changes).await;
         }
+    }
+}
+
+fn announce_catalog(recorded: Result<bool>, catalog_changes: &broadcast::Sender<()>, what: &str) {
+    match recorded {
+        Ok(true) => {
+            let _ = catalog_changes.send(());
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!("store the shared {what}: {err:#}"),
     }
 }
 
@@ -462,6 +650,42 @@ async fn ask_context(session: &Session, store: &Store, changes: &broadcast::Send
         }
         Ok(false) => {}
         Err(err) => tracing::warn!("store the context of session {id}: {err:#}"),
+    }
+}
+
+/// Stores the model and effort the CLI applies and announces the session when
+/// they changed. A child launched without a pick, whose discussion still has
+/// none, also reports the shared default settings.
+async fn ask_settings(
+    session: &Session,
+    store: &Store,
+    changes: &broadcast::Sender<Uuid>,
+    catalog_changes: &broadcast::Sender<()>,
+) {
+    let id = session.id();
+    let applied = match session.applied_settings().await {
+        Ok(applied) => applied,
+        Err(err) => {
+            tracing::debug!("get_settings for session {id}: {err:#}");
+            return;
+        }
+    };
+    if session.runs_without_pick() {
+        match store.session(id).await {
+            Ok(Some(row)) if row.settings == ModelSettings::default() => {
+                let recorded = store.record_default_settings(&applied).await;
+                announce_catalog(recorded, catalog_changes, "default settings");
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("read session {id}: {err:#}"),
+        }
+    }
+    match store.record_applied_settings(id, applied).await {
+        Ok(true) => {
+            let _ = changes.send(id);
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!("store the applied settings of session {id}: {err:#}"),
     }
 }
 

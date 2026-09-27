@@ -11,21 +11,22 @@ use std::sync::mpsc;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::child::Launch;
+use crate::child::{Launch, ModelSettings};
 use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
-use crate::protocol::{ContextUsageResponse, GetUsageResponse, Inbound};
-use crate::session::{Event, EventBody, GateFailure, HostEvent};
+use crate::protocol::{AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound};
+use crate::session::{CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice};
 use crate::usage::db::{MessageTokens, UsageDb};
 use crate::usage::inputs::{self, Reading};
 use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 7] = [
+const MIGRATIONS: [&str; 10] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -83,6 +84,25 @@ ALTER TABLE sessions ADD COLUMN claude_session_fresh INTEGER NOT NULL DEFAULT 0
 "#,
     // When the discussion was archived; NULL while it is not.
     "ALTER TABLE sessions ADD COLUMN archived_at TEXT;",
+    // The model and effort every launch passes (NULL lets the CLI pick), and when
+    // a change of either made the cache count cold, until the next main request.
+    r#"
+ALTER TABLE sessions ADD COLUMN model TEXT;
+ALTER TABLE sessions ADD COLUMN effort TEXT;
+ALTER TABLE sessions ADD COLUMN settings_changed_at TEXT;
+"#,
+    // The model and effort the CLI last reported applying, from `get_settings`.
+    r#"
+ALTER TABLE sessions ADD COLUMN applied_model TEXT;
+ALTER TABLE sessions ADD COLUMN applied_effort TEXT;
+"#,
+    // What all discussions share, see `SharedCatalog`: one JSON value per key.
+    r#"
+CREATE TABLE cli_catalog (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) STRICT;
+"#,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -132,7 +152,32 @@ pub struct SessionRow {
     pub launch: Launch,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
+    /// Passed at every launch.
+    pub settings: ModelSettings,
+    /// When a model or effort change made the cache count cold; `None` once a
+    /// main request or a restart followed.
+    pub settings_changed_at: Option<DateTime<Utc>>,
+    /// What the CLI last reported applying; kept once the child stops, cleared
+    /// by a change of the stored settings until the next report.
+    pub applied: AppliedSettings,
 }
+
+/// What the CLI offers every discussion, as the latest Claude start reported it;
+/// a field is `None` while nothing reported it yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedCatalog {
+    pub models: Option<Vec<ModelChoice>>,
+    pub commands: Option<Vec<CommandInfo>>,
+    /// Commands that only work in the terminal, from a `system/init` line.
+    pub terminal_commands: Option<Vec<String>>,
+    /// What the CLI applies with no model and no effort picked.
+    pub defaults: Option<AppliedSettings>,
+}
+
+const MODELS_KEY: &str = "models";
+const COMMANDS_KEY: &str = "commands";
+const TERMINAL_COMMANDS_KEY: &str = "terminal_commands";
+const DEFAULTS_KEY: &str = "defaults";
 
 /// What a line tells about the gauges of the main conversation.
 enum GaugeUpdate {
@@ -162,6 +207,8 @@ impl GaugeUpdate {
                              THEN cache_request_at ELSE ?3 END,
                          context_source = CASE WHEN cache_message_id IS ?2
                              THEN context_source ELSE 'estimate' END,
+                         settings_changed_at = CASE WHEN cache_message_id IS ?2
+                             THEN settings_changed_at ELSE NULL END,
                          cache_message_id = ?2,
                          cache_ttl_secs = COALESCE(?4, cache_ttl_secs),
                          context_model = COALESCE(?5, context_model),
@@ -288,7 +335,8 @@ impl Store {
                      cache_message_id = NULL, cache_request_at = NULL, cache_ttl_secs = NULL,
                      context_model = NULL, context_tokens = NULL, context_window = NULL,
                      context_source = NULL, context_max_tokens = NULL,
-                     context_autocompact = NULL, context_categories = NULL
+                     context_autocompact = NULL, context_categories = NULL,
+                     settings_changed_at = NULL
                  WHERE id = ?1",
                 params![session.to_string(), claude_session.to_string()],
             )?;
@@ -327,6 +375,37 @@ impl Store {
                 bail!("unknown session {session}");
             }
             Ok(())
+        })
+        .await
+    }
+
+    /// Stores the model and effort; when either differs from the stored one, the
+    /// cache counts cold from `at` and the applied values are forgotten. Resolves
+    /// to whether they changed; fails for an unknown session.
+    pub async fn set_model_settings(
+        &self,
+        session: Uuid,
+        settings: ModelSettings,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        self.call(move |connection| {
+            let id = session.to_string();
+            let changed = connection.execute(
+                "UPDATE sessions SET model = ?2, effort = ?3, settings_changed_at = ?4,
+                     applied_model = NULL, applied_effort = NULL
+                 WHERE id = ?1 AND (model IS NOT ?2 OR effort IS NOT ?3)",
+                params![id, settings.model, settings.effort, format_time(at)],
+            )?;
+            if changed > 0 {
+                return Ok(true);
+            }
+            let known = connection
+                .query_row("SELECT 1 FROM sessions WHERE id = ?1", [&id], |_| Ok(()))
+                .optional()?;
+            if known.is_none() {
+                bail!("unknown session {session}");
+            }
+            Ok(false)
         })
         .await
     }
@@ -465,6 +544,83 @@ impl Store {
                 ],
             )?;
             Ok(changed > 0)
+        })
+        .await
+    }
+
+    /// Stores the model and effort the CLI reports applying; resolves to whether
+    /// that changed the stored values.
+    pub async fn record_applied_settings(
+        &self,
+        session: Uuid,
+        applied: AppliedSettings,
+    ) -> Result<bool> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET applied_model = ?2, applied_effort = ?3
+                 WHERE id = ?1 AND (applied_model IS NOT ?2 OR applied_effort IS NOT ?3)",
+                params![session.to_string(), applied.model, applied.effort],
+            )?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+
+    pub async fn shared_catalog(&self) -> Result<SharedCatalog> {
+        self.call(|connection| {
+            Ok(SharedCatalog {
+                models: catalog_entry(connection, MODELS_KEY)?,
+                commands: catalog_entry(connection, COMMANDS_KEY)?,
+                terminal_commands: catalog_entry(connection, TERMINAL_COMMANDS_KEY)?,
+                defaults: catalog_entry(connection, DEFAULTS_KEY)?,
+            })
+        })
+        .await
+    }
+
+    /// Stores the models and commands of an `initialize` reply as the shared
+    /// ones; resolves to whether that changed them.
+    pub async fn record_catalog(
+        &self,
+        models: &[ModelChoice],
+        commands: &[CommandInfo],
+    ) -> Result<bool> {
+        self.set_catalog_entries(vec![
+            (MODELS_KEY, serde_json::to_string(models)?),
+            (COMMANDS_KEY, serde_json::to_string(commands)?),
+        ])
+        .await
+    }
+
+    /// Resolves to whether that changed the stored ones.
+    pub async fn record_terminal_commands(&self, commands: &[String]) -> Result<bool> {
+        self.set_catalog_entries(vec![(
+            TERMINAL_COMMANDS_KEY,
+            serde_json::to_string(commands)?,
+        )])
+        .await
+    }
+
+    /// Stores what the CLI applies with no model and no effort picked; resolves
+    /// to whether that changed the stored values.
+    pub async fn record_default_settings(&self, applied: &AppliedSettings) -> Result<bool> {
+        self.set_catalog_entries(vec![(DEFAULTS_KEY, serde_json::to_string(applied)?)])
+            .await
+    }
+
+    async fn set_catalog_entries(&self, entries: Vec<(&'static str, String)>) -> Result<bool> {
+        self.call(move |connection| {
+            let mut changed = false;
+            for (key, value) in &entries {
+                let written = connection.execute(
+                    "INSERT INTO cli_catalog (key, value) VALUES (?1, ?2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value
+                     WHERE value IS NOT excluded.value",
+                    params![key, value],
+                )?;
+                changed |= written > 0;
+            }
+            Ok(changed)
         })
         .await
     }
@@ -637,6 +793,19 @@ fn run_writer(connection: Connection, queue: mpsc::Receiver<Job>) {
     }
 }
 
+fn catalog_entry<T: DeserializeOwned>(connection: &Connection, key: &str) -> Result<Option<T>> {
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT value FROM cli_catalog WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    value
+        .map(|value| serde_json::from_str(&value).with_context(|| format!("cli_catalog {key}")))
+        .transpose()
+}
+
 fn record_usage_inputs(
     connection: &Connection,
     session: &str,
@@ -672,7 +841,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at, applied_model, applied_effort FROM sessions";
 
 struct RawSession {
     id: String,
@@ -695,6 +864,11 @@ struct RawSession {
     claude_session_id: Option<String>,
     claude_session_fresh: bool,
     archived_at: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    settings_changed_at: Option<String>,
+    applied_model: Option<String>,
+    applied_effort: Option<String>,
 }
 
 impl RawSession {
@@ -720,6 +894,11 @@ impl RawSession {
             claude_session_id: row.get(17)?,
             claude_session_fresh: row.get(18)?,
             archived_at: row.get(19)?,
+            model: row.get(20)?,
+            effort: row.get(21)?,
+            settings_changed_at: row.get(22)?,
+            applied_model: row.get(23)?,
+            applied_effort: row.get(24)?,
         })
     }
 
@@ -787,6 +966,19 @@ impl RawSession {
             context,
             launch,
             archived_at: self.archived_at.as_deref().map(parse_time).transpose()?,
+            settings: ModelSettings {
+                model: self.model,
+                effort: self.effort,
+            },
+            settings_changed_at: self
+                .settings_changed_at
+                .as_deref()
+                .map(parse_time)
+                .transpose()?,
+            applied: AppliedSettings {
+                model: self.applied_model,
+                effort: self.applied_effort,
+            },
         })
     }
 }
@@ -866,6 +1058,7 @@ mod tests {
         assert_eq!(
             tables,
             [
+                "cli_catalog",
                 "events",
                 "sessions",
                 "usage_closed_hours",
@@ -1144,6 +1337,164 @@ mod tests {
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.archived_at, None);
         assert!(store.set_archived(Uuid::new_v4(), None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn model_settings_mark_a_change_until_the_next_request_and_survive_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.settings, ModelSettings::default());
+        assert_eq!(row.settings_changed_at, None);
+
+        let settings = ModelSettings {
+            model: Some("sonnet".into()),
+            effort: Some("high".into()),
+        };
+        let at = parse_time("2026-09-28T10:00:00Z").unwrap();
+        assert!(
+            store
+                .set_model_settings(id, settings.clone(), at)
+                .await
+                .unwrap()
+        );
+        let later = at + chrono::Duration::minutes(1);
+        assert!(
+            !store
+                .set_model_settings(id, settings.clone(), later)
+                .await
+                .unwrap(),
+            "the same settings changed nothing"
+        );
+        assert!(
+            store
+                .set_model_settings(Uuid::new_v4(), settings.clone(), at)
+                .await
+                .is_err()
+        );
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.settings, settings);
+        assert_eq!(row.settings_changed_at, Some(at));
+
+        record_recording(&store, id, "cd", Utc::now());
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.settings_changed_at, None, "a main request followed");
+        assert_eq!(row.settings, settings);
+
+        let effort_only = ModelSettings {
+            effort: Some("low".into()),
+            ..settings.clone()
+        };
+        assert!(store.set_model_settings(id, effort_only, at).await.unwrap());
+        store
+            .restart_claude_session(id, Uuid::new_v4())
+            .await
+            .unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.settings_changed_at, None, "a restart followed");
+        assert_eq!(row.settings.effort.as_deref(), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn applied_settings_survive_a_reopen_and_clear_on_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        assert_eq!(
+            store.session(id).await.unwrap().unwrap().applied,
+            AppliedSettings::default()
+        );
+        let applied = AppliedSettings {
+            model: Some("claude-opus-5-5[1m]".into()),
+            effort: Some("medium".into()),
+        };
+        assert!(
+            store
+                .record_applied_settings(id, applied.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .record_applied_settings(id, applied.clone())
+                .await
+                .unwrap(),
+            "the same values changed nothing"
+        );
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.session(id).await.unwrap().unwrap().applied, applied);
+        let settings = ModelSettings {
+            model: Some("sonnet".into()),
+            effort: None,
+        };
+        assert!(
+            store
+                .set_model_settings(id, settings, Utc::now())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.session(id).await.unwrap().unwrap().applied,
+            AppliedSettings::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_shared_catalog_survives_a_reopen_and_reports_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.shared_catalog().await.unwrap(),
+            SharedCatalog::default()
+        );
+        let models = vec![ModelChoice {
+            value: "opus".into(),
+            resolved_model: Some("claude-opus-5-5".into()),
+            display_name: "Opus 5.5".into(),
+            description: None,
+            effort_levels: vec!["low".into(), "medium".into()],
+        }];
+        let commands = vec![CommandInfo {
+            name: "review".into(),
+            description: "Review a change".into(),
+            argument_hint: String::new(),
+        }];
+        let defaults = AppliedSettings {
+            model: Some("claude-opus-5-5[1m]".into()),
+            effort: Some("medium".into()),
+        };
+        let terminal = vec!["doctor".to_string()];
+        assert!(store.record_catalog(&models, &commands).await.unwrap());
+        assert!(!store.record_catalog(&models, &commands).await.unwrap());
+        assert!(store.record_default_settings(&defaults).await.unwrap());
+        assert!(!store.record_default_settings(&defaults).await.unwrap());
+        assert!(store.record_terminal_commands(&terminal).await.unwrap());
+        assert!(!store.record_terminal_commands(&terminal).await.unwrap());
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.shared_catalog().await.unwrap(),
+            SharedCatalog {
+                models: Some(models),
+                commands: Some(commands.clone()),
+                terminal_commands: Some(terminal),
+                defaults: Some(defaults),
+            }
+        );
+        assert!(store.record_catalog(&[], &commands).await.unwrap());
+        assert_eq!(store.shared_catalog().await.unwrap().models, Some(vec![]));
     }
 
     #[tokio::test]

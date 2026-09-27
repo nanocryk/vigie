@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 import { parseQuestions } from "@/components/AskCard";
 import { folderName } from "@/format";
 import { parseRoute, routeHash } from "@/route";
-import { parseCliLine, parseServerMessage, parseSessionList, parseUsageSnapshot } from "@/wire";
+import {
+  parseCliLine,
+  parseServerMessage,
+  parseSessionList,
+  parseSharedCatalog,
+  parseUsageSnapshot,
+} from "@/wire";
 
 describe("parseServerMessage", () => {
   it("reads events, keeping unknown host events", () => {
@@ -185,6 +191,37 @@ describe("parseUsageSnapshot", () => {
     expect(usage.five_hour?.projected).toBe(40.5);
     expect(usage.five_hour?.confidence).toBe("low");
     expect(usage.seven_day).toBeNull();
+  });
+});
+
+describe("parseSharedCatalog", () => {
+  it("reads each field, an unreported one as null", () => {
+    expect(
+      parseSharedCatalog(
+        { models: null, commands: null, terminal_commands: null, defaults: null },
+        "catalog",
+      ),
+    ).toEqual({ models: null, commands: null, terminal_commands: null, defaults: null });
+    const catalog = parseSharedCatalog(
+      {
+        models: [{ value: "opus", resolved_model: "claude-opus-5-5", display_name: "Opus 5.5" }, 3],
+        commands: [{ name: "review", description: "Review", argument_hint: "" }],
+        terminal_commands: ["doctor", 1],
+        defaults: { model: "claude-opus-5-5[1m]", effort: "medium" },
+      },
+      "catalog",
+    );
+    expect(catalog.models?.map((model) => model.value)).toEqual(["opus"]);
+    expect(catalog.commands?.[0]?.name).toBe("review");
+    expect(catalog.terminal_commands).toEqual(["doctor"]);
+    expect(catalog.defaults).toEqual({ model: "claude-opus-5-5[1m]", effort: "medium" });
+    expect(() => parseSharedCatalog({ models: "x" }, "catalog")).toThrow("catalog.models");
+  });
+
+  it("parses the catalog_changed notification", () => {
+    expect(parseServerMessage({ type: "catalog_changed" }, "message")).toEqual({
+      type: "catalog_changed",
+    });
   });
 });
 

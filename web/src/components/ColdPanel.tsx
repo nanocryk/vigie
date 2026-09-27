@@ -40,13 +40,26 @@ const CHOICES: readonly { choice: ColdChoice; label: string; explain: string; to
   },
 ];
 
+const RESUME = {
+  label: "Resume, same model",
+  explain: "Nothing changed: back to the discussion, the cache is untouched.",
+  tone: "border-swipe-accept-strong bg-swipe-accept-strong/15 [&>:first-child]:text-swipe-accept-strong",
+};
+const REWARM_SETTINGS = {
+  label: "Rewarm with new settings",
+  explain: "Same Claude session on the new settings: the next request reads the whole context again.",
+};
+
 function RewarmWarning({
   context,
+  settings,
   busy,
   onConfirm,
   onBack,
 }: {
   context: ContextView | null;
+  /** The reload comes from a model or effort change, not an expired cache. */
+  settings: boolean;
   busy: boolean;
   onConfirm: () => void;
   onBack: () => void;
@@ -56,9 +69,11 @@ function RewarmWarning({
     <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
       <p className="voice-heading text-destructive text-base">Rewarm re-sends {size} at full price</p>
       <p className="voice-ui text-sm">
-        The cache expired, so the next request pays for writing the whole conversation into the
-        cache again, charged against your 5h and 7d windows. Continue or Blank usually cost far
-        less.
+        {settings
+          ? "A new model or effort level cannot use the current cache"
+          : "The cache expired"}
+        , so the next request pays for writing the whole conversation into the cache again,
+        charged against your 5h and 7d windows. Continue or Blank usually cost far less.
       </p>
       <div className="flex gap-2">
         <button
@@ -85,6 +100,8 @@ function RewarmWarning({
 /**
  * Replaces the composer and the ask card while the cache is cold, until a choice
  * is made, and the composer of an archived discussion, which any choice restores.
+ * During a model or effort change (`settings`), its first choice resumes for free
+ * when the picks equal the current settings, or rewarms on the new ones.
  */
 export function ColdPanel({
   archived,
@@ -93,6 +110,7 @@ export function ColdPanel({
   askWaiting,
   busy,
   error,
+  settings,
   onChoose,
 }: {
   archived: boolean;
@@ -103,17 +121,28 @@ export function ColdPanel({
   /** A choice was sent and awaits the server. */
   busy: boolean;
   error: string | null;
+  settings: { changed: boolean; onCancel: () => void } | null;
   onChoose: (choice: ColdChoice) => void;
 }) {
-  const typed = draft.trim() !== "";
+  const typed = draft.trim() !== "" && settings?.changed !== false;
   const [confirmingRewarm, setConfirmingRewarm] = useState(false);
+  const choices = CHOICES.map((entry) => {
+    if (settings === null || entry.choice !== "rewarm") return entry;
+    return settings.changed ? { ...entry, ...REWARM_SETTINGS } : { ...entry, ...RESUME };
+  });
+  const confirms = (choice: ColdChoice) =>
+    choice === "rewarm" && (settings === null || settings.changed);
+  const heading = archived
+    ? "This discussion is archived; any choice restores it."
+    : settings !== null
+      ? "Pick a model and an effort level in the tabs above."
+      : "The cache is cold.";
   return (
     <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-5xl space-y-3">
         <div className="voice-ui space-y-0.5 text-sm">
           <div>
-            {archived ? "This discussion is archived; any choice restores it." : "The cache is cold."}{" "}
-            <span className="text-muted-foreground">{contextSummary(context)}</span>
+            {heading} <span className="text-muted-foreground">{contextSummary(context)}</span>
           </div>
           {askWaiting && (
             <div className="text-muted-foreground text-xs">
@@ -129,20 +158,19 @@ export function ColdPanel({
         {confirmingRewarm ? (
           <RewarmWarning
             context={context}
+            settings={settings !== null}
             busy={busy}
             onConfirm={() => onChoose("rewarm")}
             onBack={() => setConfirmingRewarm(false)}
           />
         ) : (
           <div className="grid gap-2 sm:grid-cols-3">
-            {CHOICES.map(({ choice, label, explain, tone }) => (
+            {choices.map(({ choice, label, explain, tone }) => (
               <button
                 key={choice}
                 type="button"
                 disabled={busy}
-                onClick={() =>
-                  choice === "rewarm" ? setConfirmingRewarm(true) : onChoose(choice)
-                }
+                onClick={() => (confirms(choice) ? setConfirmingRewarm(true) : onChoose(choice))}
                 className={`voice-ui flex flex-col items-start gap-0.5 rounded-[5px] border-2 px-3 py-2 text-left disabled:opacity-50 ${tone}`}
               >
                 <span className="text-sm">{label}</span>
@@ -150,6 +178,16 @@ export function ColdPanel({
               </button>
             ))}
           </div>
+        )}
+        {settings !== null && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={settings.onCancel}
+            className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+          >
+            Cancel
+          </button>
         )}
         {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
       </div>

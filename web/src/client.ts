@@ -5,12 +5,14 @@ import {
   type Command,
   type ServerMessage,
   type SessionView,
+  type SharedCatalog,
   type UsageSnapshot,
   type WireEvent,
   parseErrorBody,
   parseServerMessage,
   parseSessionList,
   parseSessionView,
+  parseSharedCatalog,
   parseUsageSnapshot,
 } from "@/wire";
 
@@ -22,6 +24,8 @@ export interface Snapshot {
   sessionsError: string | null;
   usage: UsageSnapshot | null;
   usageError: string | null;
+  /** Null until loaded; a failed load keeps the previous one. */
+  catalog: SharedCatalog | null;
   transcripts: ReadonlyMap<string, TranscriptState>;
   /** Last `error` the server reported for a session. */
   sessionErrors: ReadonlyMap<string, string>;
@@ -85,6 +89,7 @@ export class Client {
     sessionsError: null,
     usage: null,
     usageError: null,
+    catalog: null,
     transcripts: new Map(),
     sessionErrors: new Map(),
   };
@@ -127,6 +132,7 @@ export class Client {
     this.connect();
     void this.refreshSessions();
     void this.refreshUsage();
+    void this.refreshCatalog();
   }
 
   openSession(id: string): void {
@@ -175,6 +181,16 @@ export class Client {
       this.update({ usage, usageError: null });
     } catch (err) {
       this.update({ usageError: `Cannot load usage: ${errorMessage(err)}` });
+    }
+  });
+
+  readonly refreshCatalog = coalesced(async () => {
+    try {
+      const response = await fetch("api/catalog");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      this.update({ catalog: parseSharedCatalog(await response.json(), "catalog") });
+    } catch (err) {
+      console.error(`Cannot load the catalog: ${errorMessage(err)}`);
     }
   });
 
@@ -241,6 +257,7 @@ export class Client {
       }
       void this.refreshSessions();
       void this.refreshUsage();
+      void this.refreshCatalog();
     });
     socket.addEventListener("message", (message) => {
       if (this.socket !== socket || typeof message.data !== "string") return;
@@ -312,6 +329,9 @@ export class Client {
         return;
       case "usage_changed":
         void this.refreshUsage();
+        return;
+      case "catalog_changed":
+        void this.refreshCatalog();
         return;
       case "error": {
         console.error("server error", message.message);

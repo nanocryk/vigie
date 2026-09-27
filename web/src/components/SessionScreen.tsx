@@ -11,16 +11,47 @@ import {
   coldSpell,
   rewarmField,
 } from "@/cold";
+import {
+  type CommandCard,
+  type OwnCommand,
+  type PanelEffect,
+  type PanelEvent,
+  type PanelState,
+  closedPanel,
+  commandCards,
+  commandQuery,
+  filterCards,
+  panelStep,
+  slashOpens,
+} from "@/commands";
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
 import { ColdPanel, useCacheGauge } from "@/components/ColdPanel";
+import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { PermissionMode } from "@/components/PermissionMode";
 import { BusyDot, ConnectionDot } from "@/components/SessionList";
+import { SettingTab } from "@/components/SettingTab";
 import { Header, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
 import { backToList } from "@/route";
-import { type Item, emptyTranscript } from "@/transcript";
+import {
+  DEFAULT_MODEL,
+  type Settings,
+  type SettingsFlow,
+  appliedOutcome,
+  closedFlow,
+  defaultEffort,
+  effortLevels,
+  effortTabLabel,
+  firstButton,
+  modelOptionLabel,
+  modelTabLabel,
+  pickEffort,
+  pickModel,
+  settingsPlan,
+} from "@/settings";
+import { type Item, emptyTranscript, parseTime } from "@/transcript";
 
 /** Unsent composer text per session, kept while the app stays open. */
 const drafts = new Map<string, string>();
@@ -49,9 +80,12 @@ const ACTION_SIZE = "voice-ui h-12 w-20 shrink-0 rounded-[5px] text-sm";
 function Composer({
   session,
   onSend,
+  onSlash,
 }: {
   session: string;
   onSend: (text: string) => void;
+  /** A `/` became the first character: `text` is the whole composer text. */
+  onSlash: (text: string) => void;
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
   const area = useRef<HTMLTextAreaElement>(null);
@@ -64,9 +98,11 @@ function Composer({
   }, [text]);
 
   const change = (value: string) => {
+    const opens = slashOpens(text, value);
     setText(value);
     if (value === "") drafts.delete(session);
     else drafts.set(session, value);
+    if (opens) onSlash(value);
   };
 
   const submit = () => {
@@ -158,7 +194,9 @@ export function SessionScreen({
   useEffect(() => {
     setRefusedAt(null);
   }, [lastRequestAt]);
-  const spell = coldSpell(gauge, refusedAt);
+  const settingsChangedAt = view?.settings_changed_at ?? null;
+  const settingsAt = settingsChangedAt === null ? null : parseTime(settingsChangedAt);
+  const spell = coldSpell(gauge, refusedAt, settingsAt);
   const rewarm = rewarmField(spell, chosen);
 
   const noteRefusal = (err: unknown) => {
@@ -241,9 +279,164 @@ export function SessionScreen({
   const [choosing, setChoosing] = useState(false);
   const [coldError, setColdError] = useState<string | null>(null);
   const archived = view !== null && view.archived_at !== null;
+  const [flow, setFlow] = useState<SettingsFlow>(closedFlow);
+  const [panel, setPanel] = useState<PanelState>(closedPanel);
   const coldPanel =
     archived ||
-    (view !== null && coldPanelShown({ gauge, refusedAt, busy, asks: asks.length, chosen }));
+    flow.kind !== "closed" ||
+    (view !== null &&
+      coldPanelShown({ gauge, refusedAt, settingsAt, busy, asks: asks.length, chosen }));
+
+  // The discussion's own catalog once its Claude started, else the one all discussions share.
+  const shared = snapshot.catalog;
+  const models = transcript.catalog?.models ?? shared?.models ?? [];
+  const commands = transcript.catalog?.commands ?? shared?.commands ?? [];
+  const terminalCommands =
+    transcript.terminalCommands.length > 0
+      ? transcript.terminalCommands
+      : (shared?.terminal_commands ?? []);
+  const current: Settings = { model: view?.model ?? null, effort: view?.effort ?? null };
+  const picks = flow.kind === "closed" ? current : flow.picks;
+  const fallbackModel = shared?.defaults?.model ?? null;
+  const fallbackEffort = defaultEffort(models, picks.model, shared?.defaults?.effort ?? null);
+
+  // A settings choice ends once the session list shows it; a rewarm then answers its spell.
+  const outcome = appliedOutcome(flow, { ...current, settingsChangedAt: settingsAt });
+  const applied = outcome.done;
+  const rewarmSpell = outcome.done ? outcome.rewarmSpell : null;
+  useEffect(() => {
+    if (!applied) return;
+    if (rewarmSpell !== null && spell !== null) {
+      const made: ColdChoiceMade = { spell, choice: "rewarm" };
+      coldChoices.set(id, made);
+      setChosen(made);
+    }
+    setFlow(closedFlow);
+  }, [applied, rewarmSpell, spell, id]);
+
+  const [commandError, setCommandError] = useState<string | null>(null);
+
+  const startSettings = () => {
+    setPanel(closedPanel);
+    setColdError(null);
+    if (transcript.turnOpen) {
+      client
+        .command({ type: "interrupt", session: id, client_id: client.newClientId() })
+        .catch((err: unknown) => setStopError(errorMessage(err)));
+    }
+    setFlow({ kind: "choosing", picks: current });
+  };
+
+  const choosePicks = (next: Settings) => {
+    if (flow.kind === "choosing") setFlow({ kind: "choosing", picks: next });
+  };
+
+  const chooseSettings = (choice: ColdChoice) => {
+    if (flow.kind !== "choosing") return;
+    const chosenPicks = flow.picks;
+    const plan = settingsPlan(chosenPicks, current, choice, drafts.get(id) ?? "");
+    setColdError(null);
+    if (plan.then.kind === "close") {
+      setFlow(closedFlow);
+      return;
+    }
+    const then = plan.then;
+    setChoosing(true);
+    setFlow({ kind: "applying", picks: chosenPicks, choice });
+    const stored =
+      plan.patch === null
+        ? Promise.resolve()
+        : client.command({
+            type: "set_settings",
+            session: id,
+            ...plan.patch,
+            client_id: client.newClientId(),
+          });
+    stored
+      .then(async () => {
+        if (then.kind === "rewarm") {
+          if (then.text !== null) {
+            drafts.delete(id);
+            send(then.text, { rewarm: true });
+          }
+          return;
+        }
+        await client.command({
+          type: "restart",
+          session: id,
+          mode: then.mode,
+          ...(then.text === null ? {} : { text: then.text }),
+          client_id: client.newClientId(),
+        });
+        drafts.delete(id);
+      })
+      .catch((err: unknown) => {
+        setColdError(errorMessage(err));
+        setFlow({ kind: "choosing", picks: chosenPicks });
+      })
+      .finally(() => setChoosing(false));
+  };
+
+  const runOwn = (command: OwnCommand) => {
+    switch (command) {
+      case "clear":
+        setCommandError(null);
+        client
+          .command({
+            type: "restart",
+            session: id,
+            mode: "clear",
+            client_id: client.newClientId(),
+          })
+          .catch((err: unknown) => setCommandError(errorMessage(err)));
+        return;
+      case "model":
+      case "effort":
+        startSettings();
+        return;
+    }
+  };
+
+  const runEffect = (effect: PanelEffect) => {
+    switch (effect.kind) {
+      case "none":
+        return;
+      case "draft":
+        if (effect.text === "") drafts.delete(id);
+        else drafts.set(id, effect.text);
+        return;
+      case "send":
+        if (effect.consumeDraft) drafts.delete(id);
+        send(effect.text);
+        return;
+      case "own":
+        if (effect.consumeDraft) drafts.delete(id);
+        runOwn(effect.command);
+        return;
+    }
+  };
+
+  const panelEvent = (event: PanelEvent) => {
+    const next = panelStep(panel, event);
+    setPanel(next.state);
+    runEffect(next.effect);
+  };
+
+  const allCards = commandCards(commands, terminalCommands);
+  const argumentCard: CommandCard | null =
+    panel.kind === "argument"
+      ? (allCards.find(
+          (card) => card.own === null && card.name === commandQuery(panel.text),
+        ) ?? {
+          name: commandQuery(panel.text),
+          title: null,
+          description: "",
+          argumentHint: "",
+          own: null,
+        })
+      : null;
+  const shownCards = panel.kind === "browsing" ? filterCards(allCards, panel.filter) : [];
+  const tabsEnabled = view !== null && !archived;
 
   const choose = (choice: ColdChoice) => {
     if (spell === null && !archived) return;
@@ -352,6 +545,49 @@ export function SessionScreen({
               }
               enabled={view !== null && !archived}
             />
+            <SettingTab
+              label={modelTabLabel(
+                models,
+                view?.applied_model ?? null,
+                picks.model,
+                flow.kind !== "closed",
+                fallbackModel,
+              )}
+              stopLabel="Stop here and change model"
+              enabled={tabsEnabled}
+              picking={flow.kind !== "closed"}
+              options={models.map((model) => ({ value: model.value, label: modelOptionLabel(models, model) }))}
+              selected={picks.model ?? DEFAULT_MODEL}
+              onStop={startSettings}
+              onPick={(value) => choosePicks(pickModel(picks, value, models))}
+            />
+            <SettingTab
+              label={effortTabLabel(
+                view?.applied_effort ?? null,
+                picks.effort,
+                flow.kind !== "closed",
+                fallbackEffort,
+              )}
+              stopLabel="Stop here and change effort"
+              enabled={tabsEnabled}
+              picking={flow.kind !== "closed"}
+              options={effortLevels(models, picks.model).map((level) => ({
+                value: level,
+                label: level,
+              }))}
+              selected={picks.effort}
+              onStop={startSettings}
+              onPick={(value) => choosePicks(pickEffort(picks, value))}
+            />
+            <button
+              type="button"
+              disabled={!tabsEnabled || flow.kind !== "closed"}
+              aria-expanded={panel.kind !== "closed"}
+              onClick={() => panelEvent({ type: panel.kind === "closed" ? "open_tab" : "close" })}
+              className={`voice-ui pointer-events-auto shrink-0 rounded-t-[5px] border border-b-0 px-2.5 py-1 text-xs whitespace-nowrap shadow-sm disabled:opacity-60 ${panel.kind === "closed" ? "bg-card text-foreground border-border" : "bg-primary text-primary-foreground border-primary"}`}
+            >
+              /<span className="hidden sm:inline"> Commands</span>
+            </button>
             {transcript.turnOpen && (
               <div className="pointer-events-auto ml-auto flex items-end gap-2">
                 {stopError !== null && (
@@ -371,17 +607,50 @@ export function SessionScreen({
             )}
           </>
         }
+        panel={
+          panel.kind === "closed" ? undefined : (
+            <CommandsPanel
+              cards={shownCards}
+              argument={argumentCard}
+              onUse={(card) => panelEvent({ type: "use", card })}
+              onClose={() => panelEvent({ type: "close" })}
+            />
+          )
+        }
       />
 
-      {coldPanel ? (
+      {panel.kind !== "closed" ? (
+        <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+          <CommandField
+            state={panel}
+            draftKept={panel.source === "tab" && (drafts.get(id) ?? "").trim() !== ""}
+            onFilter={(text) => panelEvent({ type: "filter", text })}
+            onArgument={(text) => panelEvent({ type: "argument", text })}
+            onSend={() => panelEvent({ type: "send" })}
+            onClose={() => panelEvent({ type: "close" })}
+          />
+        </footer>
+      ) : coldPanel ? (
         <ColdPanel
+          key={flow.kind === "closed" ? "cold" : "settings"}
           archived={archived}
           context={view?.context ?? null}
           draft={drafts.get(id) ?? ""}
           askWaiting={ask !== undefined}
-          busy={choosing}
+          busy={choosing || flow.kind === "applying"}
           error={coldError}
-          onChoose={choose}
+          settings={
+            flow.kind === "closed"
+              ? null
+              : {
+                  changed: firstButton(picks, current) === "rewarm",
+                  onCancel: () => {
+                    setColdError(null);
+                    setFlow(closedFlow);
+                  },
+                }
+          }
+          onChoose={flow.kind === "closed" ? choose : chooseSettings}
         />
       ) : (
         <>
@@ -396,7 +665,14 @@ export function SessionScreen({
           )}
 
           <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-            <Composer session={id} onSend={send} />
+            {commandError !== null && (
+              <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">{commandError}</p>
+            )}
+            <Composer
+              session={id}
+              onSend={send}
+              onSlash={(text) => panelEvent({ type: "open_slash", text })}
+            />
           </footer>
         </>
       )}

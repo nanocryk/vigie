@@ -18,6 +18,11 @@ const session = (id: string, patch: Partial<SessionView> = {}): SessionView => (
   cache: null,
   context: null,
   archived_at: null,
+  model: null,
+  effort: null,
+  settings_changed_at: null,
+  applied_model: null,
+  applied_effort: null,
   ...patch,
 });
 

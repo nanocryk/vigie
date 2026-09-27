@@ -367,6 +367,7 @@ export function TranscriptView({
   turnOpen,
   overlay,
   tabs,
+  panel,
 }: {
   items: readonly Item[];
   pending: readonly PendingSend[];
@@ -380,6 +381,8 @@ export function TranscriptView({
   overlay?: ReactNode;
   /** Tabs resting on the bottom edge, over the discussion; the content keeps room for them. */
   tabs?: ReactNode;
+  /** In front of the discussion, positioned by itself. */
+  panel?: ReactNode;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -484,6 +487,7 @@ export function TranscriptView({
           <div className="mx-auto flex max-w-5xl items-end gap-1">{tabs}</div>
         </div>
       )}
+      {panel}
     </div>
   );
 }

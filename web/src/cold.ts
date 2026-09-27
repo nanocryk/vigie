@@ -24,14 +24,19 @@ export function ackError(error: string | null | undefined): Error {
 }
 
 /**
- * The latest cold spell known: the gauge's, or the one the server reported by
- * refusing at `refusedAt` while the client still counted the cache warm.
+ * The latest cold spell known: the gauge's, the one a model or effort change
+ * started at `settingsAt`, or the one the server reported by refusing at
+ * `refusedAt` while the client still counted the cache warm.
  */
-export function coldSpell(gauge: CacheGauge, refusedAt: number | null): number | null {
-  const own = gauge.kind === "cold" ? gauge.coldAt : null;
-  if (own === null) return refusedAt;
-  if (refusedAt === null) return own;
-  return Math.max(own, refusedAt);
+export function coldSpell(
+  gauge: CacheGauge,
+  refusedAt: number | null,
+  settingsAt: number | null,
+): number | null {
+  const spells = [gauge.kind === "cold" ? gauge.coldAt : null, refusedAt, settingsAt].filter(
+    (spell): spell is number => spell !== null,
+  );
+  return spells.length === 0 ? null : Math.max(...spells);
 }
 
 /** Spread into a send or an answer: `rewarm` once Rewarm was picked for the spell in force. */
@@ -58,11 +63,12 @@ export type ColdAction =
 export function coldPanelShown(input: {
   gauge: CacheGauge;
   refusedAt: number | null;
+  settingsAt: number | null;
   busy: boolean;
   asks: number;
   chosen: ColdChoiceMade | null;
 }): boolean {
-  const spell = coldSpell(input.gauge, input.refusedAt);
+  const spell = coldSpell(input.gauge, input.refusedAt, input.settingsAt);
   if (spell === null || input.chosen?.spell === spell) return false;
   return spell === input.refusedAt || !input.busy || input.asks > 0;
 }

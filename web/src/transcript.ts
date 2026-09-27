@@ -1,6 +1,8 @@
 import {
   type CliLine,
+  type CommandInfo,
   type ContentBlock,
+  type ModelChoice,
   type Danger,
   type GateFailure,
   type HostEvent,
@@ -47,6 +49,7 @@ type ItemBody =
   | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null };
 
 export function restartLabel(item: { mode: RestartMode; exchanges: number }): string {
+  if (item.mode === "clear") return "Cleared";
   if (item.mode === "blank") return "Restarted: blank";
   const noun = item.exchanges === 1 ? "exchange" : "exchanges";
   return `Restarted: ${item.exchanges} ${noun} given as context`;
@@ -99,6 +102,15 @@ export interface TranscriptState {
   permissionMode: string | null;
   /** Seed of the latest continue, until the echo of the message starting with it. */
   pendingSeed: string | null;
+  /** Models and commands from the latest `catalog`; null until one arrived. */
+  catalog: Catalog | null;
+  /** Commands the latest `system/init` reported as working only in the TUI. */
+  terminalCommands: readonly string[];
+}
+
+export interface Catalog {
+  models: readonly ModelChoice[];
+  commands: readonly CommandInfo[];
 }
 
 interface Outgoing {
@@ -125,6 +137,8 @@ export const emptyTranscript: TranscriptState = {
   cwd: null,
   permissionMode: null,
   pendingSeed: null,
+  catalog: null,
+  terminalCommands: [],
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -272,6 +286,8 @@ class Draft {
   cwd: string | null;
   permissionMode: string | null;
   pendingSeed: string | null;
+  catalog: Catalog | null;
+  terminalCommands: readonly string[];
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
@@ -288,6 +304,8 @@ class Draft {
     this.cwd = state.cwd;
     this.permissionMode = state.permissionMode;
     this.pendingSeed = state.pendingSeed;
+    this.catalog = state.catalog;
+    this.terminalCommands = state.terminalCommands;
   }
 
   finish(): TranscriptState {
@@ -306,6 +324,8 @@ class Draft {
       cwd: this.cwd,
       permissionMode: this.permissionMode,
       pendingSeed: this.pendingSeed,
+      catalog: this.catalog,
+      terminalCommands: this.terminalCommands,
     };
   }
 
@@ -402,6 +422,9 @@ class Draft {
           seed: event.seed,
         });
         return;
+      case "catalog":
+        this.catalog = { models: event.models, commands: event.commands };
+        return;
       case "unknown":
         return;
     }
@@ -422,6 +445,9 @@ class Draft {
         return;
       case "system":
         if (line.subtype === "init") this.turnOpen = true;
+        if (line.subtype === "init" && line.terminalCommands !== null) {
+          this.terminalCommands = line.terminalCommands;
+        }
         // History recorded before `permission_mode` host events only has these.
         if ((line.subtype === "init" || line.subtype === "status") && line.permissionMode !== null) {
           this.permissionMode = line.permissionMode;

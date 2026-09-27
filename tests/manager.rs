@@ -10,13 +10,14 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
 use vigie2::child::{Launch, Program};
 use vigie2::gauges::ContextSource;
-use vigie2::manager::SessionManager;
-use vigie2::protocol::Inbound;
+use vigie2::manager::{Probe, SessionManager};
+use vigie2::protocol::{AppliedSettings, Inbound};
 use vigie2::replay::{
-    CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, Direction, Recording,
+    CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
+    CANNED_DEFAULT_MODEL, Direction, Recording,
 };
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session};
-use vigie2::store::{EventKind, SessionState, Store, StoredEvent};
+use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const ALL: u32 = 100_000;
@@ -279,6 +280,111 @@ async fn the_context_is_known_before_the_first_turn() {
     stop(&session).await;
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
+}
+
+async fn until_applied(
+    manager: &SessionManager,
+    changes: &mut broadcast::Receiver<Uuid>,
+    id: Uuid,
+    model: &str,
+    effort: &str,
+) {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let row = manager.store().session(id).await.unwrap().unwrap();
+            if row.applied.model.as_deref() == Some(model)
+                && row.applied.effort.as_deref() == Some(effort)
+            {
+                return;
+            }
+            assert_eq!(changes.recv().await.unwrap(), id);
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no announced {model} and {effort}"));
+}
+
+#[tokio::test]
+async fn applied_settings_are_asked_at_spawn_and_after_a_change_and_survive_a_reopen() {
+    let env = Env::new();
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let mut changes = manager.subscribe_changes();
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    until_applied(
+        &manager,
+        &mut changes,
+        id,
+        CANNED_DEFAULT_MODEL,
+        CANNED_DEFAULT_EFFORT,
+    )
+    .await;
+
+    manager
+        .set_settings(id, Some(Some("sonnet".into())), Some(Some("high".into())))
+        .await
+        .unwrap();
+    until_applied(&manager, &mut changes, id, "claude-sonnet-5", "high").await;
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert!(
+        stored
+            .iter()
+            .all(|event| !event.payload.contains("\"applied\"")),
+        "a settings reply was stored"
+    );
+    assert_clean_exit(stored.last().unwrap());
+    drop((session, manager));
+
+    let manager = env.manager(&script).await;
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.applied.model.as_deref(), Some("claude-sonnet-5"));
+    assert_eq!(row.applied.effort.as_deref(), Some("high"));
+}
+
+/// Initialization, a failed `get_settings`, then a marker line.
+const FAILED_SETTINGS_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "set", "request": {"subtype": "get_settings"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "error", "request_id": "set", "error": "unavailable"}}}
+{"t": 0, "dir": "out", "msg": {"type": "marker"}}
+"#;
+
+#[tokio::test]
+async fn a_failed_settings_ask_changes_nothing() {
+    let env = Env::new();
+    let script = env.script("failed.ndjson", FAILED_SETTINGS_SCRIPT);
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let stored = manager.events_after(id, 0, ALL).await.unwrap();
+            if stored.iter().any(|event| event.payload.contains("marker")) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the failed ask was not answered");
+    manager.store().flush().await.unwrap();
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.applied.model, None);
+    assert_eq!(row.applied.effort, None);
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert!(
+        stored
+            .iter()
+            .all(|event| !event.payload.contains("unavailable")),
+        "the failed reply was stored"
+    );
     assert_clean_exit(stored.last().unwrap());
 }
 
@@ -699,4 +805,168 @@ async fn a_lagging_subscriber_does_not_lose_history() {
         assert_eq!(event.payload, expected.to_string());
     }
     assert_clean_exit(stored.last().unwrap());
+}
+
+/// Initialization with a catalog; the fake then waits for stdin to close.
+const CATALOG_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}, "models": [{"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5", "supportsEffort": true, "supportedEffortLevels": ["low", "medium"]}], "commands": [{"name": "review", "description": "Review a change", "argumentHint": ""}]}}}}
+"#;
+
+fn canned_defaults() -> AppliedSettings {
+    AppliedSettings {
+        model: Some(CANNED_DEFAULT_MODEL.into()),
+        effort: Some(CANNED_DEFAULT_EFFORT.into()),
+    }
+}
+
+/// Waits, through the catalog announcements, for the shared catalog to satisfy `done`.
+async fn until_catalog(
+    manager: &SessionManager,
+    catalog_changes: &mut broadcast::Receiver<()>,
+    done: impl Fn(&SharedCatalog) -> bool,
+) -> SharedCatalog {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let catalog = manager.catalog().await.unwrap();
+            if done(&catalog) {
+                return catalog;
+            }
+            catalog_changes.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("the shared catalog was not announced")
+}
+
+#[tokio::test]
+async fn the_catalog_probe_runs_only_when_nothing_is_stored() {
+    let env = Env::new();
+    let script = env.script("catalog.ndjson", CATALOG_SCRIPT);
+    let manager = env.manager(&script).await;
+    let mut catalog_changes = manager.subscribe_catalog();
+    let probe_dir = env.dir.path().join("state").join("probe");
+    assert_eq!(
+        manager.probe_catalog(probe_dir.clone()).await.unwrap(),
+        Probe::Ran
+    );
+    catalog_changes
+        .try_recv()
+        .expect("the probe announced nothing");
+    let catalog = manager.catalog().await.unwrap();
+    let models = catalog.models.expect("models stored");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].value, "opus");
+    assert_eq!(models[0].effort_levels, ["low", "medium"]);
+    let commands = catalog.commands.expect("commands stored");
+    assert_eq!(commands[0].name, "review");
+    assert_eq!(catalog.defaults, Some(canned_defaults()));
+    assert_eq!(catalog.terminal_commands, None);
+    assert!(
+        manager.list().await.unwrap().is_empty(),
+        "the probe is no discussion"
+    );
+    drop(manager);
+
+    let manager = env.manager(&script).await;
+    assert_eq!(
+        manager.probe_catalog(probe_dir).await.unwrap(),
+        Probe::Skipped
+    );
+}
+
+#[tokio::test]
+async fn a_start_without_a_pick_updates_the_shared_catalog_and_a_pick_does_not() {
+    let env = Env::new();
+    let script = env.script("catalog.ndjson", CATALOG_SCRIPT);
+    let manager = env.manager(&script).await;
+    let mut catalog_changes = manager.subscribe_catalog();
+    let mut changes = manager.subscribe_changes();
+    let first = manager.create(env.cwd.clone()).await.unwrap();
+    // Reached once the spawn's own ask stored what it read.
+    until_applied(
+        &manager,
+        &mut changes,
+        first.id(),
+        CANNED_DEFAULT_MODEL,
+        CANNED_DEFAULT_EFFORT,
+    )
+    .await;
+    let catalog = until_catalog(&manager, &mut catalog_changes, |catalog| {
+        catalog.models.is_some() && catalog.defaults.is_some()
+    })
+    .await;
+    assert_eq!(catalog.defaults, Some(canned_defaults()));
+    assert_eq!(catalog.commands.unwrap()[0].name, "review");
+
+    // A change on the live child is a pick.
+    let first_id = first.id();
+    manager
+        .set_settings(first_id, Some(Some("sonnet".into())), None)
+        .await
+        .unwrap();
+    until_applied(
+        &manager,
+        &mut changes,
+        first_id,
+        "claude-sonnet-5",
+        CANNED_DEFAULT_EFFORT,
+    )
+    .await;
+    stop(&first).await;
+
+    // So is a launch with one.
+    let mut changes = manager.subscribe_changes();
+    let second = manager.create(env.cwd.clone()).await.unwrap();
+    let second_id = second.id();
+    stop(&second).await;
+    manager
+        .set_settings(second_id, None, Some(Some("high".into())))
+        .await
+        .unwrap();
+    let second = manager.open(second_id).await.unwrap();
+    until_applied(
+        &manager,
+        &mut changes,
+        second_id,
+        CANNED_DEFAULT_MODEL,
+        "high",
+    )
+    .await;
+    assert_eq!(
+        manager.catalog().await.unwrap().defaults,
+        Some(canned_defaults())
+    );
+    stop(&second).await;
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_start_stores_the_terminal_only_commands_of_its_init() {
+    let env = Env::new();
+    let manager = env.manager(&recording("basic")).await;
+    let mut catalog_changes = manager.subscribe_catalog();
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let mut events = session.subscribe();
+    session.send("Reply with exactly: ok", None).await.unwrap();
+    until_result(&mut events).await;
+    let catalog = until_catalog(&manager, &mut catalog_changes, |catalog| {
+        catalog.terminal_commands.is_some()
+    })
+    .await;
+    assert!(
+        catalog
+            .terminal_commands
+            .unwrap()
+            .contains(&"doctor".to_string())
+    );
+    assert!(
+        catalog
+            .models
+            .unwrap()
+            .iter()
+            .any(|model| model.value == "opus")
+    );
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
 }

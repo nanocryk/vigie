@@ -54,6 +54,7 @@ pub fn build_app(state: AppState) -> Router {
             get(api::list_sessions).post(api::create_session),
         )
         .route("/api/usage", get(api::usage))
+        .route("/api/catalog", get(api::catalog))
         .route("/api/ws", get(ws::handler))
         .route("/api/version", get(api::version))
         .layer(from_fn_with_state(state.clone(), auth::require_auth));
@@ -125,6 +126,7 @@ mod auth_gate_tests {
             (Method::GET, "/api/sessions"),
             (Method::POST, "/api/sessions"),
             (Method::GET, "/api/usage"),
+            (Method::GET, "/api/catalog"),
             (Method::GET, "/api/ws"),
             (Method::GET, "/api/version"),
         ]

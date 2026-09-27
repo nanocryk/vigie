@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -17,12 +18,13 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::child::{Child, Launch, Program};
+use crate::child::{Child, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
 use crate::protocol::{
-    CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse, Extra,
-    GetUsageResponse, HostRequest, Inbound, InitializeResponse, InterruptResponse, Outbound,
-    PermissionResult, Priority, SetPermissionModeResponse, System, UserMessage,
+    AppliedSettings, CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse,
+    Extra, GetUsageResponse, HostRequest, Inbound, InitCommand, InitModel, InitializeResponse,
+    InterruptResponse, Outbound, PermissionResult, Priority, SetPermissionModeResponse,
+    SettingsResponse, System, UserMessage,
 };
 use crate::store::{SessionState, Store};
 
@@ -52,6 +54,8 @@ pub struct Config {
     pub last_seq: u64,
     /// `--permission-mode` for the child; `None` lets the CLI pick its default.
     pub permission_mode: Option<String>,
+    /// `--model` and `--effort` for the child.
+    pub settings: ModelSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +126,64 @@ pub enum HostEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<String>,
     },
+    /// The models and the commands the CLI offers, from its `initialize` reply.
+    Catalog {
+        models: Vec<ModelChoice>,
+        commands: Vec<CommandInfo>,
+    },
+}
+
+/// A model the CLI accepts, with the effort levels it supports (none when it has no effort).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    pub value: String,
+    /// The model id `value` stands for, such as `claude-opus-5-5` for `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub effort_levels: Vec<String>,
+}
+
+impl ModelChoice {
+    pub fn new(model: &InitModel) -> Self {
+        let effort_levels = match (&model.supports_effort, &model.supported_effort_levels) {
+            (Some(true), Some(levels)) => levels.clone(),
+            _ => Vec::new(),
+        };
+        Self {
+            value: model.value.clone(),
+            resolved_model: model.resolved_model.clone(),
+            display_name: model
+                .display_name
+                .clone()
+                .unwrap_or_else(|| model.value.clone()),
+            description: model.description.clone(),
+            effort_levels,
+        }
+    }
+}
+
+/// A slash command or a skill; `argument_hint` is empty for one without arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub argument_hint: String,
+}
+
+impl CommandInfo {
+    pub fn new(command: &InitCommand) -> Self {
+        Self {
+            name: command.name.clone(),
+            description: command.description.clone().unwrap_or_default(),
+            argument_hint: command.argument_hint.clone().unwrap_or_default(),
+        }
+    }
 }
 
 /// How a discussion moves to a fresh Claude session.
@@ -131,6 +193,8 @@ pub enum RestartMode {
     /// Seeded with the last exchanges of the discussion.
     Continue,
     Blank,
+    /// A blank restart asked for as the Clear command.
+    Clear,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,6 +250,8 @@ pub enum Activity {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LiveStatus {
     pub activity: Activity,
+    /// A turn runs; background tasks alone do not count.
+    pub turn: bool,
     /// Asks waiting for an answer.
     pub asks: usize,
 }
@@ -227,6 +293,10 @@ impl ActivityTracker {
         }
     }
 
+    pub fn turn(&self) -> bool {
+        self.turn
+    }
+
     pub fn activity(&self) -> Activity {
         if self.turn || !self.tasks.is_empty() {
             Activity::Busy
@@ -262,6 +332,9 @@ pub struct Session {
     commands: mpsc::Sender<Command>,
     events: broadcast::Sender<Arc<Event>>,
     status: watch::Receiver<LiveStatus>,
+    launch_settings: ModelSettings,
+    /// Set once a model or effort change was sent to the child.
+    retuned: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -273,11 +346,13 @@ impl Session {
             &config.cwd,
             config.launch,
             config.permission_mode.as_deref(),
+            &config.settings,
             config.id,
         )?;
         if let Some(history) = &config.history {
             history.session_started(config.id, &config.cwd, Utc::now(), config.permission_mode);
         }
+        let launch_settings = config.settings.clone();
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
         let (status_sender, status) = watch::channel(LiveStatus::default());
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
@@ -308,12 +383,20 @@ impl Session {
             commands,
             events,
             status,
+            launch_settings,
+            retuned: Arc::new(AtomicBool::new(false)),
         };
         Ok((session, first_receiver))
     }
 
     pub fn id(&self) -> Uuid {
         self.id
+    }
+
+    /// True while the child runs on the CLI's own model and effort: launched
+    /// without `--model` or `--effort`, and neither changed since.
+    pub fn runs_without_pick(&self) -> bool {
+        self.launch_settings == ModelSettings::default() && !self.retuned.load(Ordering::Relaxed)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<Event>> {
@@ -374,6 +457,27 @@ impl Session {
         .await
     }
 
+    /// `None` goes back to the CLI's default model.
+    pub async fn set_model(&self, model: Option<String>) -> Result<()> {
+        self.retuned.store(true, Ordering::Relaxed);
+        self.control::<Value>(HostRequest::SetModel {
+            model,
+            extra: Extra::new(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_effort(&self, effort: String) -> Result<()> {
+        self.retuned.store(true, Ordering::Relaxed);
+        self.control::<Value>(HostRequest::ApplyFlagSettings {
+            settings: serde_json::json!({ "effortLevel": effort }),
+            extra: Extra::new(),
+        })
+        .await?;
+        Ok(())
+    }
+
     pub async fn usage(&self) -> Result<GetUsageResponse> {
         Ok(serde_json::from_value(self.usage_json().await?)?)
     }
@@ -393,6 +497,17 @@ impl Session {
             extra: Extra::new(),
         })
         .await
+    }
+
+    /// The model and effort the CLI applies. Its reply line is not emitted as an
+    /// event: it lists the user's settings.
+    pub async fn applied_settings(&self) -> Result<AppliedSettings> {
+        let reply: SettingsResponse = self
+            .control(HostRequest::GetSettings {
+                extra: Extra::new(),
+            })
+            .await?;
+        Ok(reply.applied)
     }
 
     pub async fn answer(&self, request_id: impl Into<String>, answer: Answer) -> Result<()> {
@@ -655,6 +770,22 @@ impl Actor {
                     if let Some(mode) = &initialize.current_permission_mode {
                         self.set_mode(mode);
                     }
+                    if initialize.models.is_some() || initialize.commands.is_some() {
+                        self.emit_host(HostEvent::Catalog {
+                            models: initialize
+                                .models
+                                .iter()
+                                .flatten()
+                                .map(ModelChoice::new)
+                                .collect(),
+                            commands: initialize
+                                .commands
+                                .iter()
+                                .flatten()
+                                .map(CommandInfo::new)
+                                .collect(),
+                        });
+                    }
                 } else {
                     self.fail_gate(GateFailure::ApiProvider { provider });
                 }
@@ -698,7 +829,10 @@ impl Actor {
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
                 let sets_mode = matches!(request, HostRequest::SetPermissionMode { .. });
-                let unrecorded = matches!(request, HostRequest::GetContextUsage { .. });
+                let unrecorded = matches!(
+                    request,
+                    HostRequest::GetContextUsage { .. } | HostRequest::GetSettings { .. }
+                );
                 let line =
                     Outbound::ControlRequest(ControlRequest::new(request_id.clone(), request));
                 match self.write(line).await {
@@ -857,6 +991,7 @@ impl Actor {
     fn publish_status(&mut self) {
         let next = LiveStatus {
             activity: self.tracker.activity(),
+            turn: self.tracker.turn(),
             asks: self.asks.len(),
         };
         self.status.send_if_modified(|current| {

@@ -26,10 +26,12 @@ function shown(input: {
   asks?: number;
   chosen?: ColdChoiceMade | null;
   refusedAt?: number | null;
+  settingsAt?: number | null;
 }): boolean {
   return coldPanelShown({
     gauge: input.gauge,
     refusedAt: input.refusedAt ?? null,
+    settingsAt: input.settingsAt ?? null,
     busy: input.busy ?? false,
     asks: input.asks ?? 0,
     chosen: input.chosen ?? null,
@@ -66,15 +68,25 @@ describe("coldPanelShown", () => {
       false,
     );
   });
+
+  it("shows for a model or effort change on a warm cache, until a choice for it", () => {
+    const settingsAt = start + 10;
+    expect(shown({ gauge: warm, settingsAt })).toBe(true);
+    expect(shown({ gauge: warm, settingsAt, chosen: { spell: settingsAt, choice: "rewarm" } })).toBe(
+      false,
+    );
+  });
 });
 
 describe("coldSpell", () => {
-  it("takes the latest of the gauge's spell and a refusal", () => {
-    expect(coldSpell(warm, null)).toBe(null);
-    expect(coldSpell(cold, null)).toBe(coldAt);
-    expect(coldSpell(warm, 5)).toBe(5);
-    expect(coldSpell(cold, coldAt - 1)).toBe(coldAt);
-    expect(coldSpell(cold, coldAt + 1)).toBe(coldAt + 1);
+  it("takes the latest of the gauge's spell, a refusal and a settings change", () => {
+    expect(coldSpell(warm, null, null)).toBe(null);
+    expect(coldSpell(cold, null, null)).toBe(coldAt);
+    expect(coldSpell(warm, 5, null)).toBe(5);
+    expect(coldSpell(cold, coldAt - 1, null)).toBe(coldAt);
+    expect(coldSpell(cold, coldAt + 1, null)).toBe(coldAt + 1);
+    expect(coldSpell(warm, null, 7)).toBe(7);
+    expect(coldSpell(cold, coldAt + 1, coldAt + 2)).toBe(coldAt + 2);
   });
 });
 

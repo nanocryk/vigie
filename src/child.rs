@@ -82,20 +82,38 @@ impl Launch {
     }
 }
 
-/// The CLI arguments after `Program::leading_args`; `permission_mode` becomes
-/// `--permission-mode` when known.
-pub fn args(launch: Launch, permission_mode: Option<&str>) -> Vec<OsString> {
+/// The model and the effort level a discussion runs on; `None` lets the CLI pick.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSettings {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// The CLI arguments after `Program::leading_args`; `permission_mode`, the model
+/// and the effort become `--permission-mode`, `--model` and `--effort` when known.
+pub fn args(
+    launch: Launch,
+    permission_mode: Option<&str>,
+    settings: &ModelSettings,
+) -> Vec<OsString> {
     let (flag, id) = match launch {
         Launch::New(id) => ("--session-id", id),
         Launch::Resume(id) => ("--resume", id),
     };
-    let mode = permission_mode
-        .into_iter()
-        .flat_map(|mode| [OsString::from("--permission-mode"), mode.into()]);
+    let optional = [
+        ("--permission-mode", permission_mode),
+        ("--model", settings.model.as_deref()),
+        ("--effort", settings.effort.as_deref()),
+    ];
+    let known = optional.into_iter().flat_map(|(name, value)| {
+        value
+            .into_iter()
+            .flat_map(move |value| [OsString::from(name), value.into()])
+    });
     FLAGS
         .iter()
         .map(OsString::from)
-        .chain(mode)
+        .chain(known)
         .chain([flag.into(), id.to_string().into()])
         .collect()
 }
@@ -141,11 +159,12 @@ impl Child {
         cwd: &Path,
         launch: Launch,
         permission_mode: Option<&str>,
+        settings: &ModelSettings,
         host_session: Uuid,
     ) -> Result<Self> {
         let mut process = Command::new(&program.path)
             .args(&program.leading_args)
-            .args(args(launch, permission_mode))
+            .args(args(launch, permission_mode, settings))
             .current_dir(cwd)
             .env_clear()
             .envs(env(std::env::vars_os(), host_session))
@@ -278,15 +297,17 @@ mod tests {
     #[test]
     fn args_pick_new_or_resume() {
         let id = Uuid::new_v4();
-        let new = args(Launch::New(id), None);
+        let new = args(Launch::New(id), None, &ModelSettings::default());
         assert_eq!(new[0], "-p");
         assert!(new.contains(&OsString::from("--replay-user-messages")));
-        assert!(!new.contains(&OsString::from("--permission-mode")));
+        for absent in ["--permission-mode", "--model", "--effort"] {
+            assert!(!new.contains(&OsString::from(absent)), "{absent}");
+        }
         assert_eq!(
             new[new.len() - 2..],
             [OsString::from("--session-id"), id.to_string().into()]
         );
-        let resume = args(Launch::Resume(id), None);
+        let resume = args(Launch::Resume(id), None, &ModelSettings::default());
         assert_eq!(
             resume[resume.len() - 2..],
             [OsString::from("--resume"), id.to_string().into()]
@@ -296,7 +317,7 @@ mod tests {
     #[test]
     fn args_carry_a_known_permission_mode() {
         let id = Uuid::new_v4();
-        let resume = args(Launch::Resume(id), Some("plan"));
+        let resume = args(Launch::Resume(id), Some("plan"), &ModelSettings::default());
         let flag = resume
             .iter()
             .position(|arg| arg == "--permission-mode")
@@ -306,5 +327,29 @@ mod tests {
             resume[resume.len() - 2..],
             [OsString::from("--resume"), id.to_string().into()]
         );
+    }
+
+    #[test]
+    fn args_carry_a_known_model_and_effort() {
+        let id = Uuid::new_v4();
+        let settings = ModelSettings {
+            model: Some("sonnet".into()),
+            effort: Some("max".into()),
+        };
+        let resume = args(Launch::Resume(id), None, &settings);
+        let value = |name: &str| {
+            let flag = resume
+                .iter()
+                .position(|arg| arg == name)
+                .unwrap_or_else(|| panic!("{name} present"));
+            resume[flag + 1].clone()
+        };
+        assert_eq!(value("--model"), "sonnet");
+        assert_eq!(value("--effort"), "max");
+        let model_only = ModelSettings {
+            model: Some("haiku".into()),
+            effort: None,
+        };
+        assert!(!args(Launch::New(id), None, &model_only).contains(&OsString::from("--effort")));
     }
 }

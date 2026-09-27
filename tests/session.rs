@@ -9,7 +9,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vigie2::child::{Launch, Program};
+use vigie2::child::{Launch, ModelSettings, Program};
 use vigie2::protocol::{Delta, Inbound, ResultMessage, StreamEventBody};
 use vigie2::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
@@ -66,6 +66,7 @@ impl Harness {
             history: None,
             last_seq: 0,
             permission_mode: None,
+            settings: ModelSettings::default(),
         };
         let (session, events) = Session::spawn(config).expect("spawn session");
         Self {
@@ -188,6 +189,26 @@ async fn basic_turns_and_usage() {
         &started.body,
         EventBody::Host(HostEvent::Started { launch: Launch::New(id), .. }) if *id == harness.claude_session
     ));
+    let HostEvent::Catalog { models, commands } = harness
+        .until_host(|host| matches!(host, HostEvent::Catalog { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    let opus = models.iter().find(|model| model.value == "opus").unwrap();
+    assert_eq!(opus.display_name, "Opus 5.5");
+    assert_eq!(
+        opus.effort_levels,
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    let haiku = models.iter().find(|model| model.value == "haiku").unwrap();
+    assert!(haiku.effort_levels.is_empty());
+    let design = commands
+        .iter()
+        .find(|command| command.name == "design")
+        .unwrap();
+    assert_eq!(design.argument_hint, "consent | revoke");
+    assert!(commands.iter().any(|command| command.name == "canif"));
     harness
         .session
         .send("Reply with exactly: ok", Some("c1".into()))
@@ -213,6 +234,17 @@ async fn basic_turns_and_usage() {
     let result = harness.until_result().await;
     assert_eq!(result.result.as_deref(), Some("ok"));
     assert_eq!(harness.session.status().borrow().activity, Activity::Idle);
+    assert!(!harness.session.status().borrow().turn);
+
+    harness
+        .session
+        .set_model(Some("sonnet".into()))
+        .await
+        .unwrap();
+    harness.session.set_effort("low".into()).await.unwrap();
+    let applied = harness.session.applied_settings().await.unwrap();
+    assert_eq!(applied.model.as_deref(), Some("claude-sonnet-5"));
+    assert_eq!(applied.effort.as_deref(), Some("low"));
 
     let usage = harness.session.usage().await.unwrap();
     assert!(usage.rate_limits_available);
@@ -227,6 +259,27 @@ async fn basic_turns_and_usage() {
         .unwrap();
     harness.until_result().await;
     harness.finish().await;
+}
+
+#[tokio::test]
+async fn settings_and_context_replies_are_not_emitted() {
+    let mut harness = Harness::start(&recording("basic"));
+    harness
+        .until_host(|host| matches!(host, HostEvent::Catalog { .. }))
+        .await;
+    harness.session.applied_settings().await.unwrap();
+    harness.session.context_usage().await.unwrap();
+    harness.session.stop().await;
+    loop {
+        let event = harness.next().await;
+        if let EventBody::Line(line) = &event.body {
+            assert!(!line.raw.contains("\"applied\""), "emitted: {}", line.raw);
+            assert!(!line.raw.contains("totalTokens"), "emitted: {}", line.raw);
+        }
+        if matches!(event.body, EventBody::Host(HostEvent::ChildExited { .. })) {
+            break;
+        }
+    }
 }
 
 #[tokio::test]

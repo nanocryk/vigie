@@ -3,8 +3,9 @@
 //! A recording is the spike driver's ndjson: one `{"t", "dir", "msg"}` per line,
 //! `out` for CLI stdout, `in` for CLI stdin, `note` for annotations. `out`
 //! lines are written as recorded; an `in` line blocks until the host sends a
-//! matching line. Unscripted `get_usage` and `get_context_usage` requests are
-//! answered without consuming the script.
+//! matching line. Unscripted `get_usage`, `get_context_usage`, `get_settings`,
+//! `set_model` and `apply_flag_settings` requests are answered without
+//! consuming the script.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -90,6 +91,9 @@ pub struct Options {
     /// Sets `current_permission_mode` in the answer to the `initialize` request,
     /// as the CLI reports its `--permission-mode`.
     pub permission_mode: Option<String>,
+    /// `--model` and `--effort`, reported by `get_settings` until changed.
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 impl Default for Options {
@@ -98,6 +102,8 @@ impl Default for Options {
             pace: Pace::Instant,
             session_id: None,
             permission_mode: None,
+            model: None,
+            effort: None,
         }
     }
 }
@@ -165,6 +171,64 @@ const PROMPT_KEYS: [&str; 3] = [
 
 fn is_get_context_usage(msg: &Value) -> bool {
     is_control_request(msg) && msg["request"]["subtype"] == "get_context_usage"
+}
+
+fn is_settings_change(msg: &Value) -> bool {
+    is_control_request(msg)
+        && (msg["request"]["subtype"] == "set_model"
+            || msg["request"]["subtype"] == "apply_flag_settings")
+}
+
+fn is_get_settings(msg: &Value) -> bool {
+    is_control_request(msg) && msg["request"]["subtype"] == "get_settings"
+}
+
+/// Model the replay reports applying when no `--model` or `set_model` chose one.
+pub const CANNED_DEFAULT_MODEL: &str = "claude-opus-5-5[1m]";
+/// Effort the replay reports applying when no `--effort` or effort change chose one.
+pub const CANNED_DEFAULT_EFFORT: &str = "medium";
+
+/// The model and effort the replay reports applying, following `--model`,
+/// `--effort` and the settings changes the host sends.
+#[derive(Debug, Clone)]
+struct FakeSettings {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+impl FakeSettings {
+    fn new(options: &Options) -> Self {
+        Self {
+            model: options.model.clone(),
+            effort: options.effort.clone(),
+        }
+    }
+
+    fn apply(&mut self, msg: &Value) {
+        let request = &msg["request"];
+        if request["subtype"] == "set_model" {
+            self.model = request["model"].as_str().map(str::to_string);
+        } else if let Some(effort) = request["settings"]["effortLevel"].as_str() {
+            self.effort = Some(effort.to_string());
+        }
+    }
+
+    /// A hand-written `get_settings` reply, the CLI's aliases resolved as the
+    /// `basic` recording's `initialize` lists them.
+    fn reply(&self) -> Value {
+        let model = match self.model.as_deref() {
+            None | Some("default" | "opus") => CANNED_DEFAULT_MODEL,
+            Some("sonnet") => "claude-sonnet-5",
+            Some("haiku") => "claude-haiku-4-5-20251001",
+            Some(other) => other,
+        };
+        let effort = self.effort.as_deref().unwrap_or(CANNED_DEFAULT_EFFORT);
+        serde_json::json!({
+            "effective": {},
+            "sources": [],
+            "applied": {"model": model, "effort": effort},
+        })
+    }
 }
 
 fn prompt_tokens(usage: &Value) -> u64 {
@@ -288,6 +352,7 @@ where
     let mut request_ids: HashMap<String, String> = HashMap::new();
     let mut clock = 0;
     let mut last_usage: Option<Value> = None;
+    let mut settings = FakeSettings::new(options);
     let initialize = initialize_ids(recording);
     for step in &recording.steps {
         match step.dir {
@@ -327,7 +392,10 @@ where
                 };
                 match accept(step, got, &mut request_ids) {
                     Ok(()) => break,
-                    Err(err) => answer_unscripted_or(err, last_usage.as_ref(), &mut output).await?,
+                    Err(err) => {
+                        answer_unscripted_or(err, last_usage.as_ref(), &mut settings, &mut output)
+                            .await?
+                    }
                 }
             },
         }
@@ -336,16 +404,17 @@ where
     output.flush().await?;
     while let Some(got) = next_line(&mut host_lines).await? {
         let err = ReplayError::AfterEnd { got: got.clone() };
-        answer_unscripted_or(err, last_usage.as_ref(), &mut output).await?;
+        answer_unscripted_or(err, last_usage.as_ref(), &mut settings, &mut output).await?;
     }
     Ok(())
 }
 
-/// Answers an unscripted `get_usage` or `get_context_usage` request; any other
-/// unexpected line is `err`.
+/// Answers an unscripted `get_usage`, `get_context_usage`, `get_settings`,
+/// `set_model` or `apply_flag_settings` request; any other unexpected line is `err`.
 async fn answer_unscripted_or<W: AsyncWrite + Unpin>(
     err: ReplayError,
     last_usage: Option<&Value>,
+    settings: &mut FakeSettings,
     output: &mut W,
 ) -> Result<(), ReplayError> {
     let got = match &err {
@@ -359,6 +428,17 @@ async fn answer_unscripted_or<W: AsyncWrite + Unpin>(
         Ok(msg) if is_get_context_usage(&msg) => {
             let reply = success_response(&msg["request_id"], canned_context_usage(last_usage));
             write_line(output, &reply).await
+        }
+        Ok(msg) if is_get_settings(&msg) => {
+            write_line(
+                output,
+                &success_response(&msg["request_id"], settings.reply()),
+            )
+            .await
+        }
+        Ok(msg) if is_settings_change(&msg) => {
+            settings.apply(&msg);
+            write_line(output, &success_response(&msg["request_id"], Value::Null)).await
         }
         _ => Err(err),
     }
@@ -659,7 +739,7 @@ mod tests {
         let options = Options {
             pace: Pace::Instant,
             session_id: Some("host-session".into()),
-            permission_mode: None,
+            ..Options::default()
         };
         let rewrite_out = |msg: &Value| {
             let mut msg = msg.clone();
@@ -753,6 +833,52 @@ mod tests {
             29_004
         );
         host.finish().await.expect("replay failed");
+    }
+
+    fn control(request_id: &str, request: Value) -> Value {
+        serde_json::json!({"type": "control_request", "request_id": request_id,
+            "request": request})
+    }
+
+    async fn applied(host: &mut Host, request_id: &str) -> Value {
+        host.send(&control(
+            request_id,
+            serde_json::json!({"subtype": "get_settings"}),
+        ))
+        .await;
+        let reply = host.receive().await.expect("settings answer");
+        assert_eq!(reply["response"]["request_id"], request_id);
+        reply["response"]["response"]["applied"].clone()
+    }
+
+    #[tokio::test]
+    async fn unscripted_get_settings_follows_the_launch_flags_and_changes() {
+        let options = Options {
+            effort: Some("high".into()),
+            ..Options::default()
+        };
+        let mut host = Host::start_with(recording("basic"), options);
+        assert_eq!(
+            applied(&mut host, "s1").await,
+            serde_json::json!({"model": CANNED_DEFAULT_MODEL, "effort": "high"})
+        );
+        host.send(&control(
+            "m1",
+            serde_json::json!({"subtype": "set_model", "model": "sonnet"}),
+        ))
+        .await;
+        host.receive().await.expect("set_model answer");
+        host.send(&control(
+            "e1",
+            serde_json::json!({"subtype": "apply_flag_settings",
+                "settings": {"effortLevel": "low"}}),
+        ))
+        .await;
+        host.receive().await.expect("apply_flag_settings answer");
+        assert_eq!(
+            applied(&mut host, "s2").await,
+            serde_json::json!({"model": "claude-sonnet-5", "effort": "low"})
+        );
     }
 
     #[tokio::test]

@@ -77,6 +77,7 @@ async fn run(
     let mut devices = auth.subscribe_changes();
     let mut changes = manager.subscribe_changes();
     let mut usage_changes = manager.subscribe_usage();
+    let mut catalog_changes = manager.subscribe_catalog();
     let result = loop {
         tokio::select! {
             frame = socket.recv() => match frame {
@@ -119,6 +120,14 @@ async fn run(
             change = usage_changes.recv() => match change {
                 Ok(()) | Err(RecvError::Lagged(_)) => {
                     if let Err(err) = send(&mut socket, &ServerMessage::UsageChanged).await {
+                        break Err(err);
+                    }
+                }
+                Err(RecvError::Closed) => break Ok(()),
+            },
+            change = catalog_changes.recv() => match change {
+                Ok(()) | Err(RecvError::Lagged(_)) => {
+                    if let Err(err) = send(&mut socket, &ServerMessage::CatalogChanged).await {
                         break Err(err);
                     }
                 }
@@ -250,6 +259,15 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             let result = manager.set_permission_mode(session, mode).await;
             (client_id, result)
         }
+        ClientMessage::SetSettings {
+            session,
+            model,
+            effort,
+            client_id,
+        } => (
+            client_id,
+            manager.set_settings(session, model, effort).await,
+        ),
         ClientMessage::Restart {
             session,
             mode,

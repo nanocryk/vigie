@@ -1,5 +1,5 @@
 // Mirror of `src/wire.rs`: the websocket protocol at `api/ws` and the bodies of
-// `api/sessions`, and the part of `api/usage` the app reads. Envelopes are validated strictly; CLI lines and host events of
+// `api/sessions` and `api/catalog`, and the part of `api/usage` the app reads. Envelopes are validated strictly; CLI lines and host events of
 // unknown shape are kept as raw values instead of failing.
 
 export type GateFailure =
@@ -33,6 +33,41 @@ export interface SessionView {
   context: ContextView | null;
   /** Null while the discussion is not archived. */
   archived_at: string | null;
+  /** Stored model and effort every launch passes; null lets the CLI pick. */
+  model: string | null;
+  effort: string | null;
+  /** When a model or effort change made the cache count cold; null once a main request or a restart followed. */
+  settings_changed_at: string | null;
+  /** What the CLI last reported applying, e.g. `claude-opus-5-5[1m]` and `medium`; null while unknown. */
+  applied_model: string | null;
+  applied_effort: string | null;
+}
+
+/** A model the CLI accepts; `effort_levels` is empty for one without effort. */
+export interface ModelChoice {
+  value: string;
+  /** The model id `value` stands for, e.g. `claude-opus-5-5` for `default`. */
+  resolved_model: string | null;
+  display_name: string;
+  description: string | null;
+  effort_levels: string[];
+}
+
+/** A slash command or skill; `argument_hint` is empty for one without arguments. */
+export interface CommandInfo {
+  name: string;
+  description: string;
+  argument_hint: string;
+}
+
+/** `GET api/catalog`: what all discussions share; a field is null until a Claude start reported it. */
+export interface SharedCatalog {
+  models: ModelChoice[] | null;
+  commands: CommandInfo[] | null;
+  /** Commands that only work in the terminal. */
+  terminal_commands: string[] | null;
+  /** What the CLI applies with no model and no effort picked. */
+  defaults: { model: string | null; effort: string | null } | null;
 }
 
 /** Prompt cache of the main conversation: cold `ttl_secs` after `last_request_at`. */
@@ -103,12 +138,20 @@ export type ClientMessage =
       client_id: string;
     }
   | { type: "set_permission_mode"; session: string; mode: string; client_id: string }
+  | {
+      type: "set_settings";
+      session: string;
+      /** Absent keeps the setting; null lets the CLI pick. */
+      model?: string | null;
+      effort?: string | null;
+      client_id: string;
+    }
   | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string }
   | { type: "kill"; session: string; client_id: string }
   | { type: "archive"; session: string; client_id: string }
   | { type: "restore"; session: string; client_id: string };
 
-export type RestartMode = "continue" | "blank";
+export type RestartMode = "continue" | "blank" | "clear";
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
 
@@ -145,6 +188,7 @@ export type HostEvent =
       /** The seed the first message of a continue starts with; null for blank. */
       seed: string | null;
     }
+  | { event: "catalog"; models: ModelChoice[]; commands: CommandInfo[] }
   | { event: "unknown"; raw: unknown };
 
 export type WireEvent =
@@ -156,6 +200,7 @@ export type ServerMessage =
   | { type: "ack"; client_id: string; ok: boolean; error: string | null }
   | { type: "sessions_changed" }
   | { type: "usage_changed" }
+  | { type: "catalog_changed" }
   | { type: "error"; message: string; session: string | null };
 
 export function isRecord(raw: unknown): raw is Record<string, unknown> {
@@ -260,6 +305,11 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     cache: parseCache(value["cache"], `${label}.cache`),
     context: parseContext(value["context"], `${label}.context`),
     archived_at: optStr(value, "archived_at", label),
+    model: optStr(value, "model", label),
+    effort: optStr(value, "effort", label),
+    settings_changed_at: optStr(value, "settings_changed_at", label),
+    applied_model: optStr(value, "applied_model", label),
+    applied_effort: optStr(value, "applied_effort", label),
   };
 }
 
@@ -328,6 +378,36 @@ export function parseUsageSnapshot(raw: unknown, label: string): UsageSnapshot {
     newest_reading: optStr(value, "newest_reading", label),
     five_hour: parseWindowReport(value["five_hour"], `${label}.five_hour`),
     seven_day: parseWindowReport(value["seven_day"], `${label}.seven_day`),
+  };
+}
+
+/** Entries of unexpected shape are left out, as in a `catalog` event. */
+export function parseSharedCatalog(raw: unknown, label: string): SharedCatalog {
+  const value = record(raw, label);
+  const list = <T,>(key: string, parse: (entry: unknown) => T | null): T[] | null => {
+    const entries = value[key];
+    if (entries === undefined || entries === null) return null;
+    if (!Array.isArray(entries)) fail(`${label}.${key}`, "expected an array", entries);
+    return entries.flatMap((entry: unknown) => {
+      const parsed = parse(entry);
+      return parsed === null ? [] : [parsed];
+    });
+  };
+  const rawDefaults = value["defaults"];
+  const defaultsLabel = `${label}.defaults`;
+  const defaults =
+    rawDefaults === undefined || rawDefaults === null ? null : record(rawDefaults, defaultsLabel);
+  return {
+    models: list("models", parseModelChoice),
+    commands: list("commands", parseCommandInfo),
+    terminal_commands: list("terminal_commands", stringOrNull),
+    defaults:
+      defaults === null
+        ? null
+        : {
+            model: optStr(defaults, "model", defaultsLabel),
+            effort: optStr(defaults, "effort", defaultsLabel),
+          },
   };
 }
 
@@ -416,7 +496,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
       const exchanges = raw["exchanges"];
       const total = raw["total_exchanges"];
       if (
-        (mode !== "continue" && mode !== "blank") ||
+        (mode !== "continue" && mode !== "blank" && mode !== "clear") ||
         typeof exchanges !== "number" ||
         typeof total !== "number"
       ) {
@@ -430,9 +510,53 @@ export function parseHostEvent(raw: unknown): HostEvent {
         seed: text("seed"),
       };
     }
+    case "catalog": {
+      const models = raw["models"];
+      const commands = raw["commands"];
+      if (!Array.isArray(models) || !Array.isArray(commands)) return { event: "unknown", raw };
+      return {
+        event: "catalog",
+        models: models.flatMap((model: unknown) => {
+          const parsed = parseModelChoice(model);
+          return parsed === null ? [] : [parsed];
+        }),
+        commands: commands.flatMap((command: unknown) => {
+          const parsed = parseCommandInfo(command);
+          return parsed === null ? [] : [parsed];
+        }),
+      };
+    }
     default:
       return { event: "unknown", raw };
   }
+}
+
+/** Null for an entry of unexpected shape, which the catalog then leaves out. */
+function parseModelChoice(raw: unknown): ModelChoice | null {
+  if (!isRecord(raw)) return null;
+  const value = stringOrNull(raw["value"]);
+  if (value === null) return null;
+  const levels = raw["effort_levels"];
+  return {
+    value,
+    resolved_model: stringOrNull(raw["resolved_model"]),
+    display_name: stringOrNull(raw["display_name"]) ?? value,
+    description: stringOrNull(raw["description"]),
+    effort_levels: Array.isArray(levels)
+      ? levels.filter((level): level is string => typeof level === "string")
+      : [],
+  };
+}
+
+function parseCommandInfo(raw: unknown): CommandInfo | null {
+  if (!isRecord(raw)) return null;
+  const name = stringOrNull(raw["name"]);
+  if (name === null) return null;
+  return {
+    name,
+    description: stringOrNull(raw["description"]) ?? "",
+    argument_hint: stringOrNull(raw["argument_hint"]) ?? "",
+  };
 }
 
 export function parseServerMessage(raw: unknown, label: string): ServerMessage {
@@ -461,6 +585,7 @@ export function parseServerMessage(raw: unknown, label: string): ServerMessage {
       };
     case "sessions_changed":
     case "usage_changed":
+    case "catalog_changed":
       return { type };
     case "error":
       return {
@@ -506,7 +631,13 @@ export type CliLine =
     }
   | { type: "stream_event"; parentToolUseId: string | null; event: StreamEvent }
   | { type: "result"; subtype: string; isError: boolean }
-  | { type: "system"; subtype: string; permissionMode: string | null }
+  | {
+      type: "system";
+      subtype: string;
+      permissionMode: string | null;
+      /** `terminal_slash_commands` of an `init`: commands that only work in the TUI. Null when absent. */
+      terminalCommands: string[] | null;
+    }
   | {
       type: "can_use_tool";
       requestId: string;
@@ -635,9 +766,17 @@ export function parseCliLine(raw: unknown): CliLine {
     }
     case "system": {
       const subtype = stringOrNull(raw["subtype"]);
+      const terminal = raw["terminal_slash_commands"];
       return subtype === null
         ? { type: "raw", raw }
-        : { type: "system", subtype, permissionMode: stringOrNull(raw["permissionMode"]) };
+        : {
+            type: "system",
+            subtype,
+            permissionMode: stringOrNull(raw["permissionMode"]),
+            terminalCommands: Array.isArray(terminal)
+              ? terminal.filter((name): name is string => typeof name === "string")
+              : null,
+          };
     }
     case "control_request": {
       const requestId = stringOrNull(raw["request_id"]);

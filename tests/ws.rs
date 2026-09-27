@@ -23,6 +23,7 @@ use uuid::Uuid;
 use vigie2::auth::{self, Auth, Device, Registry};
 use vigie2::child::Program;
 use vigie2::manager::SessionManager;
+use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::server::{AppState, build_app};
 use vigie2::session::{Answer, Event, EventBody, Line, RestartMode};
 use vigie2::store::{EventKind, SessionState, Store};
@@ -196,6 +197,7 @@ impl Server {
             errors: Vec::new(),
             sessions_changed: 0,
             usage_changed: 0,
+            catalog_changed: 0,
         })
     }
 }
@@ -227,6 +229,7 @@ struct Client {
     errors: Vec<(String, Option<Uuid>)>,
     sessions_changed: usize,
     usage_changed: usize,
+    catalog_changed: usize,
 }
 
 impl Client {
@@ -277,6 +280,7 @@ impl Client {
             }
             ServerMessage::SessionsChanged => self.sessions_changed += 1,
             ServerMessage::UsageChanged => self.usage_changed += 1,
+            ServerMessage::CatalogChanged => self.catalog_changed += 1,
             ServerMessage::Error { message, session } => self.errors.push((message, session)),
         }
     }
@@ -1070,6 +1074,241 @@ async fn a_restart_or_a_send_unarchives() {
     assert!(server.manager.live(refused).await.is_none());
 }
 
+fn set_settings(
+    session: Uuid,
+    model: Option<Option<&str>>,
+    effort: Option<Option<&str>>,
+    client_id: &str,
+) -> ClientMessage {
+    ClientMessage::SetSettings {
+        session,
+        model: model.map(|model| model.map(str::to_owned)),
+        effort: effort.map(|effort| effort.map(str::to_owned)),
+        client_id: client_id.into(),
+    }
+}
+
+/// SCRIPT without its permission mode change.
+fn script_without_mode_change() -> String {
+    SCRIPT
+        .lines()
+        .filter(|line| !line.contains("mode-1"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn set_settings_reads_absent_and_null_fields_apart() {
+    let absent: ClientMessage = serde_json::from_value(json!({"type": "set_settings",
+        "session": Uuid::nil(), "effort": "high", "client_id": "c"}))
+    .unwrap();
+    assert_eq!(
+        absent,
+        set_settings(Uuid::nil(), None, Some(Some("high")), "c")
+    );
+    let null: ClientMessage = serde_json::from_value(json!({"type": "set_settings",
+        "session": Uuid::nil(), "model": null, "client_id": "c"}))
+    .unwrap();
+    assert_eq!(null, set_settings(Uuid::nil(), Some(None), None, "c"));
+}
+
+#[tokio::test]
+async fn a_changed_model_refuses_a_plain_send_and_takes_a_rewarm_one() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+    client.until(|event| host_event(event, "started")).await;
+    assert_eq!(
+        client
+            .command_announced(
+                &set_settings(id, Some(Some("sonnet")), None, "settings-1"),
+                "settings-1"
+            )
+            .await,
+        (true, None)
+    );
+    let view = server.view(id).await;
+    assert_eq!(view.model.as_deref(), Some("sonnet"));
+    assert_eq!(view.effort, None);
+    assert!(view.settings_changed_at.is_some());
+    assert!(view.live, "a live child keeps running on the new model");
+    assert_eq!(view.applied_model.as_deref(), Some("claude-sonnet-5"));
+    assert_eq!(view.applied_effort.as_deref(), Some("medium"));
+
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, cold());
+    client.send(&say(id, "hello", true, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+    client.until(|event| host_event(event, "ask_queued")).await;
+
+    client
+        .send(&set_settings(id, Some(Some("sonnet")), None, "settings-2"))
+        .await;
+    assert_eq!(client.ack("settings-2").await, (true, None));
+    client
+        .send(&set_settings(id, None, Some(Some("extreme")), "settings-3"))
+        .await;
+    let (ok, error) = client.ack("settings-3").await;
+    assert!(!ok);
+    assert!(error.unwrap().contains("unknown effort level"));
+}
+
+#[tokio::test]
+async fn unchanged_settings_keep_sends_allowed() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client
+        .send(&set_settings(id, Some(None), Some(None), "settings-1"))
+        .await;
+    assert_eq!(client.ack("settings-1").await, (true, None));
+    let view = server.view(id).await;
+    assert_eq!(view.settings_changed_at, None);
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+}
+
+#[tokio::test]
+async fn a_settings_change_interrupts_the_running_turn() {
+    let server = Server::start(&script_without_mode_change()).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+    client.until(|event| host_event(event, "ask_queued")).await;
+    client.send(&allow(id, "ask-1", "answer-1")).await;
+    assert_eq!(client.ack("answer-1").await, (true, None));
+    client.until(|event| result_line(event, "success")).await;
+    client.send(&say(id, "count", false, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+    client
+        .until(|event| event.payload == json!({"type": "noise", "n": 3}))
+        .await;
+
+    client
+        .send(&set_settings(id, None, Some(Some("max")), "settings-1"))
+        .await;
+    assert_eq!(client.ack("settings-1").await, (true, None));
+    client
+        .until(|event| result_line(event, "error_during_execution"))
+        .await;
+    assert_eq!(server.view(id).await.effort.as_deref(), Some("max"));
+}
+
+#[tokio::test]
+async fn stored_settings_are_passed_at_launch() {
+    let server = Server::start(SCRIPT).await;
+    let id = server
+        .seed_session(Utc::now() - TimeDelta::minutes(5), None)
+        .await;
+    let mut client = server.client().await;
+    assert_eq!(
+        client
+            .command_announced(
+                &set_settings(id, Some(Some("sonnet")), Some(Some("max")), "settings-1"),
+                "settings-1"
+            )
+            .await,
+        (true, None)
+    );
+    assert!(
+        server.manager.live(id).await.is_none(),
+        "storing settings spawned"
+    );
+    let stopped_at = server.view(id).await.last_seq;
+    client.send(&subscribe(id, stopped_at)).await;
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, cold());
+    client.send(&say(id, "hello", true, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+    client.until(|event| host_event(event, "ask_queued")).await;
+    client.send(&kill(id, "kill-1")).await;
+    assert_eq!(client.ack("kill-1").await, (true, None));
+    let exited = client
+        .until(|event| host_event(event, "child_exited"))
+        .await;
+    let args = client.events[exited].payload["stderr_tail"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|line| line.starts_with("fake-claude args:"))
+        .expect("the fake reports its flags")
+        .to_string();
+    assert!(args.contains("--model sonnet --effort max"), "{args}");
+    let view = server.view(id).await;
+    assert_eq!(view.model.as_deref(), Some("sonnet"));
+    assert_eq!(view.effort.as_deref(), Some("max"));
+}
+
+#[tokio::test]
+async fn clear_restarts_blank_whatever_the_cache() {
+    let server = Server::start(SCRIPT).await;
+    let id = server
+        .seed_session(Utc::now() - TimeDelta::hours(2), None)
+        .await;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, cold());
+    client
+        .send(&ClientMessage::Restart {
+            session: id,
+            mode: RestartMode::Clear,
+            text: None,
+            client_id: "clear-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("clear-1").await, (true, None));
+    let restarted = client.until(|event| host_event(event, "restarted")).await;
+    assert_eq!(client.events[restarted].payload["mode"], "clear");
+    assert_eq!(client.events[restarted].payload.get("seed"), None);
+    assert!(server.manager.live(id).await.is_none());
+    client.send(&say(id, "hello", false, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+}
+
+#[tokio::test]
+async fn a_restart_starts_on_the_stored_settings_and_ends_the_settings_change() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client
+        .send(&set_settings(id, Some(Some("haiku")), None, "settings-1"))
+        .await;
+    assert_eq!(client.ack("settings-1").await, (true, None));
+    assert!(server.view(id).await.settings_changed_at.is_some());
+    client
+        .send(&ClientMessage::Restart {
+            session: id,
+            mode: RestartMode::Blank,
+            text: Some("hello".into()),
+            client_id: "restart-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("restart-1").await, (true, None));
+    let view = server.view(id).await;
+    assert_eq!(view.settings_changed_at, None);
+    assert_eq!(view.model.as_deref(), Some("haiku"));
+    let session = server
+        .manager
+        .live(id)
+        .await
+        .expect("launched with the text");
+    session.stop().await;
+    let row = server.manager.store().session(id).await.unwrap().unwrap();
+    let events = server.manager.events_after(id, 0, u32::MAX).await.unwrap();
+    let exit = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == EventKind::Host && event.payload.contains("child_exited"))
+        .expect("the child exited");
+    assert!(exit.payload.contains("--model haiku"), "{}", exit.payload);
+    assert!(row.last_seq >= exit.seq);
+}
+
 #[tokio::test]
 async fn warm_and_new_discussions_take_a_message_without_rewarm() {
     let server = Server::start(SCRIPT).await;
@@ -1090,4 +1329,43 @@ async fn warm_and_new_discussions_take_a_message_without_rewarm() {
         client.send(&say(id, "hello", false, &client_id)).await;
         assert_eq!(client.ack(&client_id).await, (true, None), "{index}");
     }
+}
+
+/// Initialization with a catalog; the fake then waits for stdin to close.
+const CATALOG_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}, "models": [{"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5"}], "commands": [{"name": "review"}]}}}}
+"#;
+
+#[tokio::test]
+async fn the_shared_catalog_is_served_and_announced() {
+    let server = Server::start(CATALOG_SCRIPT).await;
+    let mut client = server.client().await;
+    let (status, body) = server
+        .request(Method::GET, "/vigie2/api/catalog", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"models": null, "commands": null, "terminal_commands": null, "defaults": null})
+    );
+    server.create_session().await;
+    let body = loop {
+        client.pump().await;
+        if client.catalog_changed == 0 {
+            continue;
+        }
+        let (_, body) = server
+            .request(Method::GET, "/vigie2/api/catalog", None)
+            .await;
+        if !body["models"].is_null() && !body["defaults"].is_null() {
+            break body;
+        }
+    };
+    assert_eq!(body["models"][0]["value"], "opus");
+    assert_eq!(body["commands"][0]["name"], "review");
+    assert_eq!(
+        body["defaults"],
+        json!({"model": CANNED_DEFAULT_MODEL, "effort": CANNED_DEFAULT_EFFORT})
+    );
 }

@@ -446,6 +446,68 @@ describe("restarts", () => {
       "Restarted: 5 exchanges given as context",
     );
   });
+
+  it("a clear shows a Cleared divider", () => {
+    const state = applyEvents(emptyTranscript, [
+      event(1, "host", { event: "restarted", mode: "clear", exchanges: 0, total_exchanges: 3 }),
+    ]);
+    expect(state.items.map(shape)).toEqual([["restart", "Cleared", null]]);
+  });
+});
+
+describe("catalog", () => {
+  const host = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "host",
+    payload: parseHostEvent(payload),
+  });
+
+  it("keeps the latest catalog and the terminal-only commands of the latest init", () => {
+    expect(emptyTranscript.catalog).toBeNull();
+    const first = host(1, {
+      event: "catalog",
+      models: [
+        {
+          value: "opus",
+          resolved_model: "claude-opus-5-5",
+          display_name: "Opus 5.5",
+          effort_levels: ["low", 3],
+        },
+        { bad: 1 },
+      ],
+      commands: [{ name: "canif", description: "Use canif." }],
+    });
+    const state = applyEvents(emptyTranscript, [first]);
+    expect(state.catalog).toEqual({
+      models: [
+        {
+          value: "opus",
+          resolved_model: "claude-opus-5-5",
+          display_name: "Opus 5.5",
+          description: null,
+          effort_levels: ["low"],
+        },
+      ],
+      commands: [{ name: "canif", description: "Use canif.", argument_hint: "" }],
+    });
+    const second = host(2, { event: "catalog", models: [], commands: [] });
+    const init: WireEvent = {
+      session: SESSION,
+      seq: 3,
+      time: "t",
+      kind: "line",
+      payload: { type: "system", subtype: "init", terminal_slash_commands: ["doctor", "color"] },
+    };
+    const later = applyEvents(state, [second, init]);
+    expect(later.catalog).toEqual({ models: [], commands: [] });
+    expect(later.terminalCommands).toEqual(["doctor", "color"]);
+  });
+
+  it("reads the recorded init's terminal-only commands", () => {
+    expect(transcript("basic").terminalCommands).toContain("doctor");
+  });
 });
 
 describe("streaming", () => {
