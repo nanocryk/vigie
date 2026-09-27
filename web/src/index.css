@@ -467,7 +467,7 @@
 
 /* Recursive stays monospaced everywhere; voices vary only casualness (CASL 0 crisp to 1 casual) and weight. */
 @utility voice-prose {
-  --casl: 0.5;
+  --casl: 1;
   font-weight: 400;
 }
 
@@ -514,11 +514,13 @@
     @apply border-border outline-ring/50;
     font-variation-settings: "MONO" 1, "CASL" var(--casl);
   }
+  /* The reset gives these their own variation settings, dropping MONO; restate both axes. */
   code,
   kbd,
   pre,
   samp {
     @apply voice-code;
+    font-variation-settings: "MONO" 1, "CASL" var(--casl);
   }
   body {
     @apply bg-background text-foreground;
