@@ -158,6 +158,10 @@ fn line(event: &Event) -> Option<&Inbound> {
     }
 }
 
+fn is_user_echo(event: &Event) -> bool {
+    matches!(line(event), Some(Inbound::User(user)) if user.is_replay == Some(true))
+}
+
 fn is_text_delta(event: &Event) -> bool {
     matches!(
         line(event),
@@ -179,9 +183,26 @@ async fn basic_turns_and_usage() {
     ));
     harness
         .session
-        .send("Reply with exactly: ok")
+        .send("Reply with exactly: ok", Some("c1".into()))
         .await
         .unwrap();
+    let mut sent_seq = None;
+    let echo_seq = harness
+        .until(|event| match &event.body {
+            EventBody::Host(HostEvent::UserSent { text, client_id }) => {
+                assert!(sent_seq.is_none(), "user_sent emitted twice");
+                assert_eq!(text, "Reply with exactly: ok");
+                assert_eq!(client_id.as_deref(), Some("c1"));
+                sent_seq = Some(event.seq);
+                None
+            }
+            _ => is_user_echo(event).then_some(event.seq),
+        })
+        .await;
+    assert!(
+        sent_seq.is_some_and(|seq| seq < echo_seq),
+        "user_sent must precede the echo"
+    );
     let result = harness.until_result().await;
     assert_eq!(result.result.as_deref(), Some("ok"));
     assert_eq!(*harness.session.activity().borrow(), Activity::Idle);
@@ -191,7 +212,7 @@ async fn basic_turns_and_usage() {
 
     harness
         .session
-        .send("Reply with exactly: ok again")
+        .send("Reply with exactly: ok again", None)
         .await
         .unwrap();
     harness.until_result().await;
@@ -203,7 +224,10 @@ async fn permissions_deny_and_question_answer() {
     let mut harness = Harness::start(&recording("permissions"));
     harness
         .session
-        .send("Use the Bash tool to run exactly: echo spike-allow. Then reply done.")
+        .send(
+            "Use the Bash tool to run exactly: echo spike-allow. Then reply done.",
+            None,
+        )
         .await
         .unwrap();
     harness.until_result().await;
@@ -213,6 +237,7 @@ async fn permissions_deny_and_question_answer() {
         .send(
             "Use the Write tool to create denied.txt containing x. If refused, reply refused \
              and do not retry.",
+            None,
         )
         .await
         .unwrap();
@@ -256,6 +281,7 @@ async fn permissions_deny_and_question_answer() {
         .send(
             "Call the AskUserQuestion tool once, with the single question 'Pick a color?' and \
              the options red and blue. Then reply with the answer you got.",
+            None,
         )
         .await
         .unwrap();
@@ -277,7 +303,10 @@ async fn interrupt_while_streaming_and_during_a_tool() {
     let mut harness = Harness::start(&recording("interrupt"));
     harness
         .session
-        .send("Write the numbers from 1 to 400, one per line, nothing else.")
+        .send(
+            "Write the numbers from 1 to 400, one per line, nothing else.",
+            None,
+        )
         .await
         .unwrap();
     harness
@@ -293,6 +322,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
         .send(
             "Use the Bash tool to run exactly: python -c \"import time; time.sleep(60)\". Run it \
              in the foreground. Then reply done.",
+            None,
         )
         .await
         .unwrap();
@@ -314,7 +344,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
 
     harness
         .session
-        .send("Reply with exactly: ok")
+        .send("Reply with exactly: ok", None)
         .await
         .unwrap();
     let result = harness.until_result().await;
@@ -330,6 +360,7 @@ async fn background_task_starts_its_own_turn() {
         .send(
             "Use the Bash tool with run_in_background set to true to run exactly: sleep 8 && \
              echo bg-done. Reply started, without waiting for it.",
+            None,
         )
         .await
         .unwrap();
@@ -349,7 +380,7 @@ async fn assert_gate_fails(harness: &mut Harness, expected: GateFailure) {
     tokio::time::timeout(TIMEOUT, harness.session.closed())
         .await
         .expect("session still open");
-    assert!(harness.session.send("more").await.is_err());
+    assert!(harness.session.send("more", None).await.is_err());
 }
 
 #[tokio::test]
@@ -361,7 +392,7 @@ async fn gate_rejects_a_non_first_party_account() {
         }
     });
     let mut harness = Harness::start(&path);
-    let sent = harness.session.send("Reply with exactly: ok").await;
+    let sent = harness.session.send("Reply with exactly: ok", None).await;
     assert!(sent.is_err(), "user text sent before the gate passed");
     assert_gate_fails(
         &mut harness,
@@ -383,7 +414,7 @@ async fn gate_rejects_api_key_billing() {
     let mut harness = Harness::start(&path);
     harness
         .session
-        .send("Reply with exactly: ok")
+        .send("Reply with exactly: ok", None)
         .await
         .unwrap();
     assert_gate_fails(
@@ -409,6 +440,7 @@ async fn gate_rejects_overage_use() {
         .send(
             "Use the Bash tool with run_in_background set to true to run exactly: sleep 8 && \
              echo bg-done. Reply started, without waiting for it.",
+            None,
         )
         .await
         .unwrap();
@@ -430,6 +462,7 @@ async fn gate_rejects_an_overage_limit() {
         .send(
             "Use the Bash tool with run_in_background set to true to run exactly: sleep 8 && \
              echo bg-done. Reply started, without waiting for it.",
+            None,
         )
         .await
         .unwrap();

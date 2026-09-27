@@ -161,7 +161,7 @@ async fn basic_run_is_persisted_with_usage_samples() {
     let id = session.id();
     let mut events = session.subscribe();
 
-    session.send("Reply with exactly: ok").await.unwrap();
+    session.send("Reply with exactly: ok", None).await.unwrap();
     until_result(&mut events).await;
     // The fake expects its scripted `get_usage` before the next message.
     let sample = tokio::time::timeout(TIMEOUT, async {
@@ -178,7 +178,10 @@ async fn basic_run_is_persisted_with_usage_samples() {
     let response: Value = serde_json::from_str(&sample.response).unwrap();
     assert_eq!(response["rate_limits_available"], true);
 
-    session.send("Reply with exactly: ok again").await.unwrap();
+    session
+        .send("Reply with exactly: ok again", None)
+        .await
+        .unwrap();
     until_result(&mut events).await;
     stop(&session).await;
     manager.shutdown().await.unwrap();

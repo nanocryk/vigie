@@ -10,10 +10,11 @@ const SESSION = "00000000-0000-0000-0000-000000000001";
 
 /**
  * Turns a spike recording into the events the server would send: every `out`
- * line, plus the `ask_queued` and `ask_resolved` host events the session emits
- * around a `can_use_tool` request and its answer.
+ * line, plus the host events the session emits: `user_sent` for each message
+ * written (unless `legacy`, history from before that event), and `ask_queued` /
+ * `ask_resolved` around a `can_use_tool` request and its answer.
  */
-function recordingEvents(name: string): WireEvent[] {
+function recordingEvents(name: string, legacy = false): WireEvent[] {
   const file = path.resolve(import.meta.dirname, "../../spike/runs", `${name}.ndjson`);
   const events: WireEvent[] = [];
   const queued = new Set<string>();
@@ -47,6 +48,11 @@ function recordingEvents(name: string): WireEvent[] {
           tool_use_id: request["tool_use_id"],
         });
       }
+    } else if (step["dir"] === "in" && msg["type"] === "user" && !legacy) {
+      const message = msg["message"];
+      const content = isRecord(message) ? message["content"] : undefined;
+      if (typeof content !== "string") throw new Error(`bad user step: ${text}`);
+      push("host", { event: "user_sent", text: content, client_id: `c${events.length}` });
     } else if (step["dir"] === "in" && msg["type"] === "control_response") {
       const response = msg["response"];
       const requestId = isRecord(response) ? response["request_id"] : undefined;
@@ -81,6 +87,10 @@ function shape(item: Item): Shape {
   }
 }
 
+function deliveries(items: readonly Item[]): string[] {
+  return items.flatMap((item) => (item.kind === "user" ? [item.delivery] : []));
+}
+
 function transcript(name: string) {
   return applyEvents(emptyTranscript, recordingEvents(name));
 }
@@ -96,6 +106,95 @@ describe("transcript from recordings", () => {
     ]);
     expect(state.items.every((item) => item.kind !== "claude" || !item.streaming)).toBe(true);
     expect(state.asks).toEqual([]);
+    expect(deliveries(state.items)).toEqual(["received", "received"]);
+    expect(state.outbox).toEqual([]);
+  });
+
+  it("basic: the bubble comes from user_sent and is on host until the echo", () => {
+    const events = recordingEvents("basic");
+    const sent = events.findIndex(
+      (event) => event.kind === "host" && event.payload.event === "user_sent",
+    );
+    const before = applyEvents(emptyTranscript, events.slice(0, sent + 1));
+    const bubble = before.items.at(-1);
+    expect(bubble).toMatchObject({
+      kind: "user",
+      text: "Reply with exactly: ok",
+      delivery: "on_host",
+      clientId: `c${sent}`,
+    });
+    const echo = events.findIndex(
+      (event) =>
+        event.kind === "line" && isRecord(event.payload) && event.payload["isReplay"] === true,
+    );
+    const pending = applyEvents(before, events.slice(sent + 1, echo));
+    expect(deliveries(pending.items)).toEqual(["on_host"]);
+    const received = applyEvents(pending, events.slice(echo, echo + 1));
+    expect(received.items).toHaveLength(pending.items.length);
+    expect(received.items.at(-1)).toMatchObject({ key: bubble?.key, delivery: "received" });
+  });
+
+  it("cd: a command the CLI answers locally is marked handled", () => {
+    const state = transcript("cd");
+    expect(state.items.map(shape)).toEqual([
+      ["user", "/cd C:\\Users\\user\\AppData\\Local\\Temp\\vigie2-spike\\spike-cd-target"],
+      ["claude", expect.stringContaining("/cd isn't available in this environment.")],
+      ["user", "Use the Bash tool to run exactly: pwd. Reply with its output."],
+      ["tool", "Bash", "pwd", "ok"],
+      ["thinking", ""],
+      ["claude", expect.stringContaining("/tmp/vigie2-spike/cwd")],
+    ]);
+    expect(deliveries(state.items)).toEqual(["handled", "received"]);
+    expect(state.outbox).toEqual([]);
+  });
+
+  it("legacy history without user_sent renders echoes as bubbles", () => {
+    const legacy = applyEvents(emptyTranscript, recordingEvents("interrupt", true));
+    const current = transcript("interrupt");
+    expect(legacy.items.map(shape)).toEqual(current.items.map(shape));
+    expect(deliveries(legacy.items)).toEqual(["received", "received", "received"]);
+    expect(legacy.items.filter((item) => item.kind === "user" && item.clientId !== null)).toEqual(
+      [],
+    );
+  });
+
+  it("a message sent during a turn is not taken as handled by that turn's end", () => {
+    const events = recordingEvents("basic");
+    const echo = events.findIndex(
+      (event) =>
+        event.kind === "line" && isRecord(event.payload) && event.payload["isReplay"] === true,
+    );
+    const midTurn = applyEvents(emptyTranscript, events.slice(0, echo + 1));
+    const queued = applyEvents(midTurn, [
+      {
+        session: SESSION,
+        seq: midTurn.lastSeq + 1,
+        time: "t",
+        kind: "host",
+        payload: { event: "user_sent", text: "queued", client_id: "q" },
+      },
+    ]);
+    const firstResult = events.findIndex(
+      (event) => event.kind === "line" && isRecord(event.payload) && event.payload["type"] === "result",
+    );
+    const shifted = events
+      .slice(echo + 1, firstResult + 1)
+      .map((event) => ({ ...event, seq: event.seq + 1 }));
+    const ended = applyEvents(queued, shifted);
+    const bubble = ended.items.find((item) => item.kind === "user" && item.clientId === "q");
+    expect(bubble).toMatchObject({ delivery: "on_host" });
+    const echoed = applyEvents(ended, [
+      {
+        session: SESSION,
+        seq: ended.lastSeq + 1,
+        time: "t",
+        kind: "line",
+        payload: { type: "user", message: { role: "user", content: "queued" }, isReplay: true },
+      },
+    ]);
+    expect(echoed.items.find((item) => item.kind === "user" && item.clientId === "q")).toMatchObject(
+      { delivery: "received" },
+    );
   });
 
   it("permissions: tool rows paired with their results, asks queued then resolved", () => {

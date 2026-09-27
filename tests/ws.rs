@@ -422,6 +422,19 @@ async fn two_clients_share_a_session_and_its_asks() {
     assert_eq!(first.ack("send-1").await, (true, None));
 
     let queued = first.until(|event| host_event(event, "ask_queued")).await;
+    let sent: Vec<&WireEvent> = first.events[..queued]
+        .iter()
+        .filter(|event| host_event(event, "user_sent"))
+        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].payload["text"], "hello");
+    assert_eq!(sent[0].payload["client_id"], "send-1");
+    let noise = first
+        .events
+        .iter()
+        .position(|event| event.payload == json!({"type": "noise", "n": 1}))
+        .expect("first CLI line after the message");
+    assert!(sent[0].seq < first.events[noise].seq);
     let request_id = first.events[queued].payload["request_id"]
         .as_str()
         .unwrap()

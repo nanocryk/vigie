@@ -10,8 +10,14 @@ import {
 
 export type ToolStatus = "running" | "ok" | "error" | "unfinished";
 
+/**
+ * `on_host`: written to the CLI, not echoed yet. `received`: the CLI echoed it.
+ * `handled`: the CLI answered without echoing it (a command it runs locally).
+ */
+export type Delivery = "on_host" | "received" | "handled";
+
 export type Item =
-  | { kind: "user"; key: string; text: string }
+  | { kind: "user"; key: string; text: string; delivery: Delivery; clientId: string | null }
   | { kind: "claude"; key: string; text: string; streaming: boolean }
   | { kind: "thinking"; key: string; text: string }
   | {
@@ -48,6 +54,19 @@ export interface TranscriptState {
   requests: ReadonlyMap<string, { toolName: string; input: unknown }>;
   /** An interrupt notice was added since the last `result`. */
   interrupted: boolean;
+  /** A turn has started and its `result` has not arrived. */
+  turnOpen: boolean;
+  /** User messages not echoed yet, oldest first. */
+  outbox: readonly Outgoing[];
+}
+
+interface Outgoing {
+  /** Index of the user item. */
+  index: number;
+  /** The next `assistant` or `result` line answers this message: no turn was running before it. */
+  armed: boolean;
+  /** Marked handled before the latest `result`; dropped at the next one. */
+  settled: boolean;
 }
 
 export const emptyTranscript: TranscriptState = {
@@ -60,6 +79,8 @@ export const emptyTranscript: TranscriptState = {
   streamMessage: null,
   requests: new Map(),
   interrupted: false,
+  turnOpen: false,
+  outbox: [],
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -122,6 +143,8 @@ class Draft {
   streamMessage: string | null;
   requests: Map<string, { toolName: string; input: unknown }>;
   interrupted: boolean;
+  turnOpen: boolean;
+  outbox: Outgoing[];
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
@@ -133,6 +156,8 @@ class Draft {
     this.streamMessage = state.streamMessage;
     this.requests = new Map(state.requests);
     this.interrupted = state.interrupted;
+    this.turnOpen = state.turnOpen;
+    this.outbox = state.outbox.map((entry) => ({ ...entry }));
   }
 
   finish(): TranscriptState {
@@ -146,6 +171,8 @@ class Draft {
       streamMessage: this.streamMessage,
       requests: this.requests,
       interrupted: this.interrupted,
+      turnOpen: this.turnOpen,
+      outbox: this.outbox,
     };
   }
 
@@ -161,7 +188,19 @@ class Draft {
     switch (event.event) {
       case "started":
         this.asks = [];
+        this.outbox = [];
+        this.turnOpen = false;
         this.endStreaming();
+        return;
+      case "user_sent":
+        this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
+        this.items.push({
+          kind: "user",
+          key,
+          text: event.text,
+          delivery: "on_host",
+          clientId: event.client_id,
+        });
         return;
       case "ask_queued": {
         const request = this.requests.get(event.request_id);
@@ -189,6 +228,8 @@ class Draft {
       case "child_exited": {
         this.asks = [];
         this.requests.clear();
+        this.outbox = [];
+        this.turnOpen = false;
         this.endStreaming();
         this.items = this.items.map((item) =>
           item.kind === "tool" && item.status === "running"
@@ -216,10 +257,17 @@ class Draft {
         if (line.parentToolUseId === null) this.user(line.content, line.isMeta, key);
         return;
       case "assistant":
-        if (line.parentToolUseId === null) this.assistant(line.messageId, line.content, key);
+        if (line.parentToolUseId !== null) return;
+        this.answered(false);
+        this.turnOpen = true;
+        this.assistant(line.messageId, line.content, key);
+        return;
+      case "system":
+        if (line.subtype === "init") this.turnOpen = true;
         return;
       case "stream_event":
         if (line.parentToolUseId !== null) return;
+        this.turnOpen = true;
         switch (line.event.type) {
           case "message_start":
             this.streamMessage = line.event.messageId;
@@ -245,6 +293,8 @@ class Draft {
           });
         }
         this.interrupted = false;
+        this.answered(true);
+        this.turnOpen = false;
         this.endStreaming();
         return;
       case "can_use_tool":
@@ -276,7 +326,49 @@ class Draft {
       });
       return;
     }
-    this.items.push({ kind: "user", key, text });
+    this.echo(text, key);
+  }
+
+  /** The CLI echoed a user message: the oldest matching one sent is received. */
+  private echo(text: string, key: string): void {
+    this.turnOpen = true;
+    const matches = (entry: Outgoing, delivery: Delivery): boolean => {
+      const item = this.items[entry.index];
+      return item?.kind === "user" && item.delivery === delivery && item.text === text;
+    };
+    const onHost = this.outbox.findIndex((entry) => matches(entry, "on_host"));
+    const position =
+      onHost >= 0 ? onHost : this.outbox.findIndex((entry) => matches(entry, "handled"));
+    const entry = this.outbox[position];
+    const item = entry === undefined ? undefined : this.items[entry.index];
+    if (entry === undefined || item?.kind !== "user") {
+      // History recorded before `user_sent` existed only has the echo.
+      this.items.push({ kind: "user", key, text, delivery: "received", clientId: null });
+      return;
+    }
+    this.items[entry.index] = { ...item, delivery: "received" };
+    this.outbox.splice(position, 1);
+  }
+
+  /**
+   * An `assistant` or `result` line answers the armed messages still unechoed:
+   * the CLI handled them locally. A `result` also arms the rest, sent during the
+   * turn it ends, and drops messages handled before it.
+   */
+  private answered(isResult: boolean): void {
+    for (const entry of this.outbox) {
+      const item = this.items[entry.index];
+      if (entry.armed && item?.kind === "user" && item.delivery === "on_host") {
+        this.items[entry.index] = { ...item, delivery: "handled" };
+      }
+    }
+    if (!isResult) return;
+    this.outbox = this.outbox.filter((entry) => !entry.settled);
+    for (const entry of this.outbox) {
+      const item = this.items[entry.index];
+      if (item?.kind === "user" && item.delivery === "handled") entry.settled = true;
+      entry.armed = true;
+    }
   }
 
   private toolResult(block: Extract<ContentBlock, { type: "tool_result" }>): void {

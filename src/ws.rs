@@ -196,7 +196,8 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             text,
             client_id,
         } => {
-            let result = async { manager.open(session).await?.send(text).await };
+            let tag = Some(client_id.clone());
+            let result = async { manager.open(session).await?.send(text, tag).await };
             (client_id, result.await)
         }
         ClientMessage::Interrupt { session, client_id } => {

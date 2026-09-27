@@ -111,16 +111,18 @@ export class Client {
   }
 
   /** Resolves on a positive ack; rejects with the server's error or a lost connection. */
-  command(build: (clientId: string) => Command): Promise<void> {
+  newClientId(): string {
+    this.nextId += 1;
+    return `${Date.now().toString(36)}-${this.nextId}`;
+  }
+
+  command(message: Command): Promise<void> {
     const socket = this.socket;
     if (socket === null || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Not connected to the server"));
     }
-    this.nextId += 1;
-    const clientId = `${Date.now().toString(36)}-${this.nextId}`;
-    const message = build(clientId);
     return new Promise<void>((resolve, reject) => {
-      this.acks.set(clientId, { resolve, reject });
+      this.acks.set(message.client_id, { resolve, reject });
       socket.send(JSON.stringify(message));
     });
   }

@@ -1,4 +1,5 @@
 import {
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   memo,
   useCallback,
@@ -8,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import type { Item, ToolStatus } from "@/transcript";
+import type { Delivery, Item, ToolStatus } from "@/transcript";
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
@@ -16,8 +17,8 @@ const BOTTOM_SLACK = 24;
 export interface PendingSend {
   id: string;
   text: string;
-  /** User bubbles with this text already in the transcript when it was sent. */
-  baseline: number;
+  /** One per attempt; the server's `user_sent` carrying any of them replaces this entry. */
+  clientIds: readonly string[];
   status: "sending" | "sent" | "failed";
   error: string | null;
 }
@@ -46,9 +47,12 @@ const STATUS_CLASS: Record<ToolStatus, string> = {
   unfinished: "text-muted-foreground",
 };
 
+const PANEL =
+  "bg-background voice-code max-h-80 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]";
+
 function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   return (
-    <details className="group text-sm">
+    <details className="group open:bg-muted rounded-[5px] text-sm open:pb-2">
       <summary className="hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-[5px] px-1 py-0.5">
         <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[item.status]}`}>
           {STATUS_TEXT[item.status]}
@@ -56,30 +60,45 @@ function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         <span className="voice-ui shrink-0">{item.name}</span>
         <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
       </summary>
-      <div className="mt-1 ml-9 space-y-2">
+      <div className="mt-1 mr-2 ml-9 space-y-2">
         {item.output !== null && (
-          <pre
-            className={`bg-muted max-h-80 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere] ${item.status === "error" ? "text-destructive" : ""}`}
-          >
+          <pre className={`${PANEL} ${item.status === "error" ? "text-destructive" : ""}`}>
             {item.output === "" ? "(no output)" : item.output}
           </pre>
         )}
         <details>
           <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">input</summary>
-          <pre className="bg-muted mt-1 max-h-80 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {JSON.stringify(item.input, null, 2)}
-          </pre>
+          <pre className={`${PANEL} mt-1`}>{JSON.stringify(item.input, null, 2)}</pre>
         </details>
       </div>
     </details>
   );
 }
 
+const DELIVERY_LABEL: Record<Delivery, string | null> = {
+  on_host: "on host",
+  received: null,
+  handled: "handled locally",
+};
+
 // Items keep their identity until they change, so unchanged rows skip rendering.
-const ItemView = memo(function ItemView({ item }: { item: Item }) {
+const ItemView = memo(function ItemView({ item, last }: { item: Item; last: boolean }) {
   switch (item.kind) {
-    case "user":
-      return <UserBubble>{item.text}</UserBubble>;
+    case "user": {
+      const label = last ? DELIVERY_LABEL[item.delivery] : null;
+      return (
+        <div className="space-y-1">
+          <UserBubble>{item.text}</UserBubble>
+          {label !== null && (
+            <div
+              className={`text-muted-foreground voice-ui px-1 text-xs ${item.delivery === "handled" ? "text-left" : "text-right"}`}
+            >
+              {label}
+            </div>
+          )}
+        </div>
+      );
+    }
     case "claude":
       return (
         <div className={`bg-bubble-claude voice-prose mr-10 ${BUBBLE}`}>
@@ -143,7 +162,7 @@ function PendingView({
           </>
         ) : (
           <span className="text-muted-foreground">
-            {pending.status === "sending" ? "sending..." : "sent, waiting for Claude"}
+            {pending.status === "sending" ? "sending..." : "on host"}
           </span>
         )}
       </div>
@@ -176,16 +195,34 @@ export function TranscriptView({
     if (element !== null && atBottom.current) element.scrollTop = element.scrollHeight;
   }, []);
 
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     const element = scroller.current;
     if (element === null) return;
     const bottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_SLACK;
     atBottom.current = bottom;
     setShowJump(!bottom);
+  }, []);
+
+  // Opening or closing a panel never moves the view, even at the bottom: the
+  // following content is pushed down instead. Position is re-read once it settles.
+  const onSummaryClick = (event: ReactMouseEvent) => {
+    if (event.target instanceof Element && event.target.closest("summary") !== null) {
+      atBottom.current = false;
+    }
   };
 
+  useEffect(() => {
+    const element = content.current;
+    if (element === null) return;
+    element.addEventListener("toggle", onScroll, true);
+    return () => element.removeEventListener("toggle", onScroll, true);
+  }, [onScroll]);
+
   useLayoutEffect(stick, [items, pending, stick]);
+
+  let lastUser = items.length - 1;
+  while (lastUser >= 0 && items[lastUser]?.kind !== "user") lastUser -= 1;
 
   useEffect(() => {
     const observer = new ResizeObserver(stick);
@@ -207,12 +244,20 @@ export function TranscriptView({
         onScroll={onScroll}
         className="h-full overflow-y-auto overscroll-contain"
       >
-        <div ref={content} className="mx-auto max-w-5xl space-y-2 px-3 py-4">
+        <div
+          ref={content}
+          onClickCapture={onSummaryClick}
+          className="mx-auto max-w-5xl space-y-2 px-3 py-4"
+        >
           {items.length === 0 && pending.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">No messages yet.</p>
           )}
-          {items.map((item) => (
-            <ItemView key={item.key} item={item} />
+          {items.map((item, index) => (
+            <ItemView
+              key={item.key}
+              item={item}
+              last={index === lastUser && pending.length === 0}
+            />
           ))}
           {pending.map((send) => (
             <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />

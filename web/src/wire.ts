@@ -43,6 +43,7 @@ export type Command = Extract<ClientMessage, { client_id: string }>;
 
 export type HostEvent =
   | { event: "started"; cwd: string }
+  | { event: "user_sent"; text: string; client_id: string | null }
   | { event: "ask_queued"; request_id: string; tool_name: string; tool_use_id: string }
   | { event: "ask_resolved"; request_id: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
@@ -183,6 +184,12 @@ export function parseHostEvent(raw: unknown): HostEvent {
       const cwd = text("cwd");
       return cwd === null ? { event: "unknown", raw } : { event: "started", cwd };
     }
+    case "user_sent": {
+      const sentText = text("text");
+      return sentText === null
+        ? { event: "unknown", raw }
+        : { event: "user_sent", text: sentText, client_id: text("client_id") };
+    }
     case "ask_queued": {
       const requestId = text("request_id");
       const toolName = text("tool_name");
@@ -289,6 +296,7 @@ export type CliLine =
     }
   | { type: "stream_event"; parentToolUseId: string | null; event: StreamEvent }
   | { type: "result"; subtype: string; isError: boolean }
+  | { type: "system"; subtype: string }
   | {
       type: "can_use_tool";
       requestId: string;
@@ -413,6 +421,10 @@ export function parseCliLine(raw: unknown): CliLine {
       const subtype = stringOrNull(raw["subtype"]);
       if (subtype === null) return { type: "raw", raw };
       return { type: "result", subtype, isError: raw["is_error"] === true };
+    }
+    case "system": {
+      const subtype = stringOrNull(raw["subtype"]);
+      return subtype === null ? { type: "raw", raw } : { type: "system", subtype };
     }
     case "control_request": {
       const requestId = stringOrNull(raw["request_id"]);

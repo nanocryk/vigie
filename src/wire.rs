@@ -8,7 +8,8 @@
 //!   with a seq above `after_seq`, then its live events, each once and in order.
 //!   Subscribing again to the same session restarts from the new `after_seq`.
 //! - `unsubscribe {session}`
-//! - `send {session, text, client_id}`: spawns the child again if it ended.
+//! - `send {session, text, client_id}`: spawns the child again if it ended. The
+//!   session emits a `user_sent {text, client_id}` host event before writing the text.
 //! - `interrupt {session, client_id}`
 //! - `answer {session, request_id, answer, client_id}`: `answer` is `allow
 //!   {updated_input?}`, `deny {message}` or `questions {answers}`, tagged by `kind`.

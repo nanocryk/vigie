@@ -12,8 +12,16 @@ import { type Item, emptyTranscript } from "@/transcript";
 /** Unsent composer text per session, kept while the app stays open. */
 const drafts = new Map<string, string>();
 
-function userBubbles(items: readonly Item[], text: string): number {
-  return items.filter((item) => item.kind === "user" && item.text === text).length;
+function sentClientIds(items: readonly Item[]): Set<string> {
+  const ids = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "user" && item.clientId !== null) ids.add(item.clientId);
+  }
+  return ids;
+}
+
+function coarsePointer(): boolean {
+  return window.matchMedia("(pointer: coarse)").matches;
 }
 
 function errorMessage(err: unknown): string {
@@ -49,9 +57,15 @@ function Composer({
     change("");
   };
 
-  // Enter always inserts a newline; Ctrl or Cmd with Enter sends.
+  // Desktop: Enter sends, Shift+Enter inserts a newline. Touch: Enter inserts a
+  // newline and only the send button sends. An IME composition keeps its own Enter.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing &&
+      !coarsePointer()
+    ) {
       event.preventDefault();
       submit();
     }
@@ -65,6 +79,7 @@ function Composer({
         value={text}
         onChange={(event) => change(event.target.value)}
         onKeyDown={onKeyDown}
+        enterKeyHint={coarsePointer() ? "enter" : "send"}
         placeholder="Message Claude"
         className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-10 flex-1 resize-none rounded-[5px] border px-3 py-2 text-base outline-none focus:ring-2"
       />
@@ -97,10 +112,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     return () => client.closeSession(id);
   }, [client, id]);
 
-  // A pending message leaves once its echo is in the transcript.
-  const visiblePending = pending.filter(
-    (send) => userBubbles(transcript.items, send.text) <= send.baseline,
-  );
+  // A pending message leaves once the server's `user_sent` for one of its attempts is in.
+  const sent = sentClientIds(transcript.items);
+  const visiblePending = pending.filter((send) => !send.clientIds.some((cid) => sent.has(cid)));
   useEffect(() => {
     if (visiblePending.length !== pending.length) setPending(visiblePending);
   }, [visiblePending, pending.length]);
@@ -108,31 +122,31 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const patch = (sendId: string, change: Partial<PendingSend>) =>
     setPending((list) => list.map((send) => (send.id === sendId ? { ...send, ...change } : send)));
 
-  const deliver = (send: PendingSend) => {
-    client
-      .command((clientId) => ({ type: "send", session: id, text: send.text, client_id: clientId }))
-      .then(
-        () => patch(send.id, { status: "sent" }),
-        (err: unknown) => patch(send.id, { status: "failed", error: errorMessage(err) }),
-      );
+  const deliver = (sendId: string, text: string, clientId: string) => {
+    client.command({ type: "send", session: id, text, client_id: clientId }).then(
+      () => patch(sendId, { status: "sent" }),
+      (err: unknown) => patch(sendId, { status: "failed", error: errorMessage(err) }),
+    );
   };
 
   const send = (text: string) => {
     nextPending.current += 1;
+    const clientId = client.newClientId();
     const entry: PendingSend = {
       id: String(nextPending.current),
       text,
-      baseline: userBubbles(transcript.items, text),
+      clientIds: [clientId],
       status: "sending",
       error: null,
     };
     setPending((list) => [...list, entry]);
-    deliver(entry);
+    deliver(entry.id, text, clientId);
   };
 
   const retry = (entry: PendingSend) => {
-    patch(entry.id, { status: "sending", error: null });
-    deliver(entry);
+    const clientId = client.newClientId();
+    patch(entry.id, { status: "sending", error: null, clientIds: [...entry.clientIds, clientId] });
+    deliver(entry.id, entry.text, clientId);
   };
 
   const dismiss = (entry: PendingSend) =>
@@ -142,7 +156,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     setStopping(true);
     setStopError(null);
     client
-      .command((clientId) => ({ type: "interrupt", session: id, client_id: clientId }))
+      .command({ type: "interrupt", session: id, client_id: client.newClientId() })
       .catch((err: unknown) => setStopError(errorMessage(err)))
       .finally(() => setStopping(false));
   };

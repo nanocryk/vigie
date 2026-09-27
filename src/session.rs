@@ -80,6 +80,12 @@ pub enum HostEvent {
         launch: Launch,
         cwd: PathBuf,
     },
+    /// A user message about to be written to the child; `client_id` names the command that sent it.
+    UserSent {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+    },
     AskQueued {
         request_id: String,
         tool_name: String,
@@ -193,6 +199,7 @@ impl ActivityTracker {
 enum Command {
     Send {
         text: String,
+        client_id: Option<String>,
         reply: oneshot::Sender<Result<()>>,
     },
     Control {
@@ -266,10 +273,16 @@ impl Session {
         self.activity.clone()
     }
 
-    /// Resolves once the message is written to the child.
-    pub async fn send(&self, text: impl Into<String>) -> Result<()> {
+    /// Resolves once the message is written to the child. `client_id` is echoed in
+    /// the `UserSent` event.
+    pub async fn send(&self, text: impl Into<String>, client_id: Option<String>) -> Result<()> {
         let text = text.into();
-        self.call(|reply| Command::Send { text, reply }).await
+        self.call(|reply| Command::Send {
+            text,
+            client_id,
+            reply,
+        })
+        .await
     }
 
     pub async fn interrupt(&self) -> Result<InterruptResponse> {
@@ -550,8 +563,12 @@ impl Actor {
 
     async fn on_command(&mut self, command: Command) {
         match command {
-            Command::Send { text, reply } => {
-                let _ = reply.send(self.send_user(text).await);
+            Command::Send {
+                text,
+                client_id,
+                reply,
+            } => {
+                let _ = reply.send(self.send_user(text, client_id).await);
             }
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
@@ -577,7 +594,12 @@ impl Actor {
         }
     }
 
-    async fn send_user(&mut self, text: String) -> Result<()> {
+    async fn send_user(&mut self, text: String, client_id: Option<String>) -> Result<()> {
+        // Emitted before the write, so it precedes the CLI's echo in seq order.
+        self.emit_host(HostEvent::UserSent {
+            text: text.clone(),
+            client_id,
+        });
         let session_id = self.launch.claude_session_id().to_string();
         self.write(Outbound::User(UserMessage::text(session_id, text)))
             .await?;

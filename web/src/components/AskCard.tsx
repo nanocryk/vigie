@@ -123,13 +123,13 @@ export function AskCard({
     setSending(true);
     setError(null);
     try {
-      await client.command((clientId) => ({
+      await client.command({
         type: "answer",
         session,
         request_id: ask.requestId,
         answer: value,
-        client_id: clientId,
-      }));
+        client_id: client.newClientId(),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSending(false);
