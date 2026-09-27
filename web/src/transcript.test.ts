@@ -219,7 +219,7 @@ describe("transcript from recordings", () => {
         "user",
         "Call the AskUserQuestion tool once, with the single question 'Pick a color?' and the options red and blue. Then reply with the answer you got.",
       ],
-      ["tool", "AskUserQuestion", expect.stringContaining("Pick a color?"), "ok"],
+      ["tool", "AskUserQuestion", "1 question", "ok"],
       ["claude", "You answered blue."],
     ]);
     const bash = state.items[1];
@@ -303,6 +303,36 @@ describe("toolSummary", () => {
     expect(toolSummary("Bash", { command: "ls -la" })).toBe("ls -la");
     expect(toolSummary("Read", { file_path: "/a/b.ts" })).toBe("/a/b.ts");
     expect(toolSummary("Glob", { pattern: "**/*.rs" })).toBe("**/*.rs");
-    expect(toolSummary("Other", { a: 1 })).toBe('{"a":1}');
+    expect(toolSummary("Other", { a: 1, b: "two  words", c: [1, 2], d: { e: 1 } })).toBe(
+      "a 1 · b two words · c [2] · d {...}",
+    );
+    expect(toolSummary("EnterPlanMode", {})).toBe("");
+    expect(toolSummary("ToolSearch", { query: "select:A,B", max_results: 2 })).toBe("select:A,B");
+    expect(toolSummary("ExitPlanMode", { plan: "# Dummy plan\n\n## Context" })).toBe("Dummy plan");
+    expect(
+      toolSummary("AskUserQuestion", { questions: [{ question: "Color?" }, { question: "Fruits?" }] }),
+    ).toBe("2 questions");
+    expect(toolSummary("AskUserQuestion", { questions: [{ question: "Color?" }] })).toBe(
+      "1 question",
+    );
+    expect(toolSummary("Grep", { pattern: "fn main", path: "src" })).toBe("fn main in src");
+    const cwd = "E:\\work\\vigie2";
+    expect(toolSummary("Edit", { file_path: "E:\\work\\vigie2\\src\\main.rs" }, cwd)).toBe(
+      "src\\main.rs",
+    );
+    expect(toolSummary("Read", { file_path: "e:/work/vigie2/web/a.ts" }, cwd)).toBe("web/a.ts");
+    expect(toolSummary("Write", { file_path: "E:\\work\\vigie2x\\a.rs" }, cwd)).toBe(
+      "E:\\work\\vigie2x\\a.rs",
+    );
+    expect(toolSummary("Read", { file_path: "C:\\Users\\me\\.claude\\plans\\p.md" }, cwd)).toBe(
+      "C:\\Users\\me\\.claude\\plans\\p.md",
+    );
+    expect(toolSummary("Grep", { pattern: "x", path: "E:\\work\\vigie2\\src" }, cwd)).toBe(
+      "x in src",
+    );
+    expect(toolSummary("Read", { file_path: "/home/me/p/a.ts" }, "/home/me/p/")).toBe("a.ts");
+    expect(toolSummary("Bash", { command: "npm test", run_in_background: true })).toBe(
+      "npm test (background)",
+    );
   });
 });

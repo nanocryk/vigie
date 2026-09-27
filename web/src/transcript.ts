@@ -60,6 +60,8 @@ export interface TranscriptState {
   turnOpen: boolean;
   /** User messages not echoed yet, oldest first. */
   outbox: readonly Outgoing[];
+  /** Folder the session runs in, from its `started` event; tool paths inside it show relative. */
+  cwd: string | null;
 }
 
 interface Outgoing {
@@ -83,6 +85,7 @@ export const emptyTranscript: TranscriptState = {
   interrupted: false,
   turnOpen: false,
   outbox: [],
+  cwd: null,
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -95,29 +98,109 @@ function field(input: unknown, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function compactJson(input: unknown): string {
-  const text = JSON.stringify(input) ?? "";
-  return text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}...` : text;
+function oneLine(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > SUMMARY_LIMIT ? `${flat.slice(0, SUMMARY_LIMIT)}...` : flat;
 }
 
-/** One line describing a tool call from its input. */
-export function toolSummary(name: string, input: unknown): string {
+function shortValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (isRecord(value)) return "{...}";
+  return String(value);
+}
+
+/** `key value · key value`, nested values shortened. */
+function keyValues(input: unknown): string {
+  if (!isRecord(input)) return input === undefined ? "" : shortValue(input);
+  return Object.entries(input)
+    .map(([key, value]) => `${key} ${shortValue(value)}`)
+    .join(" · ");
+}
+
+/** `path` relative to `cwd` when inside it (on a folder boundary), else unchanged. */
+export function relativePath(path: string, cwd: string | null): string {
+  if (cwd === null) return path;
+  const base = cwd.replace(/[\\/]+$/, "");
+  // Drive-letter paths are Windows ones, where case and separator style do not matter.
+  const windows = /^[a-zA-Z]:/.test(base);
+  const fold = (text: string) => (windows ? text.toLowerCase().replace(/\\/g, "/") : text);
+  if (fold(path) === fold(base)) return ".";
+  const head = path.slice(0, base.length);
+  const separator = path.charAt(base.length);
+  if (fold(head) !== fold(base) || (separator !== "/" && separator !== "\\")) return path;
+  return path.slice(base.length + 1);
+}
+
+function pathField(input: unknown, key: string, cwd: string | null): string | null {
+  const path = field(input, key);
+  return path === null ? null : relativePath(path, cwd);
+}
+
+function withScope(main: string | null, input: unknown, cwd: string | null): string | null {
+  if (main === null) return null;
+  const path = pathField(input, "path", cwd);
+  return path === null ? main : `${main} in ${path}`;
+}
+
+function firstLine(text: string | null): string | null {
+  if (text === null) return null;
+  const line = text.split("\n").find((candidate) => candidate.trim() !== "");
+  return line === undefined ? null : line.replace(/^#+\s*/, "");
+}
+
+function questionCount(input: unknown): string | null {
+  if (!isRecord(input) || !Array.isArray(input["questions"])) return null;
+  const count = input["questions"].length;
+  return count === 1 ? "1 question" : `${count} questions`;
+}
+
+function summaryOf(name: string, input: unknown, cwd: string | null): string | null {
   switch (name) {
-    case "Bash":
-      return field(input, "command") ?? compactJson(input);
+    case "Bash": {
+      const command = field(input, "command");
+      const background = isRecord(input) && input["run_in_background"] === true;
+      return command === null ? null : background ? `${command} (background)` : command;
+    }
     case "Read":
     case "Write":
     case "Edit":
     case "MultiEdit":
-      return field(input, "file_path") ?? compactJson(input);
+      return pathField(input, "file_path", cwd);
     case "NotebookEdit":
-      return field(input, "notebook_path") ?? compactJson(input);
+      return pathField(input, "notebook_path", cwd);
     case "Grep":
     case "Glob":
-      return field(input, "pattern") ?? compactJson(input);
+      return withScope(field(input, "pattern"), input, cwd);
+    case "WebFetch":
+      return field(input, "url");
+    case "WebSearch":
+    case "ToolSearch":
+      return field(input, "query");
+    case "Task":
+    case "Agent":
+      return field(input, "description");
+    case "Skill":
+      return field(input, "skill");
+    case "ExitPlanMode":
+      return firstLine(field(input, "plan"));
+    case "AskUserQuestion":
+      return questionCount(input);
+    case "TodoWrite":
+      return isRecord(input) && Array.isArray(input["todos"])
+        ? `${input["todos"].length} items`
+        : null;
     default:
-      return compactJson(input);
+      return null;
   }
+}
+
+/**
+ * One readable line describing a tool call from its input; empty for a call without
+ * input. File paths inside `cwd` show relative to it.
+ */
+export function toolSummary(name: string, input: unknown, cwd: string | null = null): string {
+  return oneLine(summaryOf(name, input, cwd) ?? keyValues(input));
 }
 
 export function gateFailureText(reason: GateFailure): string {
@@ -147,6 +230,7 @@ class Draft {
   interrupted: boolean;
   turnOpen: boolean;
   outbox: Outgoing[];
+  cwd: string | null;
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
@@ -160,6 +244,7 @@ class Draft {
     this.interrupted = state.interrupted;
     this.turnOpen = state.turnOpen;
     this.outbox = state.outbox.map((entry) => ({ ...entry }));
+    this.cwd = state.cwd;
   }
 
   finish(): TranscriptState {
@@ -175,6 +260,7 @@ class Draft {
       interrupted: this.interrupted,
       turnOpen: this.turnOpen,
       outbox: this.outbox,
+      cwd: this.cwd,
     };
   }
 
@@ -189,6 +275,7 @@ class Draft {
   private host(event: HostEvent, key: string): void {
     switch (event.event) {
       case "started":
+        this.cwd = event.cwd;
         this.asks = [];
         this.outbox = [];
         this.turnOpen = false;
@@ -412,7 +499,7 @@ class Draft {
             key: blockKey,
             toolUseId: block.id,
             name: block.name,
-            summary: toolSummary(block.name, block.input),
+            summary: toolSummary(block.name, block.input, this.cwd),
             input: block.input,
             status: "running",
             output: null,
