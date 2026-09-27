@@ -194,7 +194,7 @@
     --sidebar-border: oklch(0.88 0.02 85);
     --sidebar-ring: oklch(0.62 0.1 190);
     --bubble-claude: oklch(0.93 0 0);
-    --bubble-user: oklch(0.93 0 0);
+    --bubble-user: oklch(0.85 0 0);
     /* Swipe panels: pale fills behind text, strong tones for labels and buttons. */
     --swipe-undecided: oklch(0.93 0.09 95);
     --swipe-accept: oklch(0.9 0.1 150);
@@ -265,7 +265,7 @@
         --sidebar-border: oklch(0.93 0.015 85 / 12%);
         --sidebar-ring: oklch(0.68 0.1 185);
         --bubble-claude: oklch(0.26 0 0);
-        --bubble-user: oklch(0.26 0 0);
+        --bubble-user: oklch(0.36 0 0);
         --swipe-undecided: oklch(0.38 0.07 95);
         --swipe-accept: oklch(0.38 0.08 150);
         --swipe-deny: oklch(0.37 0.09 25);

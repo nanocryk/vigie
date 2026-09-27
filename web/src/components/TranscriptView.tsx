@@ -34,7 +34,7 @@ const BUBBLE = "min-w-0 rounded-[5px] px-3 py-2 text-sm";
 function UserBubble({ children, dim }: { children: ReactNode; dim?: boolean }) {
   return (
     <div
-      className={`bg-bubble-user border-ring ml-10 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""}`}
+      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""}`}
     >
       {children}
     </div>
@@ -222,8 +222,9 @@ const ItemView = memo(function ItemView({
   switch (item.kind) {
     case "user": {
       const label = last ? DELIVERY_LABEL[item.delivery] : null;
+      // The room above opens each exchange; the first one sits at the top.
       return (
-        <div className="space-y-1">
+        <div className="space-y-1 pt-8 first:pt-0">
           <UserBubble>
             <Markdown text={item.text} />
             <BubbleTime time={item.time} now={now} />
@@ -241,7 +242,7 @@ const ItemView = memo(function ItemView({
     case "claude":
       return (
         <div
-          className={`bg-bubble-claude border-ring voice-prose mr-10 border-l-2 ${BUBBLE} rounded-l-none`}
+          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none`}
         >
           <Markdown text={item.text} streaming={item.streaming} />
           <BubbleTime time={item.time} now={now} />
@@ -303,7 +304,7 @@ function PendingView({
   onDismiss: (pending: PendingSend) => void;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 pt-8 first:pt-0">
       <UserBubble dim>
         <Markdown text={pending.text} />
       </UserBubble>
