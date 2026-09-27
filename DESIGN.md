@@ -89,7 +89,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 ## Scratch discussions
 
 - A discussion can start without a project, in a new folder under `<workspace>/.scratch`.
-- A scratch folder can be promoted into the workspace when the idea turns out interesting.
+- A scratch folder can be promoted into the workspace when the idea turns out interesting. vigie2 implements promotion itself; `/cd` is unavailable under `-p`.
 - Scratch folders are never deleted automatically; deletion is a manual action.
 - Scratch sessions start in a looser default permission mode than project sessions.
 
@@ -118,7 +118,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Process model: one long-lived child per session or one per turn; reaping idle children.
 - Event schema between server and clients; history storage format.
 - Seed format for continuing in a new session, and the interface `/tail-session` would use.
-- Promote mechanism: Claude's `/cd` under `-p`, or a restart in the new folder seeded from history.
 - Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
 - Keeping headless children from firing Vigie's Claude Code hooks; ports and state directory next to Vigie.

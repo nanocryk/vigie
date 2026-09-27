@@ -1,6 +1,6 @@
 # Headless Claude Code protocol
 
-Facts from the Claude Code docs and the `@anthropic-ai/claude-agent-sdk` 0.3.283 type definitions (`sdk.d.ts`), matching CLI 2.1.283. Not yet exercised against a live session.
+Facts from the Claude Code docs and the `@anthropic-ai/claude-agent-sdk` 0.3.283 type definitions (`sdk.d.ts`), matching CLI 2.1.283. `## Observed` lists what a live spike on Windows confirmed (driver and recordings in `spike/`).
 
 ## Launch
 
@@ -42,6 +42,49 @@ Line-delimited JSON on stdin/stdout, the same wire protocol the Agent SDKs use. 
 - `rate_limit_event.rate_limit_info`: `status` (`allowed`, `allowed_warning`, `rejected`), `resetsAt`, `rateLimitType` (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_overage_included`, `overage`), `utilization`, `surpassedThreshold`, `overageStatus`, `isUsingOverage`, `overageInUse`, `errorCode: "credits_required"`.
 - `get_usage` response `rate_limits`: `limits[]` rows (`kind`, `group`, `percent`, `resets_at`, `scope.model` / `scope.surface`, `severity`, `is_active`) and `extra_usage` (`is_enabled`, `monthly_limit`, `used_credits`, `utilization`). `rate_limits_available` is false for API key sessions.
 - Billing context (2026-09-27): the move of `-p` / Agent SDK usage to a separate credit, announced 2026-05-13, was paused on 2026-06-15; usage still draws from the subscription limits.
+
+## Observed
+
+CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Recordings: `spike/runs/<scenario>.ndjson`; `canif run spike/summary <scenario>` prints them.
+
+- Startup: `SessionStart` hooks run before the `initialize` response and show as `system/hook_started` and `system/hook_response`.
+- `initialize` response: `account.subscriptionType` is `"Claude Max"`, `account.apiProvider` is `"firstParty"`; also `email`, `organization`. Other keys: `commands`, `agents`, `models`, `current_permission_mode`, `fast_mode_state`, `session_state`, `pid`, `remote_control_*`.
+- `system/init` arrives on every turn: `apiKeySource: "none"`, `capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1", "mcp_read_resource_v1", "mcp_tool_ui_meta_v1"]`. Then `system/status` `requesting`; `system/thinking_tokens` while thinking.
+- User message echo (`--replay-user-messages`): arrives when the model request starts, about 1 to 2 s after sending, just before the first `assistant` message.
+- Every `control_response` the host sends is echoed back on stdout with the same `request_id`.
+- claude.ai MCP connectors load under `-p` (an unauthorized one was reported by the model in its replies).
+
+### Permissions
+
+- Tools allowed by the settings rules never reach the host (`echo` through Bash ran without `can_use_tool`).
+- `can_use_tool` carries a CLI-chosen UUID `request_id`, `tool_name`, `display_name`, `input`, `tool_use_id`, `description`. Write adds `permission_suggestions: [{type: "setMode", mode: "acceptEdits", destination: "session"}]`. `AskUserQuestion` and `ExitPlanMode` add `requires_user_interaction: true`.
+- Deny with `message`: the model sees the message and follows it.
+- `AskUserQuestion`: allow with `updatedInput: {questions, answers: {"<question text>": "<option label>"}}`; the model receives the answer.
+- `set_permission_mode` answers `{mode}`. In plan mode the model writes the plan file without asking, into the user's `~/.claude/plans/`. `ExitPlanMode` input: `plan`, `planFilePath`. After allow, the same turn goes on to implement, and edits ask again.
+
+### Interrupt
+
+- Works on Windows, during text streaming and during a foreground Bash call. Answer is immediate: `{still_queued: []}`.
+- Followed by a `user` message `[Request interrupted by user]` (streaming) or a rejected `tool_result` plus `[Request interrupted by user for tool use]` (tool), then `result` with `subtype: "error_during_execution"`, `is_error: true`, `result: null`.
+- Interrupted while streaming: the `result` usage is all zeros and `modelUsage` is empty, although tokens were generated.
+- The next user message runs normally.
+
+### Usage and rate limits
+
+- `result.usage.cache_creation`: `ephemeral_1h_input_tokens` holds every cache write, `ephemeral_5m_input_tokens` is 0. Also `iterations[]`, `modelUsage.<model>` with `costUSD`, `contextWindow` (1000000), `costBasis: "list"`.
+- `rate_limit_event` comes after the first `assistant` message of some turns, not every turn. Shape: `status`, `resetsAt` (epoch s), `rateLimitType`, `overageStatus: "rejected"`, `overageDisabledReason: "org_level_disabled"`, `isUsingOverage: false`, `unifiedWindows: {five_hour, seven_day}` each `{utilization, resetsAt}` with utilization a fraction (0.07).
+- `get_usage` (`skip_behaviors: true`, about 230 ms): `subscription_type: "max"`, `rate_limits_available: true`, `rate_limits.five_hour` / `seven_day` `{utilization, resets_at}` with utilization in percent (7) and ISO dates, `extra_usage.is_enabled: false`, `limits[]` (`kind`: `session`, `weekly_all`, `weekly_scoped` with `scope.model.display_name`), `spend`, `seven_day_breakdown`, plus many codename keys set to null.
+
+### Background tasks
+
+- Start: `system/background_tasks_changed` (`tasks[]` with `task_id`, `task_type: "local_bash"`, `description`) and `system/task_started` (`task_id`, `tool_use_id`, `is_backgrounded`).
+- End: `background_tasks_changed` with the new list, `task_updated` (`patch: {status: "completed", end_time}`), `task_notification` (`status`, `output_file`, `summary`).
+- On `task_notification` the CLI starts a new turn by itself, with no user message: `system/init`, the model's reaction, `result`.
+- A foreground `sleep 60` is blocked; the model reruns it in the background.
+
+### Slash commands
+
+- `/cd` under `-p`: "/cd isn't available in this environment.", answered locally as an `assistant` message and a `result`, no model request.
 
 ## Sessions
 
