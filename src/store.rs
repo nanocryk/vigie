@@ -25,7 +25,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 6] = [
+const MIGRATIONS: [&str; 7] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -81,6 +81,8 @@ ALTER TABLE sessions ADD COLUMN claude_session_id TEXT;
 ALTER TABLE sessions ADD COLUMN claude_session_fresh INTEGER NOT NULL DEFAULT 0
     CHECK (claude_session_fresh IN (0, 1));
 "#,
+    // When the discussion was archived; NULL while it is not.
+    "ALTER TABLE sessions ADD COLUMN archived_at TEXT;",
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -128,6 +130,8 @@ pub struct SessionRow {
     pub context: Option<gauges::Context>,
     /// How the next child picks the discussion's current Claude session.
     pub launch: Launch,
+    /// `None` while the discussion is not archived.
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 /// What a line tells about the gauges of the main conversation.
@@ -287,6 +291,22 @@ impl Store {
                      context_autocompact = NULL, context_categories = NULL
                  WHERE id = ?1",
                 params![session.to_string(), claude_session.to_string()],
+            )?;
+            if changed == 0 {
+                bail!("unknown session {session}");
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Archives the discussion at `at`, or unarchives it for `None`. Resolves once
+    /// stored; fails for an unknown session.
+    pub async fn set_archived(&self, session: Uuid, at: Option<DateTime<Utc>>) -> Result<()> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET archived_at = ?2 WHERE id = ?1",
+                params![session.to_string(), at.map(format_time)],
             )?;
             if changed == 0 {
                 bail!("unknown session {session}");
@@ -652,7 +672,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at FROM sessions";
 
 struct RawSession {
     id: String,
@@ -674,6 +694,7 @@ struct RawSession {
     context_categories: Option<String>,
     claude_session_id: Option<String>,
     claude_session_fresh: bool,
+    archived_at: Option<String>,
 }
 
 impl RawSession {
@@ -698,6 +719,7 @@ impl RawSession {
             context_categories: row.get(16)?,
             claude_session_id: row.get(17)?,
             claude_session_fresh: row.get(18)?,
+            archived_at: row.get(19)?,
         })
     }
 
@@ -764,6 +786,7 @@ impl RawSession {
             cache,
             context,
             launch,
+            archived_at: self.archived_at.as_deref().map(parse_time).transpose()?,
         })
     }
 }
@@ -1112,6 +1135,15 @@ mod tests {
         store.set_permission_mode(id, "plan".into()).await.unwrap();
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(row.archived_at, None);
+        let at = parse_time(&format_time(Utc::now())).unwrap();
+        store.set_archived(id, Some(at)).await.unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.archived_at, Some(at));
+        store.set_archived(id, None).await.unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.archived_at, None);
+        assert!(store.set_archived(Uuid::new_v4(), None).await.is_err());
     }
 
     #[tokio::test]

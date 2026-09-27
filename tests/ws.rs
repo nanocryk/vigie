@@ -26,7 +26,9 @@ use vigie2::manager::SessionManager;
 use vigie2::server::{AppState, build_app};
 use vigie2::session::{Answer, Event, EventBody, Line, RestartMode};
 use vigie2::store::{EventKind, SessionState, Store};
-use vigie2::wire::{CACHE_COLD, ClientMessage, ServerMessage, SessionList, SessionView, WireEvent};
+use vigie2::wire::{
+    CACHE_COLD, ClientMessage, SESSION_LIVE, ServerMessage, SessionList, SessionView, WireEvent,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const DEVICE: &str = "test-device";
@@ -910,6 +912,162 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
     // A restart forgets the cache and counts as activity.
     client.send(&say(id, "hello", false, "send-5")).await;
     assert_eq!(client.ack("send-5").await, (true, None));
+}
+
+fn kill(session: Uuid, client_id: &str) -> ClientMessage {
+    ClientMessage::Kill {
+        session,
+        client_id: client_id.into(),
+    }
+}
+
+fn archive(session: Uuid, client_id: &str) -> ClientMessage {
+    ClientMessage::Archive {
+        session,
+        client_id: client_id.into(),
+    }
+}
+
+fn restore(session: Uuid, client_id: &str) -> ClientMessage {
+    ClientMessage::Restore {
+        session,
+        client_id: client_id.into(),
+    }
+}
+
+impl Server {
+    async fn view(&self, id: Uuid) -> SessionView {
+        let (status, body) = self.rest(Method::GET, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let list: SessionList = serde_json::from_value(body).unwrap();
+        list.sessions
+            .into_iter()
+            .find(|session| session.id == id)
+            .expect("listed")
+    }
+}
+
+impl Client {
+    /// Acks `message`, then waits for the `sessions_changed` it announces.
+    async fn command_announced(
+        &mut self,
+        message: &ClientMessage,
+        client_id: &str,
+    ) -> (bool, Option<String>) {
+        let before = self.sessions_changed;
+        self.send(message).await;
+        let ack = self.ack(client_id).await;
+        while self.sessions_changed == before {
+            self.pump().await;
+        }
+        ack
+    }
+}
+
+#[tokio::test]
+async fn kill_stops_a_live_session_and_keeps_it_listed() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    assert_eq!(
+        client
+            .command_announced(&kill(id, "kill-1"), "kill-1")
+            .await,
+        (true, None)
+    );
+    assert!(server.manager.live(id).await.is_none());
+    let view = server.view(id).await;
+    assert!(!view.live);
+    assert_eq!(view.state, SessionState::Stopped);
+    assert_eq!(view.archived_at, None);
+
+    // Not live any more: acked without effect.
+    assert_eq!(
+        client
+            .command_announced(&kill(id, "kill-2"), "kill-2")
+            .await,
+        (true, None)
+    );
+    client.send(&kill(Uuid::new_v4(), "kill-3")).await;
+    let (ok, error) = client.ack("kill-3").await;
+    assert!(!ok);
+    assert!(error.unwrap().contains("unknown session"));
+
+    // The next send resumes it.
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+    assert!(server.manager.live(id).await.is_some());
+}
+
+#[tokio::test]
+async fn archive_is_refused_while_live_and_restore_undoes_it() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client.send(&archive(id, "archive-1")).await;
+    assert_eq!(
+        client.ack("archive-1").await,
+        (false, Some(SESSION_LIVE.into()))
+    );
+    assert_eq!(server.view(id).await.archived_at, None);
+
+    client.send(&kill(id, "kill-1")).await;
+    assert_eq!(client.ack("kill-1").await, (true, None));
+    assert_eq!(
+        client
+            .command_announced(&archive(id, "archive-2"), "archive-2")
+            .await,
+        (true, None)
+    );
+    let view = server.view(id).await;
+    assert!(view.archived_at.is_some());
+    assert!(!view.live);
+
+    assert_eq!(
+        client
+            .command_announced(&restore(id, "restore-1"), "restore-1")
+            .await,
+        (true, None)
+    );
+    assert_eq!(server.view(id).await.archived_at, None);
+    assert!(server.manager.live(id).await.is_none(), "restoring spawned");
+}
+
+#[tokio::test]
+async fn a_restart_or_a_send_unarchives() {
+    let server = Server::start(SCRIPT).await;
+    let started_at = Utc::now() - TimeDelta::hours(2);
+    let restarted = server.seed_session(started_at, None).await;
+    let rewarmed = server.seed_session(started_at, None).await;
+    let refused = server.seed_session(started_at, None).await;
+    let mut client = server.client().await;
+    for (index, id) in [restarted, rewarmed, refused].into_iter().enumerate() {
+        let client_id = format!("archive-{index}");
+        client.send(&archive(id, &client_id)).await;
+        assert_eq!(client.ack(&client_id).await, (true, None));
+        assert!(server.view(id).await.archived_at.is_some());
+    }
+
+    client
+        .send(&ClientMessage::Restart {
+            session: restarted,
+            mode: RestartMode::Blank,
+            text: None,
+            client_id: "restart-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("restart-1").await, (true, None));
+    assert_eq!(server.view(restarted).await.archived_at, None);
+
+    client.send(&say(rewarmed, "hello", true, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+    assert_eq!(server.view(rewarmed).await.archived_at, None);
+
+    // Unarchived first, then refused on its cold cache.
+    client.send(&say(refused, "hello", false, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, cold());
+    assert_eq!(server.view(refused).await.archived_at, None);
+    assert!(server.manager.live(refused).await.is_none());
 }
 
 #[tokio::test]

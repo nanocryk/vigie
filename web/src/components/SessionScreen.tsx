@@ -5,6 +5,7 @@ import {
   CacheColdError,
   type ColdChoice,
   type ColdChoiceMade,
+  archivedAction,
   coldAction,
   coldPanelShown,
   coldSpell,
@@ -239,21 +240,33 @@ export function SessionScreen({
 
   const [choosing, setChoosing] = useState(false);
   const [coldError, setColdError] = useState<string | null>(null);
+  const archived = view !== null && view.archived_at !== null;
   const coldPanel =
-    view !== null && coldPanelShown({ gauge, refusedAt, busy, asks: asks.length, chosen });
+    archived ||
+    (view !== null && coldPanelShown({ gauge, refusedAt, busy, asks: asks.length, chosen }));
 
   const choose = (choice: ColdChoice) => {
-    if (spell === null) return;
+    if (spell === null && !archived) return;
+    // A choice made from the archived view also answers the cold spell, if any.
     const settle = () => {
+      if (spell === null) return;
       const made = { spell, choice };
       coldChoices.set(id, made);
       setChosen(made);
     };
-    const action = coldAction(choice, drafts.get(id) ?? "");
+    const draft = drafts.get(id) ?? "";
+    const action = archived ? archivedAction(choice, draft) : coldAction(choice, draft);
     setColdError(null);
     switch (action.kind) {
       case "unblock":
         settle();
+        return;
+      case "restore":
+        setChoosing(true);
+        client
+          .command({ type: "restore", session: id, client_id: client.newClientId() })
+          .then(settle, (err: unknown) => setColdError(errorMessage(err)))
+          .finally(() => setChoosing(false));
         return;
       case "send":
         drafts.delete(id);
@@ -308,7 +321,7 @@ export function SessionScreen({
             {view !== null && (
               <span className="text-muted-foreground">
                 {" "}
-                {busy ? "working" : stateLabel(view.state)}
+                {busy ? "working" : archived ? "archived" : stateLabel(view.state)}
               </span>
             )}
           </>
@@ -337,7 +350,7 @@ export function SessionScreen({
                   ? transcript.permissionMode
                   : (view?.permission_mode ?? transcript.permissionMode)
               }
-              enabled={view !== null}
+              enabled={view !== null && !archived}
             />
             {transcript.turnOpen && (
               <div className="pointer-events-auto ml-auto flex items-end gap-2">
@@ -362,6 +375,7 @@ export function SessionScreen({
 
       {coldPanel ? (
         <ColdPanel
+          archived={archived}
           context={view?.context ?? null}
           draft={drafts.get(id) ?? ""}
           askWaiting={ask !== undefined}

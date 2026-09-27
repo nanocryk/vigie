@@ -82,8 +82,12 @@ function RewarmWarning({
   );
 }
 
-/** Replaces the composer and the ask card while the cache is cold, until a choice is made. */
+/**
+ * Replaces the composer and the ask card while the cache is cold, until a choice
+ * is made, and the composer of an archived discussion, which any choice restores.
+ */
 export function ColdPanel({
+  archived,
   context,
   draft,
   askWaiting,
@@ -91,6 +95,7 @@ export function ColdPanel({
   error,
   onChoose,
 }: {
+  archived: boolean;
   context: ContextView | null;
   /** Composer text, sent with whichever choice is made. */
   draft: string;
@@ -107,7 +112,8 @@ export function ColdPanel({
       <div className="mx-auto max-w-5xl space-y-3">
         <div className="voice-ui space-y-0.5 text-sm">
           <div>
-            The cache is cold. <span className="text-muted-foreground">{contextSummary(context)}</span>
+            {archived ? "This discussion is archived; any choice restores it." : "The cache is cold."}{" "}
+            <span className="text-muted-foreground">{contextSummary(context)}</span>
           </div>
           {askWaiting && (
             <div className="text-muted-foreground text-xs">

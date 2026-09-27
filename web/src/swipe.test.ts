@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOTH_SIDES,
   CONFIRM_WINDOW_MS,
   DANGER_COOLDOWN_MS,
   type Side,
@@ -14,8 +15,18 @@ import {
 } from "@/swipe";
 
 const WIDTH = 400;
-const SAFE: SwipeContext = { width: WIDTH, dangerous: false };
-const DANGEROUS: SwipeContext = { width: WIDTH, dangerous: true };
+const SAFE: SwipeContext = {
+  width: WIDTH,
+  dangerous: false,
+  sides: BOTH_SIDES,
+  swipes: 2,
+  presses: 1,
+};
+const DANGEROUS: SwipeContext = { ...SAFE, dangerous: true };
+/** A live Home row: left only, two swipes or two presses. */
+const KILL: SwipeContext = { ...SAFE, sides: ["left"], presses: 2 };
+/** A stopped Home row: left only, one swipe. */
+const ARCHIVE: SwipeContext = { ...SAFE, sides: ["left"], swipes: 1 };
 /** 20% of 400 px. */
 const THRESHOLD = 80;
 
@@ -157,6 +168,47 @@ describe("buttons", () => {
     expect(run([press("right", 0), { type: "tick", t: CONFIRM_WINDOW_MS }], DANGEROUS)).toEqual(
       idle,
     );
+  });
+});
+
+describe("left-only double swipe", () => {
+  it("arms and fires on the left only", () => {
+    expect(run(swipe(-150, 0), KILL)).toEqual(armed("left", 100));
+    expect(run([...swipe(-150, 0), ...swipe(-150, 500)], KILL)).toEqual(fired("left"));
+    expect(run(swipe(150, 0), KILL)).toEqual(idle);
+  });
+
+  it("cancels on a right swipe, a tap or the timeout", () => {
+    expect(run([...swipe(-150, 0), ...swipe(150, 500)], KILL)).toEqual(idle);
+    expect(run([...swipe(-150, 0), ...tap(500)], KILL)).toEqual(idle);
+    expect(run([...swipe(-150, 0), { type: "tick", t: 100 + CONFIRM_WINDOW_MS }], KILL)).toEqual(
+      idle,
+    );
+  });
+
+  it("takes two presses", () => {
+    const press = (t: number): SwipeInput => ({ type: "press", side: "left", t });
+    expect(run([press(0)], KILL)).toEqual(armed("left", 0));
+    expect(run([press(0), press(200)], KILL)).toEqual(fired("left"));
+  });
+});
+
+describe("left-only single swipe", () => {
+  it("fires on the first left swipe", () => {
+    expect(run(swipe(-150, 0), ARCHIVE)).toEqual(fired("left"));
+  });
+
+  it("ignores right swipes, short swipes and vertical movement", () => {
+    expect(run(swipe(150, 0), ARCHIVE)).toEqual(idle);
+    expect(run(swipe(-60, 0), ARCHIVE)).toEqual(idle);
+    expect(run(swipe(-150, 0, 100), ARCHIVE)).toEqual(idle);
+  });
+
+  it("never follows the finger to the right", () => {
+    const right = run(swipe(150, 0).slice(0, 2), ARCHIVE);
+    expect(swipeView(right, 50, ARCHIVE)).toMatchObject({ offset: 0, lean: 0 });
+    const left = run(swipe(-150, 0).slice(0, 2), ARCHIVE);
+    expect(swipeView(left, 50, ARCHIVE).offset).toBe(-75);
   });
 });
 

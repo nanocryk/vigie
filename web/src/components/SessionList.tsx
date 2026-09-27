@@ -1,10 +1,22 @@
-import { type FormEvent, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { Client, ConnectionStatus } from "@/client";
+import { useSwipe } from "@/components/Swipe";
 import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo, stateLabel } from "@/format";
+import { type RowAction, actionSide, homeSections, rowAction, rowSwipeRules } from "@/home";
 import { navigate } from "@/route";
+import { TAP_SLOP_PX } from "@/swipe";
+import type { SessionView } from "@/wire";
 
 const CLOCK_TICK_MS = 30_000;
 
@@ -89,6 +101,267 @@ function NewSession({ client }: { client: Client }) {
   );
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function coarsePointer(): boolean {
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+const ROW = "bg-card block min-w-0 flex-1 rounded-[5px] border px-3 py-2 text-left";
+/** Narrow, on the side the row slides toward, its label written vertically. */
+const SIDE_BUTTON =
+  "voice-ui shrink-0 rounded-[5px] border px-1 py-2 text-xs [writing-mode:vertical-rl] disabled:opacity-50";
+const SPRING_BACK = "transform 200ms ease-out";
+const ACTION_LABEL: Record<RowAction, string> = {
+  kill: "Kill",
+  archive: "Archive",
+  restore: "Restore",
+};
+const ACTION_BUTTON: Record<RowAction, string> = {
+  kill: "border-destructive text-destructive",
+  archive: "border-gauge-cold text-gauge-cold hover:bg-muted",
+  restore: "border-swipe-accept-strong text-swipe-accept-strong hover:bg-muted",
+};
+
+const REVEAL: Record<RowAction, { fill: string; latched: string }> = {
+  kill: { fill: "var(--swipe-deny)", latched: "var(--swipe-deny-latched)" },
+  archive: {
+    fill: "var(--gauge-cold)",
+    latched: "color-mix(in oklch, var(--gauge-cold), white 30%)",
+  },
+  restore: { fill: "var(--swipe-accept)", latched: "var(--swipe-accept-latched)" },
+};
+
+/** Revealed behind a swiped row: red to kill, blue to archive, green to restore, snapping brighter at the threshold. */
+function revealBackground(action: RowAction, lean: number): string {
+  const { fill, latched } = REVEAL[action];
+  if (Math.abs(lean) >= 1) return latched;
+  const share = Math.round(Math.abs(lean) * 100);
+  return `color-mix(in oklch, ${fill} ${share}%, var(--muted))`;
+}
+
+function RowBody({ session, now, status }: { session: SessionView; now: number; status: string }) {
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <BusyDot busy={session.busy} />
+        <span className="voice-heading min-w-0 flex-1 truncate">{folderName(session.cwd)}</span>
+        <span className="text-muted-foreground voice-ui shrink-0 text-xs">
+          {formatAgo(session.updated_at, now)}
+        </span>
+      </div>
+      <div className="text-muted-foreground voice-code truncate text-xs">{session.cwd}</div>
+      <div className="text-muted-foreground voice-ui text-xs">{status}</div>
+    </>
+  );
+}
+
+/** Opens the session on a click or Enter, but not on the tap that cancels an arming or ends a drag. */
+function useOpenOnTap(id: string, armed: boolean, blocked: boolean) {
+  const down = useRef<{ x: number; y: number; armed: boolean } | null>(null);
+  const open = () => navigate({ kind: "session", id });
+  return {
+    role: "button",
+    tabIndex: 0,
+    onPointerDown: (event: PointerEvent) => {
+      down.current = { x: event.clientX, y: event.clientY, armed };
+    },
+    onClick: (event: MouseEvent) => {
+      const start = down.current;
+      down.current = null;
+      if (blocked) return;
+      if (start !== null) {
+        const travel = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+        if (start.armed || travel >= TAP_SLOP_PX) return;
+      }
+      open();
+    },
+    onKeyDown: (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      open();
+    },
+  };
+}
+
+/** Killed by two left swipes or presses, archived by one left, restored by one right. */
+function ActionRow({
+  client,
+  session,
+  now,
+  action,
+  onRun,
+  onFailed,
+}: {
+  client: Client;
+  session: SessionView;
+  now: number;
+  action: RowAction;
+  onRun: () => void;
+  onFailed: (error: string) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const run = () => {
+    setPending(true);
+    onRun();
+    client
+      .command({ type: action, session: session.id, client_id: client.newClientId() })
+      .catch((err: unknown) => onFailed(errorMessage(err)));
+  };
+  const { surface, view, press } = useSwipe(rowSwipeRules(action), run);
+  const coarse = coarsePointer();
+  const side = actionSide(action);
+  const armed = view.armed !== null;
+  const slidOut = action !== "kill" && view.fired !== null;
+  const tap = useOpenOnTap(session.id, armed, view.fired !== null);
+  const status =
+    action === "restore"
+      ? pending
+        ? "Restoring..."
+        : "archived"
+      : pending && action === "kill"
+        ? "Stopping..."
+        : session.busy
+          ? "working"
+          : stateLabel(session.state);
+  const button = !coarse && (
+    <button
+      type="button"
+      disabled={view.fired !== null}
+      onClick={() => press(side)}
+      className={`${SIDE_BUTTON} ${side === "left" ? "rotate-180" : ""} ${ACTION_BUTTON[action]} ${armed ? "bg-destructive text-black" : ""}`}
+    >
+      {armed ? "Kill?" : ACTION_LABEL[action]}
+    </button>
+  );
+
+  return (
+    <div className="flex items-stretch gap-2">
+      {side === "left" && button}
+      <div className="relative min-w-0 flex-1 overflow-hidden rounded-[5px]">
+        {coarse && (
+          <div
+            aria-hidden
+            className={`voice-ui absolute inset-0 flex items-center rounded-[5px] px-4 text-sm text-black ${side === "left" ? "justify-end" : "justify-start"}`}
+            style={{
+              background: slidOut ? REVEAL[action].latched : revealBackground(action, view.lean),
+            }}
+          >
+            {ACTION_LABEL[action]}
+          </div>
+        )}
+        <div
+          ref={coarse ? surface : undefined}
+          {...tap}
+          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${action === "restore" ? "opacity-80" : ""}`}
+          style={{
+            transform: slidOut
+              ? `translateX(${side === "left" ? "-110%" : "110%"})`
+              : `translateX(${view.offset}px)`,
+            transition: view.dragging ? "none" : SPRING_BACK,
+          }}
+        >
+          <RowBody session={session} now={now} status={status} />
+        </div>
+        {coarse && armed && (
+          <span className="bg-card voice-heading text-destructive pointer-events-none absolute top-1.5 right-2 rounded-[5px] px-2 py-0.5 text-sm shadow-sm">
+            Kill?
+          </span>
+        )}
+      </div>
+      {side === "right" && button}
+    </div>
+  );
+}
+
+function Entry({ client, session, now }: { client: Client; session: SessionView; now: number }) {
+  const action = rowAction(session);
+  const [attempt, setAttempt] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <li className="space-y-1">
+      <ActionRow
+        key={`${action}-${attempt}`}
+        client={client}
+        session={session}
+        now={now}
+        action={action}
+        onRun={() => setError(null)}
+        onFailed={(message) => {
+          setError(message);
+          setAttempt((count) => count + 1);
+        }}
+      />
+      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+    </li>
+  );
+}
+
+/** Once above a list on touch screens, on the side its rows slide toward. */
+function SwipeHint({ side, text }: { side: "left" | "right"; text: string }) {
+  if (!coarsePointer()) return null;
+  return (
+    <div
+      className={`text-muted-foreground voice-ui text-xs ${side === "left" ? "text-left" : "text-right"}`}
+    >
+      {side === "left" ? `‹ ${text}` : `${text} ›`}
+    </div>
+  );
+}
+
+function Sessions({
+  client,
+  sessions,
+  now,
+}: {
+  client: Client;
+  sessions: readonly SessionView[];
+  now: number;
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  const { active, archived } = homeSections(sessions);
+  return (
+    <>
+      {active.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No active sessions.</p>
+      ) : (
+        <div className="space-y-1">
+          <SwipeHint side="left" text="Kill / Archive" />
+          <ul className="space-y-2">
+            {active.map((session) => (
+              <Entry key={session.id} client={client} session={session} now={now} />
+            ))}
+          </ul>
+        </div>
+      )}
+      {archived.length > 0 && (
+        <section className="space-y-2">
+          <button
+            type="button"
+            aria-expanded={showArchived}
+            onClick={() => setShowArchived((shown) => !shown)}
+            className="text-muted-foreground voice-ui hover:bg-muted rounded-[5px] px-2 py-1 text-sm"
+          >
+            {showArchived ? "▾" : "▸"} Archived ({archived.length})
+          </button>
+          {showArchived && (
+            <div className="space-y-1">
+              <SwipeHint side="right" text="Restore" />
+              <ul className="space-y-2">
+                {archived.map((session) => (
+                  <Entry key={session.id} client={client} session={session} now={now} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+    </>
+  );
+}
+
 export function SessionList({ client, label }: { client: Client; label: string | null }) {
   const snapshot = useSnapshot(client);
   const [now, setNow] = useState(() => Date.now());
@@ -118,33 +391,7 @@ export function SessionList({ client, label }: { client: Client; label: string |
           ) : snapshot.sessions.length === 0 ? (
             <p className="text-muted-foreground text-sm">No sessions yet.</p>
           ) : (
-            <ul className="space-y-2">
-              {snapshot.sessions.map((session) => (
-                <li key={session.id}>
-                  <button
-                    type="button"
-                    onClick={() => navigate({ kind: "session", id: session.id })}
-                    className="bg-card hover:bg-muted block w-full rounded-[5px] border px-3 py-2 text-left"
-                  >
-                    <div className="flex items-center gap-2">
-                      <BusyDot busy={session.busy} />
-                      <span className="voice-heading min-w-0 flex-1 truncate">
-                        {folderName(session.cwd)}
-                      </span>
-                      <span className="text-muted-foreground voice-ui shrink-0 text-xs">
-                        {formatAgo(session.updated_at, now)}
-                      </span>
-                    </div>
-                    <div className="text-muted-foreground voice-code truncate text-xs">
-                      {session.cwd}
-                    </div>
-                    <div className="text-muted-foreground voice-ui text-xs">
-                      {stateLabel(session.state)}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <Sessions client={client} sessions={snapshot.sessions} now={now} />
           )}
         </div>
       </main>

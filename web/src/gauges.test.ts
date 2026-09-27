@@ -28,6 +28,7 @@ const session = (patch: Partial<SessionView>): SessionView => ({
   permission_mode: null,
   cache: null,
   context: null,
+  archived_at: null,
   ...patch,
 });
 

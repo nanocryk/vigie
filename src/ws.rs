@@ -208,6 +208,7 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
         } => {
             let tag = Some(client_id.clone());
             let result = async {
+                manager.unarchive(session).await?;
                 if !rewarm {
                     manager.ensure_warm(session).await?;
                 }
@@ -230,6 +231,7 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             client_id,
         } => {
             let result = async {
+                manager.unarchive(session).await?;
                 if !rewarm {
                     manager.ensure_warm(session).await?;
                 }
@@ -255,10 +257,20 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             client_id,
         } => {
             let tag = Some(client_id.clone());
-            let result = manager
-                .restart(session, mode, text.unwrap_or_default(), tag)
-                .await;
-            (client_id, result)
+            let result = async {
+                manager.unarchive(session).await?;
+                manager
+                    .restart(session, mode, text.unwrap_or_default(), tag)
+                    .await
+            };
+            (client_id, result.await)
+        }
+        ClientMessage::Kill { session, client_id } => (client_id, manager.kill(session).await),
+        ClientMessage::Archive { session, client_id } => {
+            (client_id, manager.archive(session).await)
+        }
+        ClientMessage::Restore { session, client_id } => {
+            (client_id, manager.restore(session).await)
         }
         ClientMessage::Subscribe { .. } | ClientMessage::Unsubscribe { .. } => {
             (String::new(), Err(anyhow!("not a command")))

@@ -189,6 +189,55 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Stops the child the graceful way, as a shutdown does; the discussion stays
+    /// listed and the next send resumes it. Does nothing more when not live.
+    pub async fn kill(&self, id: Uuid) -> Result<()> {
+        let mut live = self.inner.live.lock().await;
+        let session = live.remove(&id);
+        if session.is_none() && self.inner.store.session(id).await?.is_none() {
+            bail!("unknown session {id}");
+        }
+        if let Some(session) = session {
+            session.stop().await;
+        }
+        drop(live);
+        let _ = self.inner.changes.send(id);
+        Ok(())
+    }
+
+    /// Fails with `wire::SESSION_LIVE` while the child runs.
+    pub async fn archive(&self, id: Uuid) -> Result<()> {
+        let live = self.inner.live.lock().await;
+        if live.get(&id).is_some_and(|session| !session.is_closed()) {
+            bail!(wire::SESSION_LIVE);
+        }
+        // Held while storing, so a concurrent `open` cannot launch in between.
+        self.inner.store.set_archived(id, Some(Utc::now())).await?;
+        drop(live);
+        let _ = self.inner.changes.send(id);
+        Ok(())
+    }
+
+    pub async fn restore(&self, id: Uuid) -> Result<()> {
+        self.inner.store.set_archived(id, None).await?;
+        let _ = self.inner.changes.send(id);
+        Ok(())
+    }
+
+    /// Restores the discussion when archived; fails for an unknown one.
+    pub async fn unarchive(&self, id: Uuid) -> Result<()> {
+        let row = self
+            .inner
+            .store
+            .session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))?;
+        if row.archived_at.is_some() {
+            self.restore(id).await?;
+        }
+        Ok(())
+    }
+
     /// Moves the discussion to a fresh Claude session: stops its child, records a
     /// `Restarted` event, then launches the new session with the seed and `text`
     /// as its first message (continue) or `text` alone (blank). A blank restart

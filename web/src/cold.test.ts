@@ -4,6 +4,7 @@ import {
   CacheColdError,
   type ColdChoiceMade,
   ackError,
+  archivedAction,
   coldAction,
   coldPanelShown,
   coldSpell,
@@ -98,6 +99,7 @@ describe("ackError", () => {
     expect(other).not.toBeInstanceOf(CacheColdError);
     expect(other.message).toBe("session x is not running");
     expect(ackError(undefined).message).toBe("Refused by the server");
+    expect(ackError("session_live").message).toMatch(/kill it first/);
   });
 });
 
@@ -114,6 +116,14 @@ describe("coldAction", () => {
       text: "next",
     });
     expect(coldAction("blank", "")).toEqual({ kind: "restart", mode: "blank", text: null });
+  });
+});
+
+describe("archivedAction", () => {
+  it("restores on a bare rewarm and otherwise acts as on a cold cache", () => {
+    expect(archivedAction("rewarm", " ")).toEqual({ kind: "restore" });
+    expect(archivedAction("rewarm", "go on")).toEqual({ kind: "send", text: "go on" });
+    expect(archivedAction("blank", "")).toEqual({ kind: "restart", mode: "blank", text: null });
   });
 });
 

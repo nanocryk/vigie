@@ -31,6 +31,8 @@ export interface SessionView {
   /** Null until a main request reported the TTL of its cache write. */
   cache: CacheView | null;
   context: ContextView | null;
+  /** Null while the discussion is not archived. */
+  archived_at: string | null;
 }
 
 /** Prompt cache of the main conversation: cold `ttl_secs` after `last_request_at`. */
@@ -101,7 +103,10 @@ export type ClientMessage =
       client_id: string;
     }
   | { type: "set_permission_mode"; session: string; mode: string; client_id: string }
-  | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string };
+  | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string }
+  | { type: "kill"; session: string; client_id: string }
+  | { type: "archive"; session: string; client_id: string }
+  | { type: "restore"; session: string; client_id: string };
 
 export type RestartMode = "continue" | "blank";
 
@@ -109,6 +114,8 @@ export type Command = Extract<ClientMessage, { client_id: string }>;
 
 /** Ack error of a `send` or an `answer` refused on a cold cache without `rewarm`. */
 export const CACHE_COLD = "cache_cold";
+/** Ack error of an `archive` refused while the child runs. */
+export const SESSION_LIVE = "session_live";
 
 /** Why an ask deserves a second look; `reasons` has one line per matched rule. */
 export interface Danger {
@@ -252,6 +259,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     permission_mode: optStr(value, "permission_mode", label),
     cache: parseCache(value["cache"], `${label}.cache`),
     context: parseContext(value["context"], `${label}.context`),
+    archived_at: optStr(value, "archived_at", label),
   };
 }
 

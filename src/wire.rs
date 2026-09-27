@@ -33,6 +33,14 @@
 //!   last `exchanges` of the discussion's `total_exchanges`. `blank` launches it
 //!   with `text` when not blank, else only at the next `send`. The `user_sent`
 //!   event carries `text` alone, and there is none for a blank `text`.
+//! - `kill {session, client_id}`: stops the live child the graceful way; the
+//!   discussion stays listed and the next `send` resumes it. Acked without effect
+//!   when not live.
+//! - `archive {session, client_id}`: refused with the ack error `session_live`
+//!   while the child runs. `restore {session, client_id}` unarchives.
+//! - A `send`, `answer` or `restart` on an archived discussion unarchives it
+//!   first, then follows its usual rules, the cold check included.
+//! - `kill`, `archive` and `restore` announce `sessions_changed`.
 //!
 //! Server to client:
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
@@ -43,13 +51,14 @@
 //!   of pending asks, ended, had
 //!   the permission mode of its stopped state changed, its main conversation
 //!   made a request or finished a turn (new `cache` and `context`), or the CLI
-//!   reported a new context usage, or it restarted on a fresh Claude session;
-//!   `GET /api/sessions` has the new list.
+//!   reported a new context usage, it restarted on a fresh Claude session, or it
+//!   was killed, archived or restored; `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 //!
-//! Each session of `GET /api/sessions` carries `live`, `busy`, `asks` (the
+//! Each session of `GET /api/sessions` carries `archived_at` (null while not
+//! archived), `live`, `busy`, `asks` (the
 //! permission, question and plan approval asks its running child awaits an
 //! answer to, 0 when not live), `cache {last_request_at,
 //! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source,
@@ -74,6 +83,8 @@ use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
 
 /// Ack error of a `send` or an `answer` refused on a cold cache.
 pub const CACHE_COLD: &str = "cache_cold";
+/// Ack error of an `archive` refused while the child runs.
+pub const SESSION_LIVE: &str = "session_live";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -117,6 +128,18 @@ pub enum ClientMessage {
         mode: RestartMode,
         #[serde(default)]
         text: Option<String>,
+        client_id: String,
+    },
+    Kill {
+        session: Uuid,
+        client_id: String,
+    },
+    Archive {
+        session: Uuid,
+        client_id: String,
+    },
+    Restore {
+        session: Uuid,
         client_id: String,
     },
 }
@@ -207,6 +230,8 @@ pub struct SessionView {
     /// Prompt cache of the main conversation; clients count the TTL down themselves.
     pub cache: Option<Cache>,
     pub context: Option<Context>,
+    /// `None` while the discussion is not archived.
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 impl SessionView {
@@ -225,6 +250,7 @@ impl SessionView {
             permission_mode: row.permission_mode,
             cache: row.cache,
             context: row.context,
+            archived_at: row.archived_at,
         }
     }
 }

@@ -1,5 +1,5 @@
 import { type CacheGauge, formatPercent, formatTokens } from "@/gauges";
-import { CACHE_COLD, type ContextView, type RestartMode } from "@/wire";
+import { CACHE_COLD, type ContextView, type RestartMode, SESSION_LIVE } from "@/wire";
 
 export type ColdChoice = "rewarm" | "continue" | "blank";
 
@@ -19,6 +19,7 @@ export class CacheColdError extends Error {
 
 export function ackError(error: string | null | undefined): Error {
   if (error === CACHE_COLD) return new CacheColdError();
+  if (error === SESSION_LIVE) return new Error("The session is running: kill it first");
   return new Error(error ?? "Refused by the server");
 }
 
@@ -45,6 +46,7 @@ export function rewarmField(
 export type ColdAction =
   | { kind: "send"; text: string }
   | { kind: "unblock" }
+  | { kind: "restore" }
   | { kind: "restart"; mode: RestartMode; text: string | null };
 
 /**
@@ -75,6 +77,12 @@ export function coldAction(choice: ColdChoice, draft: string): ColdAction {
     case "blank":
       return { kind: "restart", mode: choice, text };
   }
+}
+
+/** A choice from an archived discussion's panel: the server unarchives on the send or the restart; a bare rewarm restores it. */
+export function archivedAction(choice: ColdChoice, draft: string): ColdAction {
+  const action = coldAction(choice, draft);
+  return action.kind === "unblock" ? { kind: "restore" } : action;
 }
 
 /** `Context 23% (230k of 1M tokens)`, or a note that it is unknown. */

@@ -1,9 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
+  BOTH_SIDES,
   type Side,
   type SwipeContext,
   type SwipeInput,
+  type SwipeRules,
   type SwipeState,
   type SwipeView,
   TAP_SLOP_PX,
@@ -61,30 +63,23 @@ function background(view: SwipeView): string {
   return `linear-gradient(${direction}, ${UNDECIDED} ${neutral}%, ${base} ${neutral}%)`;
 }
 
-export interface SwipeProps {
-  labels: Record<Side, string>;
-  dangerous: boolean;
-  /** Called once, when the choice is confirmed. */
-  onConfirm: (side: Side) => void;
-  children: ReactNode;
-}
-
 /**
- * A panel confirmed by two swipes in the same direction, or by the buttons under
- * it. Remount it (new `key`) to start over.
+ * Drives `step` from the pointer events of the element `surface` is attached to.
+ * `onConfirm` is called once, when the machine fires. Remount the owner (new
+ * `key`) to start over.
  */
-export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
+export function useSwipe(rules: SwipeRules, onConfirm: (side: Side) => void) {
   const [state, setState] = useState<SwipeState>(idle);
   const [now, setNow] = useState(() => performance.now());
   const [width, setWidth] = useState(0);
   const surface = useRef<HTMLDivElement>(null);
   const stateRef = useRef<SwipeState>(idle);
-  const contextRef = useRef<SwipeContext>({ width: 0, dangerous });
+  const contextRef = useRef<SwipeContext>({ width: 0, ...rules });
   const confirmRef = useRef(onConfirm);
 
   useLayoutEffect(() => {
     confirmRef.current = onConfirm;
-    contextRef.current = { ...contextRef.current, dangerous };
+    contextRef.current = { ...rules, width: contextRef.current.width };
   });
 
   const dispatch = useCallback((input: SwipeInput) => {
@@ -158,8 +153,28 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
     };
   }, [dispatch]);
 
-  const view = swipeView(state, now, { width, dangerous });
+  const view = swipeView(state, now, { ...rules, width });
   const press = (side: Side) => dispatch({ type: "press", side, t: performance.now() });
+  return { surface, view, press };
+}
+
+export interface SwipeProps {
+  labels: Record<Side, string>;
+  dangerous: boolean;
+  /** Called once, when the choice is confirmed. */
+  onConfirm: (side: Side) => void;
+  children: ReactNode;
+}
+
+/**
+ * A panel confirmed by two swipes in the same direction, or by the buttons under
+ * it. Remount it (new `key`) to start over.
+ */
+export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
+  const { surface, view, press } = useSwipe(
+    { dangerous, sides: BOTH_SIDES, swipes: 2, presses: 1 },
+    onConfirm,
+  );
   const sideButton = (side: Side) => {
     const armed = view.armed?.side === side ? view.armed : null;
     return (

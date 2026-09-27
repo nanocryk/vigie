@@ -1,5 +1,5 @@
-// State machine of the double-swipe confirmation. Pure: positions and times come
-// in as inputs, so it runs the same under a finger, a mouse button or a test.
+// State machine of the swipe confirmation, double or single. Pure: positions and
+// times come in as inputs, so it runs the same under a finger, a mouse button or a test.
 
 export type Side = "left" | "right";
 
@@ -43,7 +43,17 @@ export interface SwipeContext {
   /** Panel width in pixels. */
   width: number;
   dangerous: boolean;
+  /** Sides a swipe can choose; a swipe toward another only cancels an arming. */
+  sides: readonly Side[];
+  /** 2: the first swipe arms, the second fires. 1: a swipe fires at once. */
+  swipes: 1 | 2;
+  /** 2: the first press arms, the second fires. A dangerous choice always takes 2. */
+  presses: 1 | 2;
 }
+
+export type SwipeRules = Omit<SwipeContext, "width">;
+
+export const BOTH_SIDES: readonly Side[] = ["left", "right"];
 
 export const idle: SwipeState = { kind: "idle" };
 
@@ -89,7 +99,10 @@ function release(
 ): SwipeState {
   const side = chooseSide(drag.dx, drag.dy, context.width);
   const armed = drag.armed;
-  if (armed === null) return side === null ? idle : { kind: "armed", side, at: t };
+  if (armed === null) {
+    if (side === null || !context.sides.includes(side)) return idle;
+    return context.swipes === 1 ? { kind: "fired", side } : { kind: "armed", side, at: t };
+  }
   if (side !== null) return confirm(armed, side, t, context);
   if (isTap(drag.dx, drag.dy)) return idle;
   return { kind: "armed", ...armed };
@@ -127,7 +140,7 @@ export function step(state: SwipeState, input: SwipeInput, context: SwipeContext
     case "press":
       if (current.kind === "dragging") return current;
       if (current.kind === "armed") return confirm(current, input.side, input.t, context);
-      return context.dangerous
+      return context.dangerous || context.presses === 2
         ? { kind: "armed", side: input.side, at: input.t }
         : { kind: "fired", side: input.side };
   }
@@ -169,12 +182,14 @@ export function swipeView(state: SwipeState, now: number, context: SwipeContext)
     case "idle":
       return { dragging: false, offset: 0, lean: 0, armed: null, fired: null };
     case "dragging": {
-      const horizontal = Math.abs(current.dx) >= HORIZONTAL_RATIO * Math.abs(current.dy);
-      const reach = Math.min(1, Math.abs(current.dx) / sideThreshold(context.width));
+      // A panel never follows the finger toward a side it cannot choose.
+      const dx = context.sides.includes(current.dx < 0 ? "left" : "right") ? current.dx : 0;
+      const horizontal = Math.abs(dx) >= HORIZONTAL_RATIO * Math.abs(current.dy);
+      const reach = Math.min(1, Math.abs(dx) / sideThreshold(context.width));
       return {
         dragging: true,
-        offset: current.dx,
-        lean: horizontal ? Math.sign(current.dx) * reach : 0,
+        offset: dx,
+        lean: horizontal ? Math.sign(dx) * reach : 0,
         armed: current.armed === null ? null : armedOf(current.armed),
         fired: null,
       };

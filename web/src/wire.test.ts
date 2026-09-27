@@ -96,11 +96,13 @@ describe("parseSessionList", () => {
             live: false,
             busy: false,
             asks: 0,
+            archived_at: "2026-09-27T13:00:00Z",
           },
         ],
       },
       "list",
     );
+    expect(list.map((session) => session.archived_at)).toEqual([null, "2026-09-27T13:00:00Z"]);
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
     expect(list[0]?.permission_mode).toBe("plan");
     expect(list[1]?.permission_mode).toBeNull();
