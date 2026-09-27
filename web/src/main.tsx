@@ -16,6 +16,12 @@ const boot = bootstrap({
   stripHash: () => history.replaceState(null, "", location.pathname + location.search),
 });
 
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch((err: unknown) => {
+    console.error("service worker registration failed", err);
+  });
+}
+
 createRoot(rootEl).render(
   <StrictMode>
     <Suspense fallback={null}>

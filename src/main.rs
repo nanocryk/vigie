@@ -221,11 +221,18 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
 
     if !args.no_print_token {
         eprintln!("\nvigie2 listening on {scheme}://{bind}{BASE_PATH_SLASH}");
-        eprintln!("Pair URL (valid until this process exits, same-machine only):");
+        eprintln!("Pair URL (single use, valid until this process exits):");
         eprintln!(
-            "  {loopback_origin}{BASE_PATH_SLASH}#auth={}\n",
+            "  {loopback_origin}{BASE_PATH_SLASH}#auth={}",
             auth.startup_token
         );
+        for host in &args.public_host {
+            eprintln!(
+                "  {scheme}://{host}{BASE_PATH_SLASH}#auth={}",
+                auth.startup_token
+            );
+        }
+        eprintln!();
         if !reachable_ips.is_empty() && !is_loopback(&bind) {
             eprintln!("Reachable interfaces:");
             for ip in &reachable_ips {
