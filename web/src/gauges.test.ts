@@ -8,11 +8,45 @@ import {
   formatTokens,
   formatTtl,
   isStale,
+  needsYou,
   readingAge,
   tween,
   windowBar,
 } from "@/gauges";
-import type { UsageSnapshot, WindowReport } from "@/wire";
+import type { SessionView, UsageSnapshot, WindowReport } from "@/wire";
+
+const session = (patch: Partial<SessionView>): SessionView => ({
+  id: "s",
+  cwd: "/p",
+  created_at: "c",
+  updated_at: "u",
+  state: { kind: "running" },
+  last_seq: 1,
+  live: true,
+  busy: false,
+  asks: 0,
+  permission_mode: null,
+  cache: null,
+  context: null,
+  ...patch,
+});
+
+describe("needsYou", () => {
+  it("sums the asks and counts the working sessions", () => {
+    expect(
+      needsYou([
+        session({ asks: 2, busy: true }),
+        session({ asks: 1 }),
+        session({ busy: true }),
+        session({ live: false, state: { kind: "stopped" } }),
+      ]),
+    ).toEqual({ asks: 3, working: 2 });
+  });
+
+  it("is zero without sessions", () => {
+    expect(needsYou([])).toEqual({ asks: 0, working: 0 });
+  });
+});
 
 const report = (patch: Partial<WindowReport>): WindowReport => ({
   used: 30,

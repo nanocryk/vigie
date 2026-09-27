@@ -212,7 +212,7 @@ async fn basic_turns_and_usage() {
     );
     let result = harness.until_result().await;
     assert_eq!(result.result.as_deref(), Some("ok"));
-    assert_eq!(*harness.session.activity().borrow(), Activity::Idle);
+    assert_eq!(harness.session.status().borrow().activity, Activity::Idle);
 
     let usage = harness.session.usage().await.unwrap();
     assert!(usage.rate_limits_available);
@@ -379,7 +379,7 @@ async fn background_task_starts_its_own_turn() {
     harness.until_result().await;
     let second = harness.until_result().await;
     assert!(second.result.unwrap_or_default().contains("exit"));
-    assert_eq!(*harness.session.activity().borrow(), Activity::Idle);
+    assert_eq!(harness.session.status().borrow().activity, Activity::Idle);
     harness.finish().await;
 }
 
@@ -565,6 +565,7 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
             .is_err()
     );
     harness.session.answer("cli-3", allow).await.unwrap();
+    assert_eq!(harness.session.status().borrow().asks, 0);
     harness.finish().await;
 }
 

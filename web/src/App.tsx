@@ -30,7 +30,7 @@ function Shell({ label }: { label: string | null }) {
     <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
       <NewVersionBanner />
       {route.kind === "session" ? (
-        <SessionScreen key={route.id} client={client} id={route.id} />
+        <SessionScreen key={route.id} client={client} id={route.id} label={label} />
       ) : (
         <SessionList client={client} label={label} />
       )}

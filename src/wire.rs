@@ -25,7 +25,8 @@
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
 //!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
-//! - `sessions_changed`: a session was created, changed activity, ended, had
+//! - `sessions_changed`: a session was created, changed activity or its count
+//!   of pending asks, ended, had
 //!   the permission mode of its stopped state changed, its main conversation
 //!   made a request or finished a turn (new `cache` and `context`), or the CLI
 //!   reported a new context usage; `GET /api/sessions` has the new list.
@@ -33,7 +34,9 @@
 //!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 //!
-//! Each session of `GET /api/sessions` carries `cache {last_request_at,
+//! Each session of `GET /api/sessions` carries `live`, `busy`, `asks` (the
+//! permission, question and plan approval asks its running child awaits an
+//! answer to, 0 when not live), `cache {last_request_at,
 //! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source,
 //! autocompact_threshold, categories}`; either is null while unknown. `source`
 //! is `cli` when the total comes from the CLI's `get_context_usage` (asked when
@@ -51,7 +54,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::gauges::{Cache, Context};
-use crate::session::{Answer, Event, EventBody};
+use crate::session::{Activity, Answer, Event, EventBody, LiveStatus};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +169,8 @@ pub struct SessionView {
     pub live: bool,
     /// A turn or a background task is running.
     pub busy: bool,
+    /// Asks of the running child waiting for an answer; 0 when not live.
+    pub asks: usize,
     /// Stored permission mode, passed at the next launch; `None` when never recorded.
     pub permission_mode: Option<String>,
     /// Prompt cache of the main conversation; clients count the TTL down themselves.
@@ -174,7 +179,8 @@ pub struct SessionView {
 }
 
 impl SessionView {
-    pub fn new(row: SessionRow, live: bool, busy: bool) -> Self {
+    /// `status` is `None` when the child is not running.
+    pub fn new(row: SessionRow, status: Option<LiveStatus>) -> Self {
         Self {
             id: row.id,
             cwd: row.cwd,
@@ -182,8 +188,9 @@ impl SessionView {
             updated_at: row.updated_at,
             state: row.state,
             last_seq: row.last_seq,
-            live,
-            busy,
+            live: status.is_some(),
+            busy: status.is_some_and(|status| status.activity == Activity::Busy),
+            asks: status.map_or(0, |status| status.asks),
             permission_mode: row.permission_mode,
             cache: row.cache,
             context: row.context,

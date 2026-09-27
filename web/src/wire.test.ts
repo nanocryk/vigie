@@ -72,8 +72,9 @@ describe("parseSessionList", () => {
             updated_at: "u",
             state: { kind: "exited", code: 1 },
             last_seq: 9,
-            live: false,
+            live: true,
             busy: false,
+            asks: 2,
             permission_mode: "plan",
             cache: { last_request_at: "2026-09-27T12:00:00Z", ttl_secs: 3600 },
             context: {
@@ -94,6 +95,7 @@ describe("parseSessionList", () => {
             last_seq: 1,
             live: false,
             busy: false,
+            asks: 0,
           },
         ],
       },
@@ -102,6 +104,7 @@ describe("parseSessionList", () => {
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
     expect(list[0]?.permission_mode).toBe("plan");
     expect(list[1]?.permission_mode).toBeNull();
+    expect(list.map((session) => session.asks)).toEqual([2, 0]);
     expect(list[0]?.cache?.ttl_secs).toBe(3600);
     expect(list[0]?.context?.source).toBe("estimate");
     expect(list[0]?.context?.autocompact_threshold).toBe(900000);
@@ -122,6 +125,7 @@ describe("parseSessionList", () => {
       last_seq: 1,
       live: false,
       busy: false,
+      asks: 0,
       context: { used_tokens: 1, max_tokens: 2, percentage: 50, source: "guess" },
     };
     expect(() => parseSessionList({ sessions: [session] }, "list")).toThrow(
@@ -139,6 +143,7 @@ describe("parseSessionList", () => {
       last_seq: 1,
       live: false,
       busy: false,
+      asks: 0,
       context: {
         used_tokens: 1,
         max_tokens: 2,

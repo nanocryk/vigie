@@ -24,6 +24,8 @@ export interface SessionView {
   last_seq: number;
   live: boolean;
   busy: boolean;
+  /** Asks of the running child awaiting an answer; 0 when not live. */
+  asks: number;
   /** Stored mode the next launch passes; null when never recorded. */
   permission_mode: string | null;
   /** Null until a main request reported the TTL of its cache write. */
@@ -225,6 +227,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     last_seq: num(value, "last_seq", label),
     live: bool(value, "live", label),
     busy: bool(value, "busy", label),
+    asks: num(value, "asks", label),
     permission_mode: optStr(value, "permission_mode", label),
     cache: parseCache(value["cache"], `${label}.cache`),
     context: parseContext(value["context"], `${label}.context`),

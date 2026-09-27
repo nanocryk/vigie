@@ -15,7 +15,7 @@ use vigie2::protocol::Inbound;
 use vigie2::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, Direction, Recording,
 };
-use vigie2::session::{Event, EventBody, HostEvent, Session};
+use vigie2::session::{Answer, Event, EventBody, HostEvent, Session};
 use vigie2::store::{EventKind, SessionState, Store, StoredEvent};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -423,6 +423,67 @@ async fn the_row_follows_the_mode_of_a_live_session() {
     let row = manager.store().session(id).await.unwrap().unwrap();
     assert_eq!(row.permission_mode.as_deref(), Some("acceptEdits"));
     stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
+}
+
+/// Two asks, of which only the first gets answered.
+const ASKS_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "t1"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "a"}, "tool_use_id": "t2"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "deny", "message": "no"}}}}
+"#;
+
+/// Waits for an announcement after which the live session has `asks` pending.
+async fn until_asks(
+    manager: &SessionManager,
+    changes: &mut broadcast::Receiver<Uuid>,
+    id: Uuid,
+    asks: usize,
+) {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            assert_eq!(changes.recv().await.unwrap(), id);
+            if manager
+                .statuses()
+                .await
+                .get(&id)
+                .is_some_and(|status| status.asks == asks)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{asks} pending asks never announced"));
+}
+
+#[tokio::test]
+async fn pending_asks_are_counted_and_announced() {
+    let env = Env::new();
+    let script = env.script("asks.ndjson", ASKS_SCRIPT);
+    let manager = env.manager(&script).await;
+    let mut changes = manager.subscribe_changes();
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    until_asks(&manager, &mut changes, id, 2).await;
+    session
+        .answer(
+            "cli-1",
+            Answer::Deny {
+                message: "no".into(),
+            },
+        )
+        .await
+        .unwrap();
+    until_asks(&manager, &mut changes, id, 1).await;
+
+    stop(&session).await;
+    assert_eq!(session.status().borrow().asks, 0);
+    assert!(!manager.statuses().await.contains_key(&id));
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
     assert_clean_exit(stored.last().unwrap());

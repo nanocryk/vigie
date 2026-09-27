@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::child::{Launch, Program};
 use crate::gauges::MainRequest;
 use crate::protocol::Inbound;
-use crate::session::{Activity, Config, Event, EventBody, HostEvent, Session};
+use crate::session::{Activity, Config, Event, EventBody, HostEvent, LiveStatus, Session};
 use crate::store::{SessionRow, Store, StoredEvent};
 use crate::usage::{SessionContext, Snapshot};
 
@@ -70,8 +70,8 @@ impl SessionManager {
         &self.inner.store
     }
 
-    /// Receives the id of a session each time it is spawned, changes activity,
-    /// ends, or moves its cache and context gauges. The store already reflects the
+    /// Receives the id of a session each time it is spawned, changes activity or
+    /// its count of pending asks, ends, or moves its cache and context gauges. The store already reflects the
     /// change when the id arrives.
     pub fn subscribe_changes(&self) -> broadcast::Receiver<Uuid> {
         self.inner.changes.subscribe()
@@ -85,7 +85,7 @@ impl SessionManager {
 
     /// The usage snapshot, reporting on every session whose child is running.
     pub async fn usage(&self) -> Result<Snapshot> {
-        let live = self.activities().await;
+        let live = self.statuses().await;
         let sessions = self
             .list()
             .await?
@@ -142,15 +142,15 @@ impl SessionManager {
             .cloned()
     }
 
-    /// Activity of every session whose child is running.
-    pub async fn activities(&self) -> HashMap<Uuid, Activity> {
+    /// Status of every session whose child is running.
+    pub async fn statuses(&self) -> HashMap<Uuid, LiveStatus> {
         self.inner
             .live
             .lock()
             .await
             .iter()
             .filter(|(_, session)| !session.is_closed())
-            .map(|(id, session)| (*id, *session.activity().borrow()))
+            .map(|(id, session)| (*id, *session.status().borrow()))
             .collect()
     }
 
@@ -221,7 +221,7 @@ impl SessionManager {
         })?;
         tokio::spawn(sample_after_turns(
             id,
-            session.activity(),
+            session.status(),
             events,
             Arc::downgrade(&self.inner),
             self.inner.usage_changes.clone(),
@@ -229,7 +229,7 @@ impl SessionManager {
         ));
         tokio::spawn(announce_changes(
             id,
-            session.activity(),
+            session.status(),
             self.inner.changes.clone(),
         ));
         let (first_ask, store, changes) = (
@@ -242,14 +242,14 @@ impl SessionManager {
     }
 }
 
-/// The activity channel closes when the session actor ends, after its final
+/// The status channel closes when the session actor ends, after its final
 /// state is queued to the store.
 async fn announce_changes(
     id: Uuid,
-    mut activity: watch::Receiver<Activity>,
+    mut status: watch::Receiver<LiveStatus>,
     changes: broadcast::Sender<Uuid>,
 ) {
-    while activity.changed().await.is_ok() {
+    while status.changed().await.is_ok() {
         let _ = changes.send(id);
     }
     let _ = changes.send(id);
@@ -263,7 +263,7 @@ async fn announce_changes(
 /// no `Session` handle, so it never keeps a session alive.
 async fn sample_after_turns(
     id: Uuid,
-    activity: watch::Receiver<Activity>,
+    status: watch::Receiver<LiveStatus>,
     mut events: broadcast::Receiver<Arc<Event>>,
     inner: Weak<Inner>,
     usage_changes: broadcast::Sender<()>,
@@ -304,7 +304,7 @@ async fn sample_after_turns(
             }
             Err(RecvError::Closed) => return,
         };
-        if !turn_ended || *activity.borrow() != Activity::Idle {
+        if !turn_ended || status.borrow().activity != Activity::Idle {
             continue;
         }
         let Some(inner) = inner.upgrade() else {

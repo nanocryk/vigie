@@ -1,20 +1,28 @@
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { Client, ConnectionStatus } from "@/client";
-import { ReloadButton } from "@/components/Reload";
-import { TOP_BAR_IN_ROW, TopBar } from "@/components/TopBar";
+import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo, stateLabel } from "@/format";
 import { navigate } from "@/route";
 
 const CLOCK_TICK_MS = 30_000;
 
-export function ConnectionBadge({ status }: { status: ConnectionStatus }) {
+/** Nothing while connected; a dot named after the status otherwise. */
+export function ConnectionDot({ status }: { status: ConnectionStatus }) {
   if (status === "open") return null;
+  const text = status === "connecting" ? "connecting..." : "offline, retrying";
   return (
-    <span className="text-muted-foreground voice-ui shrink-0 text-xs">
-      {status === "connecting" ? "connecting..." : "offline, retrying"}
-    </span>
+    <span
+      role="status"
+      aria-label={text}
+      title={text}
+      className={
+        status === "connecting"
+          ? "bg-gauge-glow inline-block size-2 shrink-0 animate-pulse rounded-full"
+          : "bg-destructive inline-block size-2 shrink-0 rounded-full"
+      }
+    />
   );
 }
 
@@ -91,17 +99,14 @@ export function SessionList({ client, label }: { client: Client; label: string |
 
   return (
     <>
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
-        <span className="text-primary voice-heading flex-1 text-lg min-[600px]:flex-none">vigie2</span>
-        <TopBar usage={snapshot.usage} className={TOP_BAR_IN_ROW} />
-        <div className="flex min-w-0 items-center gap-3">
-          <ConnectionBadge status={snapshot.status} />
-          {label !== null && (
-            <span className="text-muted-foreground voice-ui truncate text-sm">{label}</span>
-          )}
-          <ReloadButton />
-        </div>
-      </header>
+      <Header
+        left={<span className="text-primary voice-heading px-2 text-lg">vigie2</span>}
+        right={<ConnectionDot status={snapshot.status} />}
+        usage={snapshot.usage}
+        column={<NeedsYouColumn sessions={snapshot.sessions} />}
+        info={null}
+        label={label}
+      />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-6 p-4">
           <NewSession client={client} />

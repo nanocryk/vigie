@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import { ReloadButton } from "@/components/Reload";
 import { useClock } from "@/components/useNow";
 import {
   type CacheGauge,
@@ -9,6 +10,7 @@ import {
   formatSpan,
   formatTokens,
   isStale,
+  needsYou,
   readingAge,
   type Tone,
   tween,
@@ -19,9 +21,6 @@ import type { Confidence, ContextView, SessionView, UsageSnapshot, WindowReport 
 
 const TWEEN_MS = 700;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
-/** For a child of a wrapping header row: its own row below 600 px, the remaining width of the row above. */
-export const TOP_BAR_IN_ROW =
-  "order-last basis-full min-[600px]:order-none min-[600px]:basis-0 min-[600px]:flex-1";
 const TRACK_SHAPE = "relative h-2 min-w-0 flex-1 overflow-hidden rounded-[3px]";
 const TRACK = `${TRACK_SHAPE} bg-muted`;
 /** An empty track: nothing known, so nothing that could read as a value. */
@@ -145,17 +144,13 @@ function WindowRow({ kind, report, now }: { kind: WindowKind; report: WindowRepo
 }
 
 function AccountColumn({ usage, now }: { usage: UsageSnapshot | null; now: number }) {
-  const age = readingAge(usage, now);
-  const stale = isStale(age);
+  const stale = isStale(readingAge(usage, now));
   const fiveHour = usage?.five_hour ?? null;
   const sevenDay = usage?.seven_day ?? null;
   return (
     <div className={`min-w-0 transition-opacity duration-500 ${stale ? "opacity-50" : ""}`}>
       {fiveHour === null ? <EmptyRow label="5h" /> : <WindowRow kind="5h" report={fiveHour} now={now} />}
       {sevenDay === null ? <EmptyRow label="7d" /> : <WindowRow kind="7d" report={sevenDay} now={now} />}
-      {stale && age !== null && (
-        <div className="text-muted-foreground">readings {formatSpan(age)} old</div>
-      )}
     </div>
   );
 }
@@ -211,34 +206,80 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
   }
 }
 
-/**
- * Account usage windows, then the session's context and cache when `session` is
- * given (undefined on Home). Side by side from 600 px, stacked below.
- */
-export function TopBar({
-  usage,
-  session,
-  className = "",
-}: {
-  usage: UsageSnapshot | null;
-  session?: SessionView | null;
-  className?: string;
-}) {
+export function SessionColumn({ session }: { session: SessionView | null }) {
   const now = useClock(1000);
   const gauge = cacheGauge(session?.cache ?? null, now);
-
   return (
-    <div
-      aria-label="Usage, context and cache"
-      className={`voice-code grid grid-cols-1 gap-x-4 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 ${className}`}
-    >
-      <AccountColumn usage={usage} now={now} />
-      {session !== undefined && (
-        <div className="min-w-0">
-          <ContextRow context={session?.context ?? null} />
-          <CacheRow gauge={gauge} />
-        </div>
-      )}
+    <div className="min-w-0">
+      <ContextRow context={session?.context ?? null} />
+      <CacheRow gauge={gauge} />
     </div>
+  );
+}
+
+/** `sessions` is null while the list is loading. */
+export function NeedsYouColumn({ sessions }: { sessions: readonly SessionView[] | null }) {
+  const counts = sessions === null ? null : needsYou(sessions);
+  const asksTone = counts !== null && counts.asks > 0 ? "text-gauge-glow" : "text-muted-foreground";
+  return (
+    <div className="min-w-0">
+      <div className="flex h-4 items-center gap-4">
+        <span className={`tabular-nums ${asksTone}`}>asks {counts?.asks ?? "--"}</span>
+        <span className="text-muted-foreground tabular-nums">working {counts?.working ?? "--"}</span>
+      </div>
+      <div className="h-4" />
+    </div>
+  );
+}
+
+/**
+ * The top bar, then a thin bar. The side slots keep fixed widths so the account
+ * column sits at the same place on every screen. Gauge columns are side by side
+ * from 600 px, stacked below.
+ */
+export function Header({
+  left,
+  right,
+  usage,
+  column,
+  info,
+  label,
+}: {
+  left: ReactNode;
+  right: ReactNode;
+  usage: UsageSnapshot | null;
+  /** Second gauge column, beside or under the account column. */
+  column: ReactNode;
+  /** Left of the thin bar. */
+  info: ReactNode;
+  /** Device label, right of the thin bar. */
+  label: string | null;
+}) {
+  const now = useClock(1000);
+  return (
+    <header className="shrink-0">
+      <div className="flex items-start gap-2 border-b px-2 py-1.5">
+        <div className="flex w-24 shrink-0 items-center self-center overflow-hidden whitespace-nowrap">
+          {left}
+        </div>
+        <div
+          aria-label="Usage, context and cache"
+          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-4 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2"
+        >
+          <AccountColumn usage={usage} now={now} />
+          {column}
+        </div>
+        <div className="flex w-6 shrink-0 items-center justify-end gap-1.5 self-center">
+          {right}
+        </div>
+      </div>
+      <div className="voice-ui flex h-7 items-center gap-2 border-b pr-1 pl-3 text-xs">
+        <div className="min-w-0 flex-1 truncate">{info}</div>
+        {label !== null && (
+          <span className="text-muted-foreground max-w-[50%] min-w-0 truncate">{label}</span>
+        )}
+        <ReloadButton />
+      </div>
+    </header>
   );
 }

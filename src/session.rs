@@ -156,11 +156,20 @@ pub enum Resolution {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Activity {
+    #[default]
     Idle,
     Busy,
+}
+
+/// What the session is doing, republished on every change.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveStatus {
+    pub activity: Activity,
+    /// Asks waiting for an answer.
+    pub asks: usize,
 }
 
 /// Derives `Activity` from the lines the CLI sends and the messages the host sends.
@@ -233,7 +242,7 @@ pub struct Session {
     id: Uuid,
     commands: mpsc::Sender<Command>,
     events: broadcast::Sender<Arc<Event>>,
-    activity: watch::Receiver<Activity>,
+    status: watch::Receiver<LiveStatus>,
 }
 
 impl Session {
@@ -251,7 +260,7 @@ impl Session {
             history.session_started(config.id, &config.cwd, Utc::now(), config.permission_mode);
         }
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
-        let (activity_sender, activity) = watch::channel(Activity::Idle);
+        let (status_sender, status) = watch::channel(LiveStatus::default());
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let actor = Actor {
             id: config.id,
@@ -262,7 +271,7 @@ impl Session {
             history: config.history,
             end: None,
             seq: config.last_seq,
-            activity: activity_sender,
+            status: status_sender,
             tracker: ActivityTracker::default(),
             asks: Vec::new(),
             requests: HashMap::new(),
@@ -279,7 +288,7 @@ impl Session {
             id: config.id,
             commands,
             events,
-            activity,
+            status,
         };
         Ok((session, first_receiver))
     }
@@ -292,8 +301,8 @@ impl Session {
         self.events.subscribe()
     }
 
-    pub fn activity(&self) -> watch::Receiver<Activity> {
-        self.activity.clone()
+    pub fn status(&self) -> watch::Receiver<LiveStatus> {
+        self.status.clone()
     }
 
     /// Resolves once the message is written to the child. `client_id` is echoed in
@@ -424,7 +433,7 @@ struct Actor {
     /// How the session ends, once decided; an unrequested exit leaves it `None`.
     end: Option<SessionState>,
     seq: u64,
-    activity: watch::Sender<Activity>,
+    status: watch::Sender<LiveStatus>,
     tracker: ActivityTracker,
     /// In arrival order.
     asks: Vec<PendingAsk>,
@@ -498,7 +507,7 @@ impl Actor {
         }
         if let Some(line) = &parsed {
             self.tracker.on_line(line);
-            self.publish_activity();
+            self.publish_status();
         }
         let event = self.emit(EventBody::Line(Box::new(Line { raw, parsed })));
         if let EventBody::Line(line) = &event.body
@@ -554,6 +563,7 @@ impl Actor {
                     tool_use_id: ask.tool_use_id.clone(),
                     danger: danger::classify(ask, &self.cwd),
                 });
+                self.publish_status();
             }
             CliRequest::Other(fields) => {
                 let subtype = fields
@@ -626,6 +636,7 @@ impl Actor {
             request_id: ask.request_id,
             resolution: Resolution::Cancelled,
         });
+        self.publish_status();
     }
 
     fn on_stderr(&mut self, line: String) {
@@ -695,7 +706,7 @@ impl Actor {
         }
         self.write(Outbound::User(message)).await?;
         self.tracker.on_send();
-        self.publish_activity();
+        self.publish_status();
         Ok(())
     }
 
@@ -717,6 +728,7 @@ impl Actor {
             request_id,
             resolution: Resolution::Answered { answer },
         });
+        self.publish_status();
         if let Some(note) = note {
             self.send_user(note, None, Some(Priority::Next)).await?;
         }
@@ -774,7 +786,8 @@ impl Actor {
             }
         };
         self.tracker = ActivityTracker::default();
-        self.publish_activity();
+        self.asks.clear();
+        self.publish_status();
         self.requests.clear();
         self.mode_requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();
@@ -794,9 +807,12 @@ impl Actor {
         format!("vigie2-{}", self.next_request)
     }
 
-    fn publish_activity(&mut self) {
-        let next = self.tracker.activity();
-        self.activity.send_if_modified(|current| {
+    fn publish_status(&mut self) {
+        let next = LiveStatus {
+            activity: self.tracker.activity(),
+            asks: self.asks.len(),
+        };
+        self.status.send_if_modified(|current| {
             let changed = *current != next;
             *current = next;
             changed

@@ -43,7 +43,10 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. From about 600 px wide (unfolded phone, desktop), the bar sits in the header row right of the title, its two columns side by side; below that width it takes its own row under the header, columns stacked. Home shows the account column only.
+- The top bar has three slots: a fixed-width left slot (the back button in a session, the vigie2 mark on Home), the gauges in the middle, and a fixed-width right slot with the connection status. The account column sits at exactly the same place on Home and in a session.
+- The gauges have two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below.
+- On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
+- A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and the device label and the reload button on the right.
 - Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
@@ -134,7 +137,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - the projection, from the spent edge to the projected value, is green, yellow or red by the projected share: yellow from 75% and red from 90% on the 5h window, from 85% and 95% on the 7d window; more opaque when well supported and less when barely;
   - the used number is green, yellow from 40% and red from 70%; the projected number takes the projection's color, bold when well supported and faint when barely.
 - Values animate when they change.
-- Readings are `get_usage` samples, taken only while a session is live, and `rate_limit_event` lines. When the newest is older than 10 minutes, the account column dims and shows its age.
+- Readings are `get_usage` samples, taken only while a session is live, and `rate_limit_event` lines. When the newest is older than 10 minutes, the account column dims.
 - Fit check: before starting a phase or task, warn when it likely does not fit in the remaining 5h window, with the reset time.
 - Cost per phase or task, as a share of the usage windows.
 

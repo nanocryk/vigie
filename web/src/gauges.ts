@@ -1,4 +1,11 @@
-import type { CacheView, Confidence, ContextView, UsageSnapshot, WindowReport } from "@/wire";
+import type {
+  CacheView,
+  Confidence,
+  ContextView,
+  SessionView,
+  UsageSnapshot,
+  WindowReport,
+} from "@/wire";
 
 /** Past this age the account readings no longer describe the present. */
 export const STALE_AFTER_MS = 10 * 60_000;
@@ -135,4 +142,20 @@ export function easeOut(t: number): number {
 
 export function tween(from: number, to: number, t: number): number {
   return from + (to - from) * easeOut(t);
+}
+
+/** Pending asks across all sessions, and the number of sessions working. */
+export interface NeedsYou {
+  asks: number;
+  working: number;
+}
+
+export function needsYou(sessions: readonly SessionView[]): NeedsYou {
+  let asks = 0;
+  let working = 0;
+  for (const session of sessions) {
+    asks += session.asks;
+    if (session.busy) working += 1;
+  }
+  return { asks, working };
 }

@@ -3,9 +3,8 @@ import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from
 import type { Client } from "@/client";
 import { AskCard } from "@/components/AskCard";
 import { PermissionMode } from "@/components/PermissionMode";
-import { BusyDot, ConnectionBadge } from "@/components/SessionList";
-import { ReloadButton } from "@/components/Reload";
-import { TOP_BAR_IN_ROW, TopBar } from "@/components/TopBar";
+import { BusyDot, ConnectionDot } from "@/components/SessionList";
+import { Header, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
@@ -102,7 +101,15 @@ function Composer({
   );
 }
 
-export function SessionScreen({ client, id }: { client: Client; id: string }) {
+export function SessionScreen({
+  client,
+  id,
+  label,
+}: {
+  client: Client;
+  id: string;
+  label: string | null;
+}) {
   const snapshot = useSnapshot(client);
   const transcript = snapshot.transcripts.get(id) ?? emptyTranscript;
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
@@ -179,33 +186,37 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
 
   return (
     <>
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
-        <button
-          type="button"
-          onClick={backToList}
-          className="text-primary voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-1 text-sm"
-        >
-          &lsaquo; Sessions
-        </button>
-        <div className="min-w-0 flex-1 min-[600px]:max-w-40 min-[600px]:flex-none">
-          <div className="voice-heading truncate">
-            {view === null ? "..." : folderName(view.cwd)}
-          </div>
-          {view !== null && (
-            <div className="text-muted-foreground voice-ui truncate text-xs">
-              {busy ? "working" : stateLabel(view.state)}
-            </div>
-          )}
-        </div>
-        <TopBar
-          usage={snapshot.usage}
-          session={view}
-          className={TOP_BAR_IN_ROW}
-        />
-        <ConnectionBadge status={snapshot.status} />
-        <BusyDot busy={busy} />
-        <ReloadButton />
-      </header>
+      <Header
+        left={
+          <button
+            type="button"
+            onClick={backToList}
+            className="text-primary voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-1 text-sm"
+          >
+            &lsaquo; Sessions
+          </button>
+        }
+        right={
+          <>
+            <ConnectionDot status={snapshot.status} />
+            <BusyDot busy={busy} />
+          </>
+        }
+        usage={snapshot.usage}
+        column={<SessionColumn session={view} />}
+        info={
+          <>
+            <span>{view === null ? "..." : folderName(view.cwd)}</span>
+            {view !== null && (
+              <span className="text-muted-foreground">
+                {" "}
+                {busy ? "working" : stateLabel(view.state)}
+              </span>
+            )}
+          </>
+        }
+        label={label}
+      />
 
       {serverError !== null && (
         <p className="text-destructive border-b px-3 py-2 text-sm">{serverError}</p>

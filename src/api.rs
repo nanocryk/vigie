@@ -14,7 +14,6 @@ use tracing::warn;
 
 use crate::AppState;
 use crate::manager::SessionManager;
-use crate::session::Activity;
 use crate::wire::{CreateSession, SessionList, SessionView};
 
 pub async fn list_sessions(State(state): State<AppState>) -> Response {
@@ -72,14 +71,14 @@ pub async fn version(State(state): State<AppState>) -> Response {
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {
-    let activities = manager.activities().await;
+    let statuses = manager.statuses().await;
     Ok(manager
         .list()
         .await?
         .into_iter()
         .map(|row| {
-            let activity = activities.get(&row.id).copied();
-            SessionView::new(row, activity.is_some(), activity == Some(Activity::Busy))
+            let status = statuses.get(&row.id).copied();
+            SessionView::new(row, status)
         })
         .collect())
 }

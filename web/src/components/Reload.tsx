@@ -8,7 +8,7 @@ export function ReloadButton() {
       onClick={reload}
       aria-label="Reload"
       title="Reload"
-      className="text-muted-foreground hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 py-1 text-base"
+      className="text-muted-foreground hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 text-sm leading-6"
     >
       &#x21bb;
     </button>
