@@ -14,6 +14,7 @@ use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 use crate::child::{Launch, Program};
+use crate::gauges::MainRequest;
 use crate::protocol::Inbound;
 use crate::session::{Activity, Config, Event, EventBody, HostEvent, Session};
 use crate::store::{SessionRow, Store, StoredEvent};
@@ -69,8 +70,9 @@ impl SessionManager {
         &self.inner.store
     }
 
-    /// Receives the id of a session each time it is spawned, changes activity, or
-    /// ends. The store already reflects the change when the id arrives.
+    /// Receives the id of a session each time it is spawned, changes activity,
+    /// ends, or moves its cache and context gauges. The store already reflects the
+    /// change when the id arrives.
     pub fn subscribe_changes(&self) -> broadcast::Receiver<Uuid> {
         self.inner.changes.subscribe()
     }
@@ -223,6 +225,7 @@ impl SessionManager {
             events,
             Arc::downgrade(&self.inner),
             self.inner.usage_changes.clone(),
+            self.inner.changes.clone(),
         ));
         tokio::spawn(announce_changes(
             id,
@@ -247,7 +250,8 @@ async fn announce_changes(
 }
 
 /// Samples usage each time the session goes idle after a turn, until it ends,
-/// and announces the rate limit readings and finished turns the session reports.
+/// and announces the rate limit readings and finished turns the session reports,
+/// and each main-conversation request, which moves its cache and context gauges.
 /// A lagged receiver may have missed that moment, so a lag counts as one. Holds
 /// no `Session` handle, so it never keeps a session alive.
 async fn sample_after_turns(
@@ -256,18 +260,30 @@ async fn sample_after_turns(
     mut events: broadcast::Receiver<Arc<Event>>,
     inner: Weak<Inner>,
     usage_changes: broadcast::Sender<()>,
+    changes: broadcast::Sender<Uuid>,
 ) {
+    let mut last_request: Option<String> = None;
     loop {
         let turn_ended = match events.recv().await {
             Ok(event) => match &event.body {
                 EventBody::Host(HostEvent::ChildExited { .. }) => return,
-                EventBody::Line(line) => match line.parsed {
+                EventBody::Line(line) => match &line.parsed {
                     Some(Inbound::Result(_)) => {
                         let _ = usage_changes.send(());
+                        let _ = changes.send(id);
                         true
                     }
                     Some(Inbound::RateLimitEvent(_)) => {
                         let _ = usage_changes.send(());
+                        false
+                    }
+                    Some(Inbound::Assistant(assistant)) => {
+                        if let Some(request) = MainRequest::from_assistant(assistant)
+                            && last_request.as_ref() != Some(&request.message_id)
+                        {
+                            last_request = Some(request.message_id);
+                            let _ = changes.send(id);
+                        }
                         false
                     }
                     _ => false,
@@ -276,6 +292,7 @@ async fn sample_after_turns(
             },
             Err(RecvError::Lagged(_)) => {
                 let _ = usage_changes.send(());
+                let _ = changes.send(id);
                 true
             }
             Err(RecvError::Closed) => return,

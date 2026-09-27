@@ -43,7 +43,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below. Tapping the bar expands it to every detail (rate, work left, deadline, TTL). Home shows the account column only.
+- The top bar has two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. From about 600 px wide (unfolded phone, desktop), the bar sits in the header row right of the title, its two columns side by side; below that width it takes its own row under the header, columns stacked. Tapping the bar expands it to every detail (rate, work left, deadline, TTL). Home shows the account column only.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.
@@ -128,7 +128,11 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - History stores the raw CLI lines and periodic `get_usage` samples.
 - The usage storage is vigie2's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
 - The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
-- Window bars: the spent part solid, the projection radiating horizontally from its edge toward the right, brighter when well supported and fainter when barely. Values animate when they change.
+- Bars use the text color by default (white on the dark theme). Window colors follow the status bar:
+  - the spent part is always the text color, red once 100% is used;
+  - the projection, from the spent edge to the projected value, is green, yellow or red by the projected share: yellow from 75% and red from 90% on the 5h window, from 85% and 95% on the 7d window; more opaque when well supported and less when barely;
+  - the used number is green, yellow from 40% and red from 70%; the projected number takes the projection's color, bold when well supported and faint when barely.
+- Values animate when they change.
 - Readings are `get_usage` samples, taken only while a session is live, and `rate_limit_event` lines. When the newest is older than 10 minutes, the account column dims and shows its age.
 - Fit check: before starting a phase or task, warn when it likely does not fit in the remaining 5h window, with the reset time.
 - Cost per phase or task, as a share of the usage windows.

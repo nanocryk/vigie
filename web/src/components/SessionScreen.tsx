@@ -5,6 +5,7 @@ import { AskCard } from "@/components/AskCard";
 import { PermissionMode } from "@/components/PermissionMode";
 import { BusyDot, ConnectionBadge } from "@/components/SessionList";
 import { ReloadButton } from "@/components/Reload";
+import { TOP_BAR_IN_ROW, TopBar } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
@@ -178,7 +179,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b px-3 py-2">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
         <button
           type="button"
           onClick={backToList}
@@ -186,14 +187,22 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         >
           &lsaquo; Sessions
         </button>
-        <div className="min-w-0 flex-1">
-          <div className="voice-heading truncate">{view === null ? "..." : folderName(view.cwd)}</div>
+        <div className="min-w-0 flex-1 min-[600px]:max-w-40 min-[600px]:flex-none">
+          <div className="voice-heading truncate">
+            {view === null ? "..." : folderName(view.cwd)}
+          </div>
           {view !== null && (
             <div className="text-muted-foreground voice-ui truncate text-xs">
               {busy ? "working" : stateLabel(view.state)}
             </div>
           )}
         </div>
+        <TopBar
+          usage={snapshot.usage}
+          usageError={snapshot.usageError}
+          session={view}
+          className={TOP_BAR_IN_ROW}
+        />
         <ConnectionBadge status={snapshot.status} />
         <BusyDot busy={busy} />
         <ReloadButton />

@@ -142,14 +142,16 @@
     --color-mode-accept-foreground: var(--mode-accept-foreground);
     --color-mode-plan: var(--mode-plan);
     --color-mode-plan-foreground: var(--mode-plan-foreground);
+    --color-gauge-ok: var(--gauge-ok);
+    --color-gauge-glow: var(--gauge-glow);
+    --color-gauge-cold: var(--gauge-cold);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
     --radius-xl: calc(var(--radius) * 1.4);
     --radius-2xl: calc(var(--radius) * 1.8);
     --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
-}
+    --radius-4xl: calc(var(--radius) * 2.6);}
 
 /* Light: warm paper and ink, teal primary, amber accent. */
 :root {
@@ -202,6 +204,10 @@
     --mode-accept-foreground: oklch(0.99 0.01 185);
     --mode-plan: oklch(0.58 0.15 300);
     --mode-plan-foreground: oklch(0.99 0.01 300);
+    /* Top bar gauges: fine, warning and cold cache. */
+    --gauge-ok: oklch(0.6 0.13 150);
+    --gauge-glow: oklch(0.74 0.15 70);
+    --gauge-cold: oklch(0.58 0.12 245);
 }
 
 /* Dark: deep slate night, warm text, brighter teal and amber. */
@@ -254,6 +260,9 @@
         --mode-accept-foreground: oklch(0.17 0.03 185);
         --mode-plan: oklch(0.66 0.14 300);
         --mode-plan-foreground: oklch(0.17 0.03 300);
+        --gauge-ok: oklch(0.72 0.14 150);
+        --gauge-glow: oklch(0.8 0.14 75);
+        --gauge-cold: oklch(0.72 0.1 245);
     }
 }
 

@@ -25,12 +25,17 @@
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
 //!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
-//! - `sessions_changed`: a session was created, changed activity, ended, or had
-//!   the permission mode of its stopped state changed;
+//! - `sessions_changed`: a session was created, changed activity, ended, had
+//!   the permission mode of its stopped state changed, or its main conversation
+//!   made a request or finished a turn (new `cache` and `context`);
 //!   `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
+//!
+//! Each session of `GET /api/sessions` carries `cache {last_request_at,
+//! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source}`, where
+//! `source` is `cli` or `estimate`; either is null while unknown.
 
 use std::path::PathBuf;
 
@@ -39,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::gauges::{Cache, Context};
 use crate::session::{Answer, Event, EventBody};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
 
@@ -156,6 +162,9 @@ pub struct SessionView {
     pub busy: bool,
     /// Stored permission mode, passed at the next launch; `None` when never recorded.
     pub permission_mode: Option<String>,
+    /// Prompt cache of the main conversation; clients count the TTL down themselves.
+    pub cache: Option<Cache>,
+    pub context: Option<Context>,
 }
 
 impl SessionView {
@@ -170,6 +179,8 @@ impl SessionView {
             live,
             busy,
             permission_mode: row.permission_mode,
+            cache: row.cache,
+            context: row.context,
         }
     }
 }

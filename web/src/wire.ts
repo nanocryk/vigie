@@ -1,5 +1,5 @@
 // Mirror of `src/wire.rs`: the websocket protocol at `api/ws` and the bodies of
-// `api/sessions`. Envelopes are validated strictly; CLI lines and host events of
+// `api/sessions`, and the part of `api/usage` the app reads. Envelopes are validated strictly; CLI lines and host events of
 // unknown shape are kept as raw values instead of failing.
 
 export type GateFailure =
@@ -26,6 +26,47 @@ export interface SessionView {
   busy: boolean;
   /** Stored mode the next launch passes; null when never recorded. */
   permission_mode: string | null;
+  /** Null until a main request reported the TTL of its cache write. */
+  cache: CacheView | null;
+  context: ContextView | null;
+}
+
+/** Prompt cache of the main conversation: cold `ttl_secs` after `last_request_at`. */
+export interface CacheView {
+  last_request_at: string;
+  ttl_secs: number;
+}
+
+export interface ContextView {
+  used_tokens: number;
+  max_tokens: number;
+  percentage: number;
+  source: "cli" | "estimate";
+}
+
+export type Confidence = "low" | "medium" | "high";
+
+/** One rate-limit window of `GET api/usage`; percents are 0 to 100. */
+export interface WindowReport {
+  used: number;
+  resets_at: string;
+  projected: number;
+  confidence: Confidence;
+  /** 1 spends exactly one budget per window. */
+  rate: number;
+  /** 5h only, while projected over 100. */
+  work_left_hours: number | null;
+  /** 7d only: when usage reaches 100, if before the reset. */
+  deadline: string | null;
+  reading_at: string;
+}
+
+/** The parts of `GET api/usage` the top bar reads. */
+export interface UsageSnapshot {
+  generated_at: string;
+  newest_reading: string | null;
+  five_hour: WindowReport | null;
+  seven_day: WindowReport | null;
 }
 
 export type Answer =
@@ -174,6 +215,61 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     live: bool(value, "live", label),
     busy: bool(value, "busy", label),
     permission_mode: optStr(value, "permission_mode", label),
+    cache: parseCache(value["cache"], `${label}.cache`),
+    context: parseContext(value["context"], `${label}.context`),
+  };
+}
+
+function parseCache(raw: unknown, label: string): CacheView | null {
+  if (raw === undefined || raw === null) return null;
+  const value = record(raw, label);
+  return {
+    last_request_at: str(value, "last_request_at", label),
+    ttl_secs: num(value, "ttl_secs", label),
+  };
+}
+
+function parseContext(raw: unknown, label: string): ContextView | null {
+  if (raw === undefined || raw === null) return null;
+  const value = record(raw, label);
+  const source = value["source"];
+  if (source !== "cli" && source !== "estimate") {
+    fail(`${label}.source`, "unknown context source", source);
+  }
+  return {
+    used_tokens: num(value, "used_tokens", label),
+    max_tokens: num(value, "max_tokens", label),
+    percentage: num(value, "percentage", label),
+    source,
+  };
+}
+
+function parseWindowReport(raw: unknown, label: string): WindowReport | null {
+  if (raw === undefined || raw === null) return null;
+  const value = record(raw, label);
+  const confidence = value["confidence"];
+  if (confidence !== "low" && confidence !== "medium" && confidence !== "high") {
+    fail(`${label}.confidence`, "unknown confidence", confidence);
+  }
+  return {
+    used: num(value, "used", label),
+    resets_at: str(value, "resets_at", label),
+    projected: num(value, "projected", label),
+    confidence,
+    rate: num(value, "rate", label),
+    work_left_hours: optNum(value, "work_left_hours", label),
+    deadline: optStr(value, "deadline", label),
+    reading_at: str(value, "reading_at", label),
+  };
+}
+
+export function parseUsageSnapshot(raw: unknown, label: string): UsageSnapshot {
+  const value = record(raw, label);
+  return {
+    generated_at: str(value, "generated_at", label),
+    newest_reading: optStr(value, "newest_reading", label),
+    five_hour: parseWindowReport(value["five_hour"], `${label}.five_hour`),
+    seven_day: parseWindowReport(value["seven_day"], `${label}.seven_day`),
   };
 }
 

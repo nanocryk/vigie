@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import type { Client, ConnectionStatus } from "@/client";
 import { ReloadButton } from "@/components/Reload";
+import { TOP_BAR_IN_ROW, TopBar } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo, stateLabel } from "@/format";
 import { navigate } from "@/route";
@@ -90,8 +91,13 @@ export function SessionList({ client, label }: { client: Client; label: string |
 
   return (
     <>
-      <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <span className="text-primary voice-heading text-lg">vigie2</span>
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
+        <span className="text-primary voice-heading flex-1 text-lg min-[600px]:flex-none">vigie2</span>
+        <TopBar
+          usage={snapshot.usage}
+          usageError={snapshot.usageError}
+          className={TOP_BAR_IN_ROW}
+        />
         <div className="flex min-w-0 items-center gap-3">
           <ConnectionBadge status={snapshot.status} />
           {label !== null && (

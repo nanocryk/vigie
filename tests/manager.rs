@@ -160,9 +160,21 @@ async fn basic_run_is_persisted_with_usage_samples() {
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let id = session.id();
     let mut events = session.subscribe();
+    let mut changes = manager.subscribe_changes();
 
     session.send("Reply with exactly: ok", None).await.unwrap();
     until_result(&mut events).await;
+    // The main request moves the gauges, and the list announces it.
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            assert_eq!(changes.recv().await.unwrap(), id);
+            if manager.list().await.unwrap()[0].cache.is_some() {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("no announced cache after the first request");
     // The fake expects its scripted `get_usage` before the next message.
     let sample = tokio::time::timeout(TIMEOUT, async {
         loop {
@@ -204,6 +216,14 @@ async fn basic_run_is_persisted_with_usage_samples() {
     assert_eq!(rows[0].cwd, env.cwd);
     assert_eq!(rows[0].last_seq, stored.len() as u64);
     assert_eq!(rows[0].state, SessionState::Stopped);
+    assert_eq!(
+        rows[0].cache.as_ref().map(|cache| cache.ttl_secs),
+        Some(3600)
+    );
+    let context = rows[0].context.as_ref().expect("a context estimate");
+    // The second prompt: input 2, cache read 29004, cache creation 1979.
+    assert_eq!(context.used_tokens, 30_985);
+    assert_eq!(context.max_tokens, 1_000_000);
 }
 
 #[tokio::test]

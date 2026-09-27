@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::gauges::{self, Cache, MainRequest, Windows};
 use crate::protocol::{GetUsageResponse, Inbound};
 use crate::session::{Event, EventBody, GateFailure, HostEvent};
 use crate::usage::db::{MessageTokens, UsageDb};
@@ -23,7 +24,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -55,6 +56,15 @@ CREATE INDEX usage_samples_time ON usage_samples (time);
     // The CLI permission mode the session runs with, or starts with when resumed.
     "ALTER TABLE sessions ADD COLUMN permission_mode TEXT;",
     usage::db::MIGRATION,
+    // The prompt cache and context of the main conversation, see `gauges`.
+    r#"
+ALTER TABLE sessions ADD COLUMN cache_message_id TEXT;
+ALTER TABLE sessions ADD COLUMN cache_request_at TEXT;
+ALTER TABLE sessions ADD COLUMN cache_ttl_secs INTEGER;
+ALTER TABLE sessions ADD COLUMN context_model TEXT;
+ALTER TABLE sessions ADD COLUMN context_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN context_window INTEGER;
+"#,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -95,6 +105,72 @@ pub struct SessionRow {
     pub state: SessionState,
     /// Last known CLI permission mode; `None` for sessions from before it was stored.
     pub permission_mode: Option<String>,
+    /// `None` until a main request reported the TTL of its cache write.
+    pub cache: Option<Cache>,
+    /// `None` until a main request and a `result` reported the prompt and the window.
+    pub context: Option<gauges::Context>,
+}
+
+/// What a line tells about the gauges of the main conversation.
+enum GaugeUpdate {
+    Request(MainRequest),
+    Windows(Windows),
+}
+
+impl GaugeUpdate {
+    fn from_line(line: &Inbound) -> Option<Self> {
+        match line {
+            Inbound::Assistant(assistant) => {
+                MainRequest::from_assistant(assistant).map(Self::Request)
+            }
+            Inbound::Result(result) => Some(Self::Windows(Windows::from_result(result))),
+            _ => None,
+        }
+    }
+
+    fn apply(self, connection: &Connection, session: &str, time: &str) -> Result<()> {
+        match self {
+            // SQLite evaluates every assignment against the row as it was, so the
+            // time only moves on the first line of a response.
+            Self::Request(request) => {
+                connection.execute(
+                    "UPDATE sessions SET
+                         cache_request_at = CASE WHEN cache_message_id IS ?2
+                             THEN cache_request_at ELSE ?3 END,
+                         cache_message_id = ?2,
+                         cache_ttl_secs = COALESCE(?4, cache_ttl_secs),
+                         context_model = COALESCE(?5, context_model),
+                         context_tokens = ?6
+                     WHERE id = ?1",
+                    params![
+                        session,
+                        request.message_id,
+                        time,
+                        request.ttl_secs,
+                        request.model,
+                        request.prompt_tokens
+                    ],
+                )?;
+            }
+            Self::Windows(windows) => {
+                let model: Option<String> = connection
+                    .query_row(
+                        "SELECT context_model FROM sessions WHERE id = ?1",
+                        [session],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .flatten();
+                if let Some(window) = windows.for_model(model.as_deref()) {
+                    connection.execute(
+                        "UPDATE sessions SET context_window = ?2 WHERE id = ?1",
+                        params![session, window],
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +298,10 @@ impl Store {
             },
             EventBody::Host(_) => (Vec::new(), None),
         };
+        let gauge = match &event.body {
+            EventBody::Line(line) => line.parsed.as_ref().and_then(GaugeUpdate::from_line),
+            EventBody::Host(_) => None,
+        };
         let at = Timestamp::from_datetime(event.time);
         self.write("event", move |connection| {
             let session = session.to_string();
@@ -236,6 +316,9 @@ impl Store {
                  WHERE id = ?1",
                 params![session, seq, time, permission_mode],
             )?;
+            if let Some(gauge) = gauge {
+                gauge.apply(connection, &session, &time)?;
+            }
             record_usage_inputs(connection, &session, at, &readings, message.as_ref())
         });
     }
@@ -499,7 +582,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window FROM sessions";
 
 struct RawSession {
     id: String,
@@ -511,6 +594,10 @@ struct RawSession {
     exit_code: Option<i32>,
     gate_failure: Option<String>,
     permission_mode: Option<String>,
+    cache_request_at: Option<String>,
+    cache_ttl_secs: Option<u32>,
+    context_tokens: Option<u64>,
+    context_window: Option<u64>,
 }
 
 impl RawSession {
@@ -525,6 +612,10 @@ impl RawSession {
             exit_code: row.get(6)?,
             gate_failure: row.get(7)?,
             permission_mode: row.get(8)?,
+            cache_request_at: row.get(9)?,
+            cache_ttl_secs: row.get(10)?,
+            context_tokens: row.get(11)?,
+            context_window: row.get(12)?,
         })
     }
 
@@ -544,6 +635,17 @@ impl RawSession {
             },
             other => bail!("unknown session state {other}"),
         };
+        let cache = match (self.cache_request_at, self.cache_ttl_secs) {
+            (Some(at), Some(ttl_secs)) => Some(Cache {
+                last_request_at: parse_time(&at)?,
+                ttl_secs,
+            }),
+            _ => None,
+        };
+        let context = self
+            .context_tokens
+            .zip(self.context_window)
+            .and_then(|(used, window)| gauges::Context::estimate(used, window));
         Ok(SessionRow {
             id: Uuid::parse_str(&self.id)?,
             cwd: PathBuf::from(self.cwd),
@@ -552,6 +654,8 @@ impl RawSession {
             last_seq: self.last_seq,
             state,
             permission_mode: self.permission_mode,
+            cache,
+            context,
         })
     }
 }
@@ -707,6 +811,101 @@ mod tests {
         assert!(session.bypass);
         assert_eq!(session.model_mix.len(), 1);
         assert_eq!(session.model_mix[0].share, 1.0);
+    }
+
+    /// Stores the `out` lines of a recording for `id`, each at `start` plus its offset.
+    fn record_recording(store: &Store, id: Uuid, name: &str, start: DateTime<Utc>) {
+        let recording = crate::replay::Recording::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("spike/runs")
+                .join(format!("{name}.ndjson")),
+        )
+        .unwrap();
+        let outs = recording
+            .steps
+            .iter()
+            .filter(|step| step.dir == crate::replay::Direction::Out);
+        for (seq, step) in outs.enumerate() {
+            let raw = step.msg.to_string();
+            let body = EventBody::Line(Box::new(Line {
+                parsed: serde_json::from_str(&raw).ok(),
+                raw,
+            }));
+            store.record_event(
+                id,
+                &Event {
+                    seq: seq as u64 + 1,
+                    time: start + chrono::Duration::milliseconds(step.t as i64),
+                    body,
+                },
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gauges_follow_the_main_conversation_and_survive_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let start = parse_time("2026-09-27T10:00:00Z").unwrap();
+        record_recording(&store, id, "cd", start);
+        let row = store.session(id).await.unwrap().unwrap();
+        // The last response streams two lines, at 7557 and 7579 ms.
+        assert_eq!(
+            row.cache,
+            Some(Cache {
+                last_request_at: start + chrono::Duration::milliseconds(7557),
+                ttl_secs: gauges::ONE_HOUR_TTL_SECS,
+            })
+        );
+        let context = row.context.expect("a context estimate");
+        // input 2, cache read 28990, cache creation 2056.
+        assert_eq!(context.used_tokens, 31_048);
+        assert_eq!(context.max_tokens, 1_000_000);
+
+        // A response that writes nothing keeps the TTL; its time still counts.
+        let empty_write = r#"{"type":"assistant","parent_tool_use_id":null,"session_id":"s","uuid":"u",
+            "message":{"id":"msg_x","model":"claude-opus-5-5","content":[],
+            "usage":{"input_tokens":5,"cache_read_input_tokens":40000,"cache_creation_input_tokens":0,
+            "cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0}}}}"#;
+        let later = start + chrono::Duration::minutes(3);
+        store.record_event(
+            id,
+            &Event {
+                seq: 1000,
+                time: later,
+                body: EventBody::Line(Box::new(Line {
+                    raw: empty_write.into(),
+                    parsed: serde_json::from_str(empty_write).ok(),
+                })),
+            },
+        );
+        store.flush().await.unwrap();
+        drop(store);
+
+        let reopened = Store::open(&path).unwrap();
+        let row = reopened.session(id).await.unwrap().unwrap();
+        assert_eq!(
+            row.cache,
+            Some(Cache {
+                last_request_at: later,
+                ttl_secs: gauges::ONE_HOUR_TTL_SECS,
+            })
+        );
+        assert_eq!(row.context.map(|context| context.used_tokens), Some(40_005));
+    }
+
+    #[tokio::test]
+    async fn a_session_without_requests_has_no_gauges() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.cache, None);
+        assert_eq!(row.context, None);
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseQuestions } from "@/components/AskCard";
 import { folderName } from "@/format";
 import { parseRoute, routeHash } from "@/route";
-import { parseCliLine, parseServerMessage, parseSessionList } from "@/wire";
+import { parseCliLine, parseServerMessage, parseSessionList, parseUsageSnapshot } from "@/wire";
 
 describe("parseServerMessage", () => {
   it("reads events, keeping unknown host events", () => {
@@ -75,6 +75,13 @@ describe("parseSessionList", () => {
             live: false,
             busy: false,
             permission_mode: "plan",
+            cache: { last_request_at: "2026-09-27T12:00:00Z", ttl_secs: 3600 },
+            context: {
+              used_tokens: 30985,
+              max_tokens: 1000000,
+              percentage: 3.0985,
+              source: "estimate",
+            },
           },
           {
             id: "b",
@@ -93,6 +100,54 @@ describe("parseSessionList", () => {
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
     expect(list[0]?.permission_mode).toBe("plan");
     expect(list[1]?.permission_mode).toBeNull();
+    expect(list[0]?.cache?.ttl_secs).toBe(3600);
+    expect(list[0]?.context?.source).toBe("estimate");
+    expect(list[1]?.cache).toBeNull();
+    expect(list[1]?.context).toBeNull();
+  });
+
+  it("names a bad context source", () => {
+    const session = {
+      id: "a",
+      cwd: "/p",
+      created_at: "c",
+      updated_at: "u",
+      state: { kind: "stopped" },
+      last_seq: 1,
+      live: false,
+      busy: false,
+      context: { used_tokens: 1, max_tokens: 2, percentage: 50, source: "guess" },
+    };
+    expect(() => parseSessionList({ sessions: [session] }, "list")).toThrow(
+      /list\.sessions\[0\]\.context\.source: unknown context source: "guess"/,
+    );
+  });
+});
+
+describe("parseUsageSnapshot", () => {
+  it("reads both windows, a missing one as null", () => {
+    const usage = parseUsageSnapshot(
+      {
+        generated_at: "g",
+        newest_reading: "2026-09-27T11:05:00Z",
+        five_hour: {
+          used: 7,
+          resets_at: "2026-09-27T13:00:00Z",
+          projected: 40.5,
+          confidence: "low",
+          rate: 0.8,
+          work_left_hours: null,
+          deadline: null,
+          reading_at: "2026-09-27T11:05:00Z",
+        },
+        seven_day: null,
+        facts: [],
+      },
+      "usage",
+    );
+    expect(usage.five_hour?.projected).toBe(40.5);
+    expect(usage.five_hour?.confidence).toBe("low");
+    expect(usage.seven_day).toBeNull();
   });
 });
 

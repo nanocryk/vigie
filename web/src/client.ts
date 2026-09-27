@@ -4,11 +4,13 @@ import {
   type Command,
   type ServerMessage,
   type SessionView,
+  type UsageSnapshot,
   type WireEvent,
   parseErrorBody,
   parseServerMessage,
   parseSessionList,
   parseSessionView,
+  parseUsageSnapshot,
 } from "@/wire";
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
@@ -17,6 +19,8 @@ export interface Snapshot {
   status: ConnectionStatus;
   sessions: readonly SessionView[] | null;
   sessionsError: string | null;
+  usage: UsageSnapshot | null;
+  usageError: string | null;
   transcripts: ReadonlyMap<string, TranscriptState>;
   /** Last `error` the server reported for a session. */
   sessionErrors: ReadonlyMap<string, string>;
@@ -40,6 +44,29 @@ function socketUrl(): string {
   return url.toString();
 }
 
+/** Runs `task` once at a time; calls made meanwhile fold into one more run after it. */
+function coalesced(task: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | null = null;
+  let again = false;
+  return async () => {
+    if (running !== null) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      do {
+        again = false;
+        await task();
+      } while (again);
+    })();
+    try {
+      await running;
+    } finally {
+      running = null;
+    }
+  };
+}
+
 interface PendingAck {
   resolve: () => void;
   reject: (err: Error) => void;
@@ -55,6 +82,8 @@ export class Client {
     status: "closed",
     sessions: null,
     sessionsError: null,
+    usage: null,
+    usageError: null,
     transcripts: new Map(),
     sessionErrors: new Map(),
   };
@@ -72,8 +101,6 @@ export class Client {
   private frame: number | null = null;
   private acks = new Map<string, PendingAck>();
   private nextId = 0;
-  private listing: Promise<void> | null = null;
-  private listAgain = false;
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -98,6 +125,7 @@ export class Client {
     window.addEventListener("online", wake);
     this.connect();
     void this.refreshSessions();
+    void this.refreshUsage();
   }
 
   openSession(id: string): void {
@@ -127,30 +155,27 @@ export class Client {
     });
   }
 
-  async refreshSessions(): Promise<void> {
-    if (this.listing !== null) {
-      this.listAgain = true;
-      return this.listing;
-    }
-    this.listing = (async () => {
-      do {
-        this.listAgain = false;
-        try {
-          const response = await fetch("api/sessions");
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const sessions = parseSessionList(await response.json(), "sessions");
-          this.update({ sessions, sessionsError: null });
-        } catch (err) {
-          this.update({ sessionsError: `Cannot load sessions: ${errorMessage(err)}` });
-        }
-      } while (this.listAgain);
-    })();
+  readonly refreshSessions = coalesced(async () => {
     try {
-      await this.listing;
-    } finally {
-      this.listing = null;
+      const response = await fetch("api/sessions");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const sessions = parseSessionList(await response.json(), "sessions");
+      this.update({ sessions, sessionsError: null });
+    } catch (err) {
+      this.update({ sessionsError: `Cannot load sessions: ${errorMessage(err)}` });
     }
-  }
+  });
+
+  readonly refreshUsage = coalesced(async () => {
+    try {
+      const response = await fetch("api/usage");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const usage = parseUsageSnapshot(await response.json(), "usage");
+      this.update({ usage, usageError: null });
+    } catch (err) {
+      this.update({ usageError: `Cannot load usage: ${errorMessage(err)}` });
+    }
+  });
 
   async createSession(cwd: string): Promise<CreateResult> {
     let response: Response;
@@ -214,6 +239,7 @@ export class Client {
         this.send({ type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 });
       }
       void this.refreshSessions();
+      void this.refreshUsage();
     });
     socket.addEventListener("message", (message) => {
       if (this.socket !== socket || typeof message.data !== "string") return;
@@ -284,6 +310,7 @@ export class Client {
         void this.refreshSessions();
         return;
       case "usage_changed":
+        void this.refreshUsage();
         return;
       case "error": {
         console.error("server error", message.message);
