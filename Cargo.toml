@@ -23,6 +23,7 @@ notify = "8"
 parking_lot = "0.12"
 rand = "0.10"
 rcgen = "0.14"
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

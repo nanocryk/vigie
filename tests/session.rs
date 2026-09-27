@@ -61,6 +61,8 @@ impl Harness {
                 path: env!("CARGO_BIN_EXE_fake-claude").into(),
                 leading_args: vec![recording.into()],
             },
+            history: None,
+            last_seq: 0,
         };
         let (session, events) = Session::spawn(config).expect("spawn session");
         Self {
@@ -399,6 +401,27 @@ async fn gate_rejects_overage_use() {
     let path = doctored(&dir, "background", |msg| {
         if msg["type"] == "rate_limit_event" {
             msg["rate_limit_info"]["isUsingOverage"] = true.into();
+        }
+    });
+    let mut harness = Harness::start(&path);
+    harness
+        .session
+        .send(
+            "Use the Bash tool with run_in_background set to true to run exactly: sleep 8 && \
+             echo bg-done. Reply started, without waiting for it.",
+        )
+        .await
+        .unwrap();
+    assert_gate_fails(&mut harness, GateFailure::Overage).await;
+}
+
+#[tokio::test]
+async fn gate_rejects_an_overage_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = doctored(&dir, "background", |msg| {
+        if msg["type"] == "rate_limit_event" {
+            assert_eq!(msg["rate_limit_info"]["isUsingOverage"], false);
+            msg["rate_limit_info"]["rateLimitType"] = "overage".into();
         }
     });
     let mut harness = Harness::start(&path);

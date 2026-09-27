@@ -1,0 +1,194 @@
+//! The live sessions and the history store behind them.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::{Mutex, watch};
+use tokio::task::AbortHandle;
+use tokio::time::MissedTickBehavior;
+use uuid::Uuid;
+
+use crate::child::{Launch, Program};
+use crate::protocol::Inbound;
+use crate::session::{Activity, Config, Event, EventBody, HostEvent, Session};
+use crate::store::{SessionRow, Store, StoredEvent};
+
+/// Period of `get_usage` samples while at least one session is live.
+pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Cheap to clone; every clone shares the same sessions.
+#[derive(Clone)]
+pub struct SessionManager {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    store: Store,
+    program: Program,
+    /// Sessions spawned by this manager, closed ones included until reopened.
+    live: Mutex<HashMap<Uuid, Session>>,
+    sampler: AbortHandle,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.sampler.abort();
+    }
+}
+
+impl SessionManager {
+    /// Sessions the store still records as running are marked stopped: none has a
+    /// child after a restart. Each resumes on `open`.
+    pub async fn start(store: Store, program: Program) -> Result<Self> {
+        store.stop_running().await?;
+        let inner = Arc::new_cyclic(|inner| Inner {
+            store,
+            program,
+            live: Mutex::new(HashMap::new()),
+            sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
+        });
+        Ok(Self { inner })
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.inner.store
+    }
+
+    /// Starts a new Claude session in `cwd`, with the same id on both sides.
+    pub async fn create(&self, cwd: PathBuf) -> Result<Session> {
+        let id = Uuid::new_v4();
+        let mut live = self.inner.live.lock().await;
+        let session = self.spawn(id, cwd, Launch::New(id), 0)?;
+        live.insert(id, session.clone());
+        Ok(session)
+    }
+
+    /// The live session, or a known ended one resumed with `--resume`.
+    pub async fn open(&self, id: Uuid) -> Result<Session> {
+        let mut live = self.inner.live.lock().await;
+        if let Some(session) = live.get(&id).filter(|session| !session.is_closed()) {
+            return Ok(session.clone());
+        }
+        let row = self
+            .inner
+            .store
+            .session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))?;
+        let session = self.spawn(id, row.cwd, Launch::Resume(id), row.last_seq)?;
+        live.insert(id, session.clone());
+        Ok(session)
+    }
+
+    /// Most recently updated first.
+    pub async fn list(&self) -> Result<Vec<SessionRow>> {
+        self.inner.store.sessions().await
+    }
+
+    /// Includes every event already broadcast by the session.
+    pub async fn events_after(&self, id: Uuid, seq: u64, limit: u32) -> Result<Vec<StoredEvent>> {
+        self.inner.store.events_after(id, seq, limit).await
+    }
+
+    /// Stops every live session and waits for their history to be written.
+    pub async fn shutdown(&self) -> Result<()> {
+        let sessions: Vec<Session> = self
+            .inner
+            .live
+            .lock()
+            .await
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        futures_util::future::join_all(sessions.iter().map(Session::stop)).await;
+        self.inner.store.flush().await
+    }
+
+    fn spawn(&self, id: Uuid, cwd: PathBuf, launch: Launch, last_seq: u64) -> Result<Session> {
+        let (session, events) = Session::spawn(Config {
+            id,
+            cwd,
+            launch,
+            program: self.inner.program.clone(),
+            history: Some(self.inner.store.clone()),
+            last_seq,
+        })?;
+        tokio::spawn(sample_after_turns(
+            id,
+            session.activity(),
+            events,
+            Arc::downgrade(&self.inner),
+        ));
+        Ok(session)
+    }
+}
+
+/// Samples usage each time the session goes idle after a turn, until it ends.
+/// A lagged receiver may have missed that moment, so a lag counts as one. Holds
+/// no `Session` handle, so it never keeps a session alive.
+async fn sample_after_turns(
+    id: Uuid,
+    activity: watch::Receiver<Activity>,
+    mut events: broadcast::Receiver<Arc<Event>>,
+    inner: Weak<Inner>,
+) {
+    loop {
+        let turn_ended = match events.recv().await {
+            Ok(event) => match &event.body {
+                EventBody::Host(HostEvent::ChildExited { .. }) => return,
+                EventBody::Line(line) => matches!(line.parsed, Some(Inbound::Result(_))),
+                EventBody::Host(_) => false,
+            },
+            Err(RecvError::Lagged(_)) => true,
+            Err(RecvError::Closed) => return,
+        };
+        if !turn_ended || *activity.borrow() != Activity::Idle {
+            continue;
+        }
+        let Some(inner) = inner.upgrade() else {
+            return;
+        };
+        let session = inner.live.lock().await.get(&id).cloned();
+        let store = inner.store.clone();
+        drop(inner);
+        if let Some(session) = session {
+            sample(&session, &store).await;
+        }
+    }
+}
+
+async fn sample_periodically(inner: Weak<Inner>) {
+    let mut ticks = tokio::time::interval(USAGE_INTERVAL);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    ticks.tick().await;
+    loop {
+        ticks.tick().await;
+        let Some(inner) = inner.upgrade() else {
+            return;
+        };
+        let session = inner
+            .live
+            .lock()
+            .await
+            .values()
+            .find(|session| !session.is_closed())
+            .cloned();
+        let store = inner.store.clone();
+        drop(inner);
+        if let Some(session) = session {
+            sample(&session, &store).await;
+        }
+    }
+}
+
+async fn sample(session: &Session, store: &Store) {
+    match session.usage_json().await {
+        Ok(response) => store.record_usage(Utc::now(), Some(session.id()), response.to_string()),
+        Err(err) => tracing::debug!("get_usage for session {}: {err:#}", session.id()),
+    }
+}

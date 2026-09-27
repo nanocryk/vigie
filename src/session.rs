@@ -23,6 +23,7 @@ use crate::protocol::{
     Inbound, InitializeResponse, InterruptResponse, Outbound, PermissionResult,
     SetPermissionModeResponse, System, UserMessage,
 };
+use crate::store::{SessionState, Store};
 
 const EVENT_CAPACITY: usize = 4096;
 const COMMAND_CAPACITY: usize = 64;
@@ -34,6 +35,8 @@ const FIRST_PARTY: &str = "firstParty";
 /// `apiKeySource` of a claude.ai OAuth session.
 const OAUTH_KEY_SOURCE: &str = "none";
 const ASK_USER_QUESTION: &str = "AskUserQuestion";
+/// `rateLimitType` of a limit that draws on usage credits.
+const OVERAGE_LIMIT: &str = "overage";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -42,6 +45,10 @@ pub struct Config {
     pub cwd: PathBuf,
     pub launch: Launch,
     pub program: Program,
+    /// Receives every event before it is broadcast, and the session's state.
+    pub history: Option<Store>,
+    /// Seq of the session's latest event; the next one gets `last_seq + 1`.
+    pub last_seq: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -214,14 +221,20 @@ impl Session {
     /// `Started` on; later subscribers only see events sent after they subscribe.
     pub fn spawn(config: Config) -> Result<(Self, broadcast::Receiver<Arc<Event>>)> {
         let child = Child::spawn(&config.program, &config.cwd, config.launch, config.id)?;
+        if let Some(history) = &config.history {
+            history.session_started(config.id, &config.cwd, Utc::now());
+        }
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
         let (activity_sender, activity) = watch::channel(Activity::Idle);
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let actor = Actor {
+            id: config.id,
             launch: config.launch,
             child,
             events: events.clone(),
-            seq: 0,
+            history: config.history,
+            end: None,
+            seq: config.last_seq,
             activity: activity_sender,
             tracker: ActivityTracker::default(),
             asks: Vec::new(),
@@ -279,6 +292,11 @@ impl Session {
     }
 
     pub async fn usage(&self) -> Result<GetUsageResponse> {
+        Ok(serde_json::from_value(self.usage_json().await?)?)
+    }
+
+    /// The `get_usage` payload as the CLI sent it.
+    pub async fn usage_json(&self) -> Result<Value> {
         self.control(HostRequest::GetUsage {
             skip_behaviors: Some(true),
             extra: Extra::new(),
@@ -305,6 +323,11 @@ impl Session {
     /// Resolves after the `ChildExited` event.
     pub async fn closed(&self) {
         self.commands.closed().await;
+    }
+
+    /// True once the `ChildExited` event is out.
+    pub fn is_closed(&self) -> bool {
+        self.commands.is_closed()
     }
 
     async fn control<T: DeserializeOwned>(&self, request: HostRequest) -> Result<T> {
@@ -348,9 +371,13 @@ struct PendingAsk {
 }
 
 struct Actor {
+    id: Uuid,
     launch: Launch,
     child: Child,
     events: broadcast::Sender<Arc<Event>>,
+    history: Option<Store>,
+    /// How the session ends, once decided; an unrequested exit leaves it `None`.
+    end: Option<SessionState>,
     seq: u64,
     activity: watch::Sender<Activity>,
     tracker: ActivityTracker,
@@ -430,7 +457,8 @@ impl Actor {
                 });
             }
             Inbound::RateLimitEvent(event)
-                if event.rate_limit_info.is_using_overage == Some(true) =>
+                if event.rate_limit_info.is_using_overage == Some(true)
+                    || event.rate_limit_info.rate_limit_type.as_deref() == Some(OVERAGE_LIMIT) =>
             {
                 self.fail_gate(GateFailure::Overage);
             }
@@ -584,6 +612,7 @@ impl Actor {
             return;
         }
         self.state = State::Stopping;
+        self.end = Some(SessionState::Stopped);
         self.child.close_stdin();
         self.kill_at = Some(Instant::now() + STOP_GRACE);
     }
@@ -594,6 +623,9 @@ impl Actor {
         }
         tracing::warn!("auth gate failed: {reason:?}");
         self.state = State::Stopping;
+        self.end = Some(SessionState::GateFailed {
+            reason: reason.clone(),
+        });
         self.child.kill();
         self.kill_at = None;
         self.emit_host(HostEvent::AuthGateFailed { reason });
@@ -624,6 +656,10 @@ impl Actor {
         self.requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();
         self.emit_host(HostEvent::ChildExited { code, stderr_tail });
+        let end = self.end.take().unwrap_or(SessionState::Exited { code });
+        if let Some(history) = &self.history {
+            history.set_state(self.id, end);
+        }
     }
 
     async fn write(&self, line: Outbound) -> Result<()> {
@@ -655,6 +691,10 @@ impl Actor {
             time: Utc::now(),
             body,
         });
+        // Queued to the store first, so history holds every event a subscriber could see.
+        if let Some(history) = &self.history {
+            history.record_event(self.id, &event);
+        }
         let _ = self.events.send(event.clone());
         event
     }
