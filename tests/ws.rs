@@ -10,6 +10,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -23,9 +24,9 @@ use vigie2::auth::{self, Auth, Device, Registry};
 use vigie2::child::Program;
 use vigie2::manager::SessionManager;
 use vigie2::server::{AppState, build_app};
-use vigie2::session::Answer;
-use vigie2::store::{EventKind, Store};
-use vigie2::wire::{ClientMessage, ServerMessage, SessionList, SessionView, WireEvent};
+use vigie2::session::{Answer, Event, EventBody, Line, RestartMode};
+use vigie2::store::{EventKind, SessionState, Store};
+use vigie2::wire::{CACHE_COLD, ClientMessage, ServerMessage, SessionList, SessionView, WireEvent};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const DEVICE: &str = "test-device";
@@ -133,6 +134,23 @@ impl Server {
             .unwrap();
         let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, value)
+    }
+
+    /// A stopped discussion started at `started_at`, with a main request if any.
+    async fn seed_session(
+        &self,
+        started_at: DateTime<Utc>,
+        request: Option<(DateTime<Utc>, Ttl)>,
+    ) -> Uuid {
+        let id = Uuid::new_v4();
+        let store = self.manager.store();
+        store.session_started(id, &self.cwd, started_at, Some("default".into()));
+        store.set_state(id, SessionState::Stopped);
+        if let Some((time, ttl)) = request {
+            store.record_event(id, &main_request(1, time, ttl));
+        }
+        store.flush().await.unwrap();
+        id
     }
 
     async fn create_session(&self) -> SessionView {
@@ -312,7 +330,71 @@ fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
             updated_input: None,
             note: None,
         },
+        rewarm: false,
         client_id: client_id.into(),
+    }
+}
+
+fn say(session: Uuid, text: &str, rewarm: bool, client_id: &str) -> ClientMessage {
+    ClientMessage::Send {
+        session,
+        text: text.into(),
+        rewarm,
+        client_id: client_id.into(),
+    }
+}
+
+fn rewarmed(message: ClientMessage) -> ClientMessage {
+    match message {
+        ClientMessage::Answer {
+            session,
+            request_id,
+            answer,
+            client_id,
+            ..
+        } => ClientMessage::Answer {
+            session,
+            request_id,
+            answer,
+            rewarm: true,
+            client_id,
+        },
+        other => panic!("not an answer: {other:?}"),
+    }
+}
+
+fn cold() -> (bool, Option<String>) {
+    (false, Some(CACHE_COLD.into()))
+}
+
+#[derive(Clone, Copy)]
+enum Ttl {
+    OneHour,
+    FiveMinutes,
+}
+
+/// A main request at `time` whose cache write used `ttl`.
+fn main_request(seq: u64, time: DateTime<Utc>, ttl: Ttl) -> Event {
+    let (one_hour, five_minutes) = match ttl {
+        Ttl::OneHour => (7, 0),
+        Ttl::FiveMinutes => (0, 7),
+    };
+    let raw = json!({
+        "type": "assistant", "parent_tool_use_id": null, "session_id": "s", "uuid": "u",
+        "message": {"id": format!("msg_{seq}"), "model": "claude-opus-5-5", "content": [],
+            "usage": {"input_tokens": 3, "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 7,
+                "cache_creation": {"ephemeral_1h_input_tokens": one_hour,
+                    "ephemeral_5m_input_tokens": five_minutes}}}
+    })
+    .to_string();
+    Event {
+        seq,
+        time,
+        body: EventBody::Line(Box::new(Line {
+            parsed: Some(serde_json::from_str(&raw).unwrap()),
+            raw,
+        })),
     }
 }
 
@@ -430,6 +512,7 @@ async fn usage_is_announced_after_a_turn_and_served_over_rest() {
         .send(&ClientMessage::Send {
             session: id,
             text: "hello".into(),
+            rewarm: false,
             client_id: "send-1".into(),
         })
         .await;
@@ -465,6 +548,7 @@ async fn two_clients_share_a_session_and_its_asks() {
         .send(&ClientMessage::Send {
             session: id,
             text: "hello".into(),
+            rewarm: false,
             client_id: "send-1".into(),
         })
         .await;
@@ -529,6 +613,7 @@ async fn two_clients_share_a_session_and_its_asks() {
         .send(&ClientMessage::Send {
             session: id,
             text: "count".into(),
+            rewarm: false,
             client_id: "send-2".into(),
         })
         .await;
@@ -564,6 +649,7 @@ async fn a_late_subscriber_replays_from_its_seq_then_follows_live() {
         .send(&ClientMessage::Send {
             session: id,
             text: "hello".into(),
+            rewarm: false,
             client_id: "send-1".into(),
         })
         .await;
@@ -599,6 +685,29 @@ async fn subscribing_to_a_stopped_session_replays_without_spawning() {
     assert_eq!(client.events[0].seq, 1);
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(server.manager.live(id).await.is_none());
+}
+
+#[tokio::test]
+async fn a_blank_restart_reaches_subscribers_without_a_child() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+    client.until(|event| host_event(event, "started")).await;
+    client
+        .send(&ClientMessage::Restart {
+            session: id,
+            mode: vigie2::session::RestartMode::Blank,
+            text: None,
+            client_id: "restart-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("restart-1").await, (true, None));
+    client.until(|event| host_event(event, "restarted")).await;
+    assert!(server.manager.live(id).await.is_none());
+    let restarted = client.events.last().unwrap();
+    assert_eq!(restarted.payload["mode"], "blank");
+    assert_eq!(restarted.payload.get("seed"), None);
 }
 
 #[tokio::test]
@@ -638,6 +747,7 @@ async fn a_stopped_session_stores_its_mode_and_the_next_send_launches_with_it() 
         .send(&ClientMessage::Send {
             session: id,
             text: "hello".into(),
+            rewarm: false,
             client_id: "send-1".into(),
         })
         .await;
@@ -675,6 +785,7 @@ async fn a_slow_subscriber_still_gets_every_event() {
         .send(&ClientMessage::Send {
             session: id,
             text: "hello".into(),
+            rewarm: false,
             client_id: "send-1".into(),
         })
         .await;
@@ -700,4 +811,125 @@ async fn a_slow_subscriber_still_gets_every_event() {
         .map(|event| event.payload["n"].as_u64().unwrap())
         .collect();
     assert_eq!(noise, (0..NOISE as u64).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn a_discussion_idle_for_over_an_hour_takes_a_message_only_with_rewarm() {
+    let server = Server::start(SCRIPT).await;
+    let id = server
+        .seed_session(Utc::now() - TimeDelta::hours(2), None)
+        .await;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, cold());
+    assert!(
+        server.manager.live(id).await.is_none(),
+        "a refused send spawned"
+    );
+    let row = server.manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.last_seq, 0, "a refused send was recorded");
+
+    client.send(&say(id, "hello", true, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+    let sent = client.until(|event| host_event(event, "user_sent")).await;
+    assert_eq!(client.events[sent].payload["client_id"], "send-2");
+    client.until(|event| host_event(event, "ask_queued")).await;
+}
+
+#[tokio::test]
+async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_or_restart() {
+    // The same exchange, without the permission mode change.
+    let script = SCRIPT
+        .lines()
+        .filter(|line| !line.contains("mode-1"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let server = Server::start(&script).await;
+    // Idle for 10 minutes only, past its 5 minute TTL.
+    let request_at = Utc::now() - TimeDelta::minutes(10);
+    let id = server
+        .seed_session(request_at, Some((request_at, Ttl::FiveMinutes)))
+        .await;
+    let mut client = server.client().await;
+    client.send(&subscribe(id, 0)).await;
+
+    client.send(&say(id, "hello", false, "send-1")).await;
+    assert_eq!(client.ack("send-1").await, cold());
+    assert!(
+        server.manager.live(id).await.is_none(),
+        "a refused send spawned"
+    );
+    client.send(&say(id, "hello", true, "send-2")).await;
+    assert_eq!(client.ack("send-2").await, (true, None));
+    client.until(|event| host_event(event, "ask_queued")).await;
+
+    // The fake makes no main request, so the cache stays cold.
+    client.send(&allow(id, "ask-1", "answer-1")).await;
+    assert_eq!(client.ack("answer-1").await, cold());
+    assert!(
+        !client
+            .events
+            .iter()
+            .any(|event| host_event(event, "ask_resolved")),
+        "a refused answer resolved the ask"
+    );
+    client.send(&rewarmed(allow(id, "ask-1", "answer-2"))).await;
+    assert_eq!(client.ack("answer-2").await, (true, None));
+    client.until(|event| result_line(event, "success")).await;
+
+    client.send(&say(id, "count", false, "send-3")).await;
+    assert_eq!(client.ack("send-3").await, cold());
+    client.send(&say(id, "count", true, "send-4")).await;
+    assert_eq!(client.ack("send-4").await, (true, None));
+    client
+        .until(|event| event.payload == json!({"type": "noise", "n": 3}))
+        .await;
+    client
+        .send(&ClientMessage::Interrupt {
+            session: id,
+            client_id: "interrupt-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("interrupt-1").await, (true, None));
+    client
+        .until(|event| result_line(event, "error_during_execution"))
+        .await;
+
+    client
+        .send(&ClientMessage::Restart {
+            session: id,
+            mode: RestartMode::Blank,
+            text: None,
+            client_id: "restart-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("restart-1").await, (true, None));
+    client.until(|event| host_event(event, "restarted")).await;
+    // A restart forgets the cache and counts as activity.
+    client.send(&say(id, "hello", false, "send-5")).await;
+    assert_eq!(client.ack("send-5").await, (true, None));
+}
+
+#[tokio::test]
+async fn warm_and_new_discussions_take_a_message_without_rewarm() {
+    let server = Server::start(SCRIPT).await;
+    let request_at = Utc::now() - TimeDelta::minutes(50);
+    let warm = server
+        .seed_session(
+            Utc::now() - TimeDelta::hours(3),
+            Some((request_at, Ttl::OneHour)),
+        )
+        .await;
+    let recent = server
+        .seed_session(Utc::now() - TimeDelta::minutes(30), None)
+        .await;
+    let new = server.create_session().await.id;
+    let mut client = server.client().await;
+    for (index, id) in [warm, recent, new].into_iter().enumerate() {
+        let client_id = format!("send-{index}");
+        client.send(&say(id, "hello", false, &client_id)).await;
+        assert_eq!(client.ack(&client_id).await, (true, None), "{index}");
+    }
 }

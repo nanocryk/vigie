@@ -241,7 +241,7 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
 
 export function SessionColumn({ session }: { session: SessionView | null }) {
   const now = useClock(1000);
-  const gauge = cacheGauge(session?.cache ?? null, now);
+  const gauge = cacheGauge(session?.cache ?? null, now, session?.updated_at ?? null);
   return (
     <div className="min-w-0">
       <ContextRow context={session?.context ?? null} />

@@ -113,6 +113,24 @@ pub enum HostEvent {
         code: Option<i32>,
         stderr_tail: Vec<String>,
     },
+    /// The discussion moved to a fresh Claude session; a continue carries the seed
+    /// its first message starts with.
+    Restarted {
+        mode: RestartMode,
+        exchanges: usize,
+        total_exchanges: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<String>,
+    },
+}
+
+/// How a discussion moves to a fresh Claude session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartMode {
+    /// Seeded with the last exchanges of the discussion.
+    Continue,
+    Blank,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,6 +239,7 @@ impl ActivityTracker {
 enum Command {
     Send {
         text: String,
+        seed: Option<String>,
         client_id: Option<String>,
         reply: oneshot::Sender<Result<()>>,
     },
@@ -311,6 +330,25 @@ impl Session {
         let text = text.into();
         self.call(|reply| Command::Send {
             text,
+            seed: None,
+            client_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Writes `seed::first_message(seed, text)`; the `UserSent` event carries
+    /// `text` alone, and none is emitted when `text` is blank.
+    pub async fn send_seeded(
+        &self,
+        seed: String,
+        text: impl Into<String>,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let text = text.into();
+        self.call(|reply| Command::Send {
+            text,
+            seed: Some(seed),
             client_id,
             reply,
         })
@@ -651,10 +689,11 @@ impl Actor {
         match command {
             Command::Send {
                 text,
+                seed,
                 client_id,
                 reply,
             } => {
-                let _ = reply.send(self.send_user(text, client_id, None).await);
+                let _ = reply.send(self.send_user(text, seed, client_id, None).await);
             }
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
@@ -691,16 +730,23 @@ impl Actor {
     async fn send_user(
         &mut self,
         text: String,
+        seed: Option<String>,
         client_id: Option<String>,
         priority: Option<Priority>,
     ) -> Result<()> {
         // Emitted before the write, so it precedes the CLI's echo in seq order.
-        self.emit_host(HostEvent::UserSent {
-            text: text.clone(),
-            client_id,
-        });
+        if seed.is_none() || !text.trim().is_empty() {
+            self.emit_host(HostEvent::UserSent {
+                text: text.clone(),
+                client_id,
+            });
+        }
+        let written = match &seed {
+            Some(seed) => crate::seed::first_message(seed, &text),
+            None => text,
+        };
         let session_id = self.launch.claude_session_id().to_string();
-        let mut message = UserMessage::text(session_id, text);
+        let mut message = UserMessage::text(session_id, written);
         if let Some(priority) = priority {
             message = message.with_priority(priority);
         }
@@ -730,7 +776,8 @@ impl Actor {
         });
         self.publish_status();
         if let Some(note) = note {
-            self.send_user(note, None, Some(Priority::Next)).await?;
+            self.send_user(note, None, None, Some(Priority::Next))
+                .await?;
         }
         Ok(())
     }

@@ -15,7 +15,7 @@ use vigie2::protocol::Inbound;
 use vigie2::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, Direction, Recording,
 };
-use vigie2::session::{Answer, Event, EventBody, HostEvent, Session};
+use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session};
 use vigie2::store::{EventKind, SessionState, Store, StoredEvent};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -487,6 +487,171 @@ async fn pending_asks_are_counted_and_announced() {
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
     assert_clean_exit(stored.last().unwrap());
+}
+
+/// Stores the `out` lines of the `cd` recording as the history of a stopped
+/// discussion in plan mode.
+async fn discussion_from_cd(env: &Env) -> (Uuid, u64) {
+    let store = Store::open(&env.db).unwrap();
+    let id = Uuid::new_v4();
+    store.session_started(id, &env.cwd, chrono::Utc::now(), Some("plan".into()));
+    let lines = Recording::load(&recording("cd"))
+        .unwrap()
+        .steps
+        .into_iter()
+        .filter(|step| step.dir == Direction::Out);
+    let mut seq = 0;
+    for step in lines {
+        seq += 1;
+        let raw = step.msg.to_string();
+        let body = EventBody::Line(Box::new(vigie2::session::Line {
+            parsed: serde_json::from_str(&raw).ok(),
+            raw,
+        }));
+        store.record_event(
+            id,
+            &Event {
+                seq,
+                time: chrono::Utc::now(),
+                body,
+            },
+        );
+    }
+    store.set_state(id, SessionState::Stopped);
+    store.flush().await.unwrap();
+    assert!(store.session(id).await.unwrap().unwrap().cache.is_some());
+    (id, seq)
+}
+
+fn user_script(text: &str) -> String {
+    let user = serde_json::json!({"t": 0, "dir": "in", "msg": {"type": "user",
+        "message": {"role": "user", "content": text}, "parent_tool_use_id": null,
+        "session_id": "s"}});
+    format!("{}\n{user}", INIT_SCRIPT.trim())
+}
+
+#[tokio::test]
+async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
+    let env = Env::new();
+    let (id, first_run) = discussion_from_cd(&env).await;
+    let store = Store::open(&env.db).unwrap();
+    let row = store.session(id).await.unwrap().unwrap();
+    let expected_seed =
+        vigie2::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap()).seed(
+            &env.cwd,
+            row.created_at.with_timezone(&chrono::Local).date_naive(),
+        );
+    drop(store);
+    let script = env.script(
+        "seeded.ndjson",
+        &user_script(&vigie2::seed::first_message(
+            &expected_seed.text,
+            "next step",
+        )),
+    );
+
+    let manager = env.manager(&script).await;
+    let mut changes = manager.subscribe_changes();
+    manager
+        .restart(
+            id,
+            RestartMode::Continue,
+            "next step".into(),
+            Some("c1".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changes.recv().await.unwrap(), id);
+    let session = manager.live(id).await.expect("a continue launches");
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+
+    let stored = manager.events_after(id, first_run, ALL).await.unwrap();
+    assert_contiguous(&stored, first_run + 1);
+    assert_eq!(
+        host(&stored[0]),
+        HostEvent::Restarted {
+            mode: RestartMode::Continue,
+            exchanges: 1,
+            total_exchanges: 1,
+            seed: Some(expected_seed.text.clone()),
+        }
+    );
+    let HostEvent::Started { launch, .. } = host(&stored[1]) else {
+        panic!("expected Started, got {:?}", host(&stored[1]));
+    };
+    let claude_session = launch.claude_session_id();
+    assert_eq!(launch, Launch::New(claude_session));
+    assert_ne!(claude_session, id);
+    let sent: Vec<HostEvent> = stored
+        .iter()
+        .filter(|event| event.kind == EventKind::Host)
+        .map(host)
+        .filter(|event| matches!(event, HostEvent::UserSent { .. }))
+        .collect();
+    assert_eq!(
+        sent,
+        [HostEvent::UserSent {
+            text: "next step".into(),
+            client_id: Some("c1".into()),
+        }]
+    );
+    assert!(
+        stored
+            .iter()
+            .filter(|event| event.kind == EventKind::Host)
+            .any(|event| host(event)
+                == HostEvent::PermissionMode {
+                    mode: "plan".into()
+                })
+    );
+    assert_clean_exit(stored.last().unwrap());
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.launch, Launch::Resume(claude_session));
+    assert_eq!(row.cache, None);
+    drop(manager);
+
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let before = manager.store().session(id).await.unwrap().unwrap().last_seq;
+    manager
+        .restart(id, RestartMode::Blank, " ".into(), None)
+        .await
+        .unwrap();
+    assert!(
+        manager.live(id).await.is_none(),
+        "a blank restart without text launched"
+    );
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    let Launch::New(blank_session) = row.launch else {
+        panic!("a blank restart left {:?}", row.launch);
+    };
+    assert_ne!(blank_session, claude_session);
+    assert_eq!((row.cache, row.context), (None, None));
+    let stored = manager.events_after(id, before, ALL).await.unwrap();
+    assert_eq!(
+        stored.iter().map(host).collect::<Vec<_>>(),
+        [HostEvent::Restarted {
+            mode: RestartMode::Blank,
+            exchanges: 0,
+            total_exchanges: 1,
+            seed: None,
+        }]
+    );
+    let session = manager.open(id).await.unwrap();
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, before + 1, ALL).await.unwrap();
+    assert_eq!(
+        host(&stored[0]),
+        HostEvent::Started {
+            launch: Launch::New(blank_session),
+            cwd: env.cwd.clone(),
+        }
+    );
+    assert_clean_exit(stored.last().unwrap());
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.launch, Launch::Resume(blank_session));
 }
 
 #[tokio::test]

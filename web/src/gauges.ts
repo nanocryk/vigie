@@ -79,8 +79,23 @@ export type CacheGauge =
     }
   | { kind: "cold"; coldAt: number; ttlMs: number };
 
-export function cacheGauge(cache: CacheView | null, now: number): CacheGauge {
-  if (cache === null) return { kind: "unknown" };
+/** The longest TTL a cache write uses. */
+const MAX_TTL_MS = 60 * 60_000;
+
+/**
+ * `lastActivity` is the discussion's last update: without a recorded request, a
+ * discussion idle for longer than any TTL is taken as cold.
+ */
+export function cacheGauge(
+  cache: CacheView | null,
+  now: number,
+  lastActivity: string | null = null,
+): CacheGauge {
+  if (cache === null) {
+    const idleSince = lastActivity === null ? Number.NaN : Date.parse(lastActivity);
+    if (Number.isNaN(idleSince) || now - idleSince <= MAX_TTL_MS) return { kind: "unknown" };
+    return { kind: "cold", coldAt: idleSince + MAX_TTL_MS, ttlMs: MAX_TTL_MS };
+  }
   const start = Date.parse(cache.last_request_at);
   const ttlMs = cache.ttl_secs * 1000;
   if (Number.isNaN(start) || ttlMs <= 0) return { kind: "unknown" };

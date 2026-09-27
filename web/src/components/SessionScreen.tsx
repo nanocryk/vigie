@@ -1,7 +1,17 @@
 import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Client } from "@/client";
-import { AskCard } from "@/components/AskCard";
+import {
+  CacheColdError,
+  type ColdChoice,
+  type ColdChoiceMade,
+  coldAction,
+  coldPanelShown,
+  coldSpell,
+  rewarmField,
+} from "@/cold";
+import { AskCard, type SubmitAnswer } from "@/components/AskCard";
+import { ColdPanel, useCacheGauge } from "@/components/ColdPanel";
 import { PermissionMode } from "@/components/PermissionMode";
 import { BusyDot, ConnectionDot } from "@/components/SessionList";
 import { Header, SessionColumn } from "@/components/TopBar";
@@ -13,6 +23,8 @@ import { type Item, emptyTranscript } from "@/transcript";
 
 /** Unsent composer text per session, kept while the app stays open. */
 const drafts = new Map<string, string>();
+/** Per session, the last cold-cache choice and the spell it was made for. */
+const coldChoices = new Map<string, ColdChoiceMade>();
 
 function sentClientIds(items: readonly Item[]): Set<string> {
   const ids = new Set<string>();
@@ -137,14 +149,52 @@ export function SessionScreen({
   const patch = (sendId: string, change: Partial<PendingSend>) =>
     setPending((list) => list.map((send) => (send.id === sendId ? { ...send, ...change } : send)));
 
-  const deliver = (sendId: string, text: string, clientId: string) => {
-    client.command({ type: "send", session: id, text, client_id: clientId }).then(
+  const gauge = useCacheGauge(view?.cache ?? null, view?.updated_at ?? null);
+  const [chosen, setChosen] = useState<ColdChoiceMade | null>(() => coldChoices.get(id) ?? null);
+  // When the server refused on a cache this client counted warm, e.g. with clocks apart.
+  const [refusedAt, setRefusedAt] = useState<number | null>(null);
+  const lastRequestAt = view?.cache?.last_request_at ?? null;
+  useEffect(() => {
+    setRefusedAt(null);
+  }, [lastRequestAt]);
+  const spell = coldSpell(gauge, refusedAt);
+  const rewarm = rewarmField(spell, chosen);
+
+  const noteRefusal = (err: unknown) => {
+    if (err instanceof CacheColdError) setRefusedAt(Date.now());
+  };
+
+  const deliver = (
+    sendId: string,
+    text: string,
+    clientId: string,
+    fields: { rewarm?: true },
+  ) => {
+    client.command({ type: "send", session: id, text, ...fields, client_id: clientId }).then(
       () => patch(sendId, { status: "sent" }),
-      (err: unknown) => patch(sendId, { status: "failed", error: errorMessage(err) }),
+      (err: unknown) => {
+        noteRefusal(err);
+        patch(sendId, { status: "failed", error: errorMessage(err) });
+      },
     );
   };
 
-  const send = (text: string) => {
+  const submitAnswer: SubmitAnswer = (requestId, answer) =>
+    client
+      .command({
+        type: "answer",
+        session: id,
+        request_id: requestId,
+        answer,
+        ...rewarm,
+        client_id: client.newClientId(),
+      })
+      .catch((err: unknown) => {
+        noteRefusal(err);
+        throw err;
+      });
+
+  const send = (text: string, fields: { rewarm?: true } = rewarm) => {
     nextPending.current += 1;
     const clientId = client.newClientId();
     const entry: PendingSend = {
@@ -155,13 +205,13 @@ export function SessionScreen({
       error: null,
     };
     setPending((list) => [...list, entry]);
-    deliver(entry.id, text, clientId);
+    deliver(entry.id, text, clientId, fields);
   };
 
   const retry = (entry: PendingSend) => {
     const clientId = client.newClientId();
     patch(entry.id, { status: "sending", error: null, clientIds: [...entry.clientIds, clientId] });
-    deliver(entry.id, entry.text, clientId);
+    deliver(entry.id, entry.text, clientId, rewarm);
   };
 
   const dismiss = (entry: PendingSend) =>
@@ -186,6 +236,51 @@ export function SessionScreen({
   // Asks die with their process; a session known to have none shows no card.
   const asks = view?.live === false ? [] : transcript.asks;
   const ask = asks[0];
+
+  const [choosing, setChoosing] = useState(false);
+  const [coldError, setColdError] = useState<string | null>(null);
+  const coldPanel =
+    view !== null && coldPanelShown({ gauge, refusedAt, busy, asks: asks.length, chosen });
+
+  const choose = (choice: ColdChoice) => {
+    if (spell === null) return;
+    const settle = () => {
+      const made = { spell, choice };
+      coldChoices.set(id, made);
+      setChosen(made);
+    };
+    const action = coldAction(choice, drafts.get(id) ?? "");
+    setColdError(null);
+    switch (action.kind) {
+      case "unblock":
+        settle();
+        return;
+      case "send":
+        drafts.delete(id);
+        settle();
+        send(action.text, { rewarm: true });
+        return;
+      case "restart":
+        setChoosing(true);
+        client
+          .command({
+            type: "restart",
+            session: id,
+            mode: action.mode,
+            ...(action.text === null ? {} : { text: action.text }),
+            client_id: client.newClientId(),
+          })
+          .then(
+            () => {
+              drafts.delete(id);
+              settle();
+            },
+            (err: unknown) => setColdError(errorMessage(err)),
+          )
+          .finally(() => setChoosing(false));
+        return;
+    }
+  };
 
   return (
     <>
@@ -265,20 +360,32 @@ export function SessionScreen({
         }
       />
 
-      {ask !== undefined && (
-        <AskCard
-          key={ask.requestId}
-          client={client}
-          session={id}
-          ask={ask}
-          queued={asks.length - 1}
-          cwd={view?.cwd ?? null}
+      {coldPanel ? (
+        <ColdPanel
+          context={view?.context ?? null}
+          draft={drafts.get(id) ?? ""}
+          askWaiting={ask !== undefined}
+          busy={choosing}
+          error={coldError}
+          onChoose={choose}
         />
-      )}
+      ) : (
+        <>
+          {ask !== undefined && (
+            <AskCard
+              key={ask.requestId}
+              submit={submitAnswer}
+              ask={ask}
+              queued={asks.length - 1}
+              cwd={view?.cwd ?? null}
+            />
+          )}
 
-      <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-        <Composer session={id} onSend={send} />
-      </footer>
+          <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+            <Composer session={id} onSend={send} />
+          </footer>
+        </>
+      )}
     </>
   );
 }

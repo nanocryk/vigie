@@ -7,6 +7,7 @@ pub mod manager;
 pub mod net;
 pub mod protocol;
 pub mod replay;
+pub mod seed;
 pub mod server;
 pub mod session;
 pub mod store;

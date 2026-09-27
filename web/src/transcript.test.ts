@@ -8,6 +8,7 @@ import {
   type Item,
   applyEvents,
   emptyTranscript,
+  restartLabel,
   toolSummary,
   toolTimeVisible,
 } from "@/transcript";
@@ -84,7 +85,8 @@ function recordingEvents(name: string, legacy = false): WireEvent[] {
 type Shape =
   | ["user" | "claude" | "thinking", string]
   | ["tool", string, string, string]
-  | ["notice", string];
+  | ["notice", string]
+  | ["restart", string, string | null];
 
 function shape(item: Item): Shape {
   switch (item.kind) {
@@ -97,6 +99,8 @@ function shape(item: Item): Shape {
       return ["tool", item.name, item.summary, item.status];
     case "notice":
       return ["notice", item.text];
+    case "restart":
+      return ["restart", restartLabel(item), item.seed];
   }
 }
 
@@ -377,6 +381,70 @@ describe("permission mode", () => {
     );
     if (denied?.kind !== "tool") throw new Error("no denied Write row");
     expect(toolDiff({ ...denied, path: denied.summary })).toBeNull();
+  });
+});
+
+describe("restarts", () => {
+  const SEED = "Continuing an earlier vigie2 session in /p.\n\n## Exchange 1\nUser: hi";
+  const event = (seq: number, kind: "host" | "line", payload: unknown): WireEvent =>
+    kind === "host"
+      ? { session: SESSION, seq, time: "t", kind, payload: parseHostEvent(payload) }
+      : { session: SESSION, seq, time: "t", kind, payload };
+  const echo = (seq: number, text: string): WireEvent =>
+    event(seq, "line", {
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+      isReplay: true,
+    });
+  const restarted = (seq: number, seed: string | null): WireEvent =>
+    event(seq, "host", {
+      event: "restarted",
+      mode: seed === null ? "blank" : "continue",
+      exchanges: seed === null ? 0 : 1,
+      total_exchanges: 1,
+      ...(seed === null ? {} : { seed }),
+    });
+
+  it("a continue shows a divider holding the seed, and the typed message alone", () => {
+    const events = [
+      restarted(1, SEED),
+      event(2, "host", { event: "started", cwd: "/p" }),
+      event(3, "host", { event: "user_sent", text: "go on", client_id: "c1" }),
+      echo(4, `${SEED}\n\ngo on`),
+    ];
+    const state = applyEvents(emptyTranscript, events);
+    expect(state.items.map(shape)).toEqual([
+      ["restart", "Restarted: 1 exchange given as context", SEED],
+      ["user", "go on"],
+    ]);
+    expect(deliveries(state.items)).toEqual(["received"]);
+    expect(state.pendingSeed).toBeNull();
+    const replayed = events.reduce((acc, one) => applyEvents(acc, [one]), emptyTranscript);
+    expect(replayed.items.map(shape)).toEqual(state.items.map(shape));
+  });
+
+  it("a continue without a typed message shows no bubble for its closing line", () => {
+    const state = applyEvents(emptyTranscript, [
+      restarted(1, SEED),
+      echo(2, `${SEED}\n\nSay what you want to do next.`),
+      echo(3, "later"),
+    ]);
+    expect(state.items.map(shape)).toEqual([
+      ["restart", "Restarted: 1 exchange given as context", SEED],
+      ["user", "later"],
+    ]);
+  });
+
+  it("a blank restart shows a divider without seed", () => {
+    const state = applyEvents(emptyTranscript, [restarted(1, null), echo(2, "hello")]);
+    expect(state.items.map(shape)).toEqual([
+      ["restart", "Restarted: blank", null],
+      ["user", "hello"],
+    ]);
+    expect(restartLabel({ mode: "continue", exchanges: 5 })).toBe(
+      "Restarted: 5 exchanges given as context",
+    );
   });
 });
 

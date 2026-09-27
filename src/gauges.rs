@@ -10,7 +10,7 @@
 //! figure, over the CLI's window when known, else the model's `contextWindow`
 //! from the `result`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{AssistantMessage, ContextCategory, ResultMessage, Usage};
@@ -126,6 +126,18 @@ impl Windows {
 pub struct Cache {
     pub last_request_at: DateTime<Utc>,
     pub ttl_secs: u32,
+}
+
+/// Whether a discussion's cache is cold at `now`: `ttl_secs` after its last
+/// request, or, with none recorded, once `updated_at` is older than the longest TTL.
+pub fn is_cold(cache: Option<&Cache>, updated_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    match cache {
+        Some(cache) => {
+            cache.ttl_secs > 0
+                && cache.last_request_at + TimeDelta::seconds(cache.ttl_secs.into()) <= now
+        }
+        None => now - updated_at > TimeDelta::seconds(ONE_HOUR_TTL_SECS.into()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,6 +329,39 @@ mod tests {
         assert_eq!(windows.for_model(Some("claude-opus")), Some(1_000_000));
         assert_eq!(windows.for_model(None), Some(1_000_000));
         assert_eq!(Windows::default().for_model(None), None);
+    }
+
+    #[test]
+    fn a_recorded_cache_is_cold_once_its_ttl_has_passed() {
+        let start: DateTime<Utc> = "2026-09-27T10:00:00Z".parse().unwrap();
+        let long_ago = start - TimeDelta::days(1);
+        let cache = Cache {
+            last_request_at: start,
+            ttl_secs: FIVE_MINUTE_TTL_SECS,
+        };
+        let at = |secs: i64| start + TimeDelta::seconds(secs);
+        assert!(!is_cold(Some(&cache), long_ago, at(299)));
+        assert!(is_cold(Some(&cache), long_ago, at(300)));
+        assert!(is_cold(Some(&cache), start, at(301)));
+        let no_ttl = Cache {
+            last_request_at: start,
+            ttl_secs: 0,
+        };
+        assert!(!is_cold(Some(&no_ttl), long_ago, at(3600 * 24)));
+    }
+
+    #[test]
+    fn without_a_cache_a_discussion_is_cold_after_an_hour_idle() {
+        let updated_at: DateTime<Utc> = "2026-09-27T10:00:00Z".parse().unwrap();
+        let at = |secs: i64| updated_at + TimeDelta::seconds(secs);
+        assert!(!is_cold(None, updated_at, at(0)));
+        assert!(!is_cold(None, updated_at, at(3600)));
+        assert!(is_cold(
+            None,
+            updated_at,
+            at(3600) + TimeDelta::milliseconds(1)
+        ));
+        assert!(is_cold(None, updated_at, at(7200)));
     }
 
     #[test]

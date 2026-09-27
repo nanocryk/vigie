@@ -29,7 +29,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - The host owns every session; clients connect to the server.
 - A session is never continued in a terminal.
 - vigie2 keeps its own history of messages per session and never asks the SDK or the transcript files for past messages: "history is not edited".
-- vigie2 serves past context from its own history, more efficiently than a script reading transcripts. It can also serve as the backend of `/tail-session`.
+- vigie2 serves past context from its own history, more efficiently than a script reading transcripts. `/tail-session` stays independent of vigie2, for when vigie2 is broken or not in use.
 - Search across all discussions, served from vigie2's history without touching Claude's context or the SDK.
 - Background tasks started by Claude are visible to vigie2, shown in the session, and count in the session's idle state.
 - vigie2 remembers where sessions were started; no favorites. A session that ended through a server reboot or a failure stays known, and is continued with the same choices as a cold cache.
@@ -48,16 +48,19 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
 - A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and the device label and the reload button on the right.
 - Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
-- Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote.
+- Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote. A discussion with no recorded request but idle for longer than the longest TTL (1 hour) counts as cold.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.
 - Cold cache: sending and approving are blocked until the user picks one of:
-  - rewarm: send on the cold cache;
-  - continue: a new session seeded with past context from vigie2's history;
-  - blank: a new empty session.
+  - rewarm: send on the cold cache, in the same Claude session;
+  - continue: a fresh Claude session seeded with past context from vigie2's history;
+  - blank: a fresh empty Claude session.
+- Continue and blank keep the same discussion: same Home entry, same history, same permission mode. Only the Claude session behind it changes; later messages go to the new one. The discussion shows a divider row across its full width, on a solid background: "Restarted: N exchanges given as context" or "Restarted: blank"; tapping it shows the seed that was sent.
+- Seed of a continue, built from vigie2's history as `/tail-session` renders a transcript: a header "Continuing an earlier vigie2 session in <folder>, started <date>. Its last N of M exchanges, oldest first:", then the last 5 exchanges (an exchange is a user message and everything until the next one). Each keeps the user text cut at 1200 characters, each Claude text block cut at 800, and one line per tool call `Name(key=arg) → result` with argument and result cut at 100; thinking is dropped. The message the user had typed follows the seed in the same first message, so no turn is spent on the seed alone; with nothing typed, the seed ends with "Say what you want to do next."
 - The choice shows the context usage % and, when available, the estimated cost of rewarming in the 5h and 7d usage windows. At low %, rewarming costs about what a new session plus recovering the context costs; at high %, it costs too much.
 - vigie2 never picks for the user; it only prevents interacting with a cold cache by accident.
-- The choice is one panel replacing the composer, shared with archived sessions.
+- The server enforces it too: while the cache is cold (by the same rule as the client), a message or an ask answer is refused unless it carries the rewarm choice; restarting (continue, blank) and interrupting are always accepted. A client bug cannot bypass the choice.
+- The choice is one panel replacing the composer, shared with archived sessions. Rewarm is red, continue green, blank blue. Rewarm asks for confirmation behind a large warning that it re-sends the whole context at full price.
 
 ## Discussion view
 
@@ -196,7 +199,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
 - When an idle child is reaped.
 - Server to client events: raw CLI lines plus thin host events; their exact shape and the SQLite schema.
-- Seed format for continuing in a new session, and the interface `/tail-session` would use.
 - Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
 - Projects Home design, including how projects and scratch discussions are laid out.

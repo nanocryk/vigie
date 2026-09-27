@@ -15,7 +15,13 @@ import { Markdown } from "@/components/Markdown";
 import { useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
-import { type Delivery, type Item, type ToolStatus, toolTimeVisible } from "@/transcript";
+import {
+  type Delivery,
+  type Item,
+  type ToolStatus,
+  restartLabel,
+  toolTimeVisible,
+} from "@/transcript";
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
@@ -289,6 +295,21 @@ const ItemView = memo(function ItemView({
             {item.detail}
           </pre>
         </details>
+      );
+    }
+    case "restart": {
+      const bar = "bg-muted text-foreground voice-ui block px-3 py-1.5 text-center text-xs";
+      return (
+        <div className="-mx-3 pt-6">
+          {item.seed === null ? (
+            <div className={bar}>{restartLabel(item)}</div>
+          ) : (
+            <details>
+              <summary className={`${bar} cursor-pointer list-none`}>{restartLabel(item)}</summary>
+              <pre className={`${PANEL} mx-3 mt-1`}>{item.seed}</pre>
+            </details>
+          )}
+        </div>
       );
     }
   }

@@ -90,12 +90,25 @@ export type Answer =
 export type ClientMessage =
   | { type: "subscribe"; session: string; after_seq: number }
   | { type: "unsubscribe"; session: string }
-  | { type: "send"; session: string; text: string; client_id: string }
+  | { type: "send"; session: string; text: string; rewarm?: true; client_id: string }
   | { type: "interrupt"; session: string; client_id: string }
-  | { type: "answer"; session: string; request_id: string; answer: Answer; client_id: string }
-  | { type: "set_permission_mode"; session: string; mode: string; client_id: string };
+  | {
+      type: "answer";
+      session: string;
+      request_id: string;
+      answer: Answer;
+      rewarm?: true;
+      client_id: string;
+    }
+  | { type: "set_permission_mode"; session: string; mode: string; client_id: string }
+  | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string };
+
+export type RestartMode = "continue" | "blank";
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
+
+/** Ack error of a `send` or an `answer` refused on a cold cache without `rewarm`. */
+export const CACHE_COLD = "cache_cold";
 
 /** Why an ask deserves a second look; `reasons` has one line per matched rule. */
 export interface Danger {
@@ -117,6 +130,14 @@ export type HostEvent =
   | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
   | { event: "child_exited"; code: number | null; stderr_tail: string[] }
+  | {
+      event: "restarted";
+      mode: RestartMode;
+      exchanges: number;
+      total_exchanges: number;
+      /** The seed the first message of a continue starts with; null for blank. */
+      seed: string | null;
+    }
   | { event: "unknown"; raw: unknown };
 
 export type WireEvent =
@@ -380,6 +401,25 @@ export function parseHostEvent(raw: unknown): HostEvent {
         stderr_tail: Array.isArray(tail)
           ? tail.filter((line): line is string => typeof line === "string")
           : [],
+      };
+    }
+    case "restarted": {
+      const mode = raw["mode"];
+      const exchanges = raw["exchanges"];
+      const total = raw["total_exchanges"];
+      if (
+        (mode !== "continue" && mode !== "blank") ||
+        typeof exchanges !== "number" ||
+        typeof total !== "number"
+      ) {
+        return { event: "unknown", raw };
+      }
+      return {
+        event: "restarted",
+        mode,
+        exchanges,
+        total_exchanges: total,
+        seed: text("seed"),
       };
     }
     default:

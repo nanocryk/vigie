@@ -1,12 +1,14 @@
 import { type ReactNode, useMemo, useState } from "react";
 
-import type { Client } from "@/client";
 import { DiffBlock } from "@/components/Diff";
 import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import type { Side } from "@/swipe";
 import { type PendingAsk, toolSummary } from "@/transcript";
 import { type Answer, isRecord } from "@/wire";
+
+/** Sends the answer to one ask; rejects with the server's refusal. */
+export type SubmitAnswer = (requestId: string, answer: Answer) => Promise<void>;
 
 const DEFAULT_DENY = "The user denied this request.";
 
@@ -175,20 +177,14 @@ function CardFrame({
   );
 }
 
-function useAnswer(client: Client, session: string, requestId: string) {
+function useAnswer(submit: SubmitAnswer, requestId: string) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const answer = async (value: Answer): Promise<boolean> => {
     setSending(true);
     setError(null);
     try {
-      await client.command({
-        type: "answer",
-        session,
-        request_id: requestId,
-        answer: value,
-        client_id: client.newClientId(),
-      });
+      await submit(requestId, value);
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -201,19 +197,17 @@ function useAnswer(client: Client, session: string, requestId: string) {
 
 /** An allow or deny ask (tool use or plan approval), answered by swipe. */
 function ApprovalCard({
-  client,
-  session,
+  submit,
   ask,
   queued,
   cwd,
 }: {
-  client: Client;
-  session: string;
+  submit: SubmitAnswer;
   ask: PendingAsk;
   queued: number;
   cwd: string | null;
 }) {
-  const { sending, error, answer } = useAnswer(client, session, ask.requestId);
+  const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   // A failed answer remounts the swipe so it can be done again.
@@ -303,14 +297,12 @@ function ApprovalCard({
 }
 
 export function AskCard({
-  client,
-  session,
+  submit,
   ask,
   queued,
   cwd,
 }: {
-  client: Client;
-  session: string;
+  submit: SubmitAnswer;
   ask: PendingAsk;
   /** Asks waiting behind this one. */
   queued: number;
@@ -318,24 +310,22 @@ export function AskCard({
   cwd: string | null;
 }) {
   if (ask.toolName !== "AskUserQuestion") {
-    return <ApprovalCard client={client} session={session} ask={ask} queued={queued} cwd={cwd} />;
+    return <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} />;
   }
-  return <DecisionCard client={client} session={session} ask={ask} queued={queued} />;
+  return <DecisionCard submit={submit} ask={ask} queued={queued} />;
 }
 
 /** Questions. */
 function DecisionCard({
-  client,
-  session,
+  submit,
   ask,
   queued,
 }: {
-  client: Client;
-  session: string;
+  submit: SubmitAnswer;
   ask: PendingAsk;
   queued: number;
 }) {
-  const { sending, error, answer } = useAnswer(client, session, ask.requestId);
+  const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [denyMessage, setDenyMessage] = useState("");
   const [selections, setSelections] = useState<Record<string, string[]>>({});
 

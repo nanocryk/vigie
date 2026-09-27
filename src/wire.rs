@@ -9,16 +9,30 @@
 //!   with a seq above `after_seq`, then its live events, each once and in order.
 //!   Subscribing again to the same session restarts from the new `after_seq`.
 //! - `unsubscribe {session}`
-//! - `send {session, text, client_id}`: spawns the child again if it ended. The
-//!   session emits a `user_sent {text, client_id}` host event before writing the text.
+//! - `send {session, text, rewarm?, client_id}`: spawns the child again if it
+//!   ended. The session emits a `user_sent {text, client_id}` host event before
+//!   writing the text.
 //! - `interrupt {session, client_id}`
-//! - `answer {session, request_id, answer, client_id}`: `answer` is `allow
+//! - `answer {session, request_id, answer, rewarm?, client_id}`: `answer` is `allow
 //!   {updated_input?, note?}`, `deny {message}` or `questions {answers}`, tagged by
 //!   `kind`. A non-blank allow `note` is then sent as a user message queued for the
 //!   running turn, with its own `user_sent` event.
+//! - While the discussion's cache is cold (`gauges::is_cold`), a `send` or an
+//!   `answer` without `rewarm: true` is refused with the ack error `cache_cold`
+//!   and has no effect. `restart` and `interrupt` are always accepted.
 //! - `set_permission_mode {session, mode, client_id}`: a live session asks the CLI;
 //!   a stopped one only stores the mode (`default`, `acceptEdits` or `plan`) for its
 //!   next launch and announces `sessions_changed`.
+//! - `restart {session, mode, text?, client_id}`: moves the discussion to a fresh
+//!   Claude session in the same permission mode, and announces `sessions_changed`.
+//!   The live child, if any, is stopped first, its pending asks dropped. The
+//!   session then records a `restarted {mode, exchanges, total_exchanges, seed?}`
+//!   host event and forgets its `cache` and `context`. `mode` `continue` launches
+//!   the new session with one message: `seed`, a blank line, then `text`, or
+//!   "Say what you want to do next." when `text` is blank; `seed` renders the
+//!   last `exchanges` of the discussion's `total_exchanges`. `blank` launches it
+//!   with `text` when not blank, else only at the next `send`. The `user_sent`
+//!   event carries `text` alone, and there is none for a blank `text`.
 //!
 //! Server to client:
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
@@ -29,7 +43,8 @@
 //!   of pending asks, ended, had
 //!   the permission mode of its stopped state changed, its main conversation
 //!   made a request or finished a turn (new `cache` and `context`), or the CLI
-//!   reported a new context usage; `GET /api/sessions` has the new list.
+//!   reported a new context usage, or it restarted on a fresh Claude session;
+//!   `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
@@ -54,8 +69,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::gauges::{Cache, Context};
-use crate::session::{Activity, Answer, Event, EventBody, LiveStatus};
+use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
+
+/// Ack error of a `send` or an `answer` refused on a cold cache.
+pub const CACHE_COLD: &str = "cache_cold";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -71,6 +89,9 @@ pub enum ClientMessage {
     Send {
         session: Uuid,
         text: String,
+        /// Goes through on a cold cache.
+        #[serde(default)]
+        rewarm: bool,
         client_id: String,
     },
     Interrupt {
@@ -81,11 +102,21 @@ pub enum ClientMessage {
         session: Uuid,
         request_id: String,
         answer: Answer,
+        /// Goes through on a cold cache.
+        #[serde(default)]
+        rewarm: bool,
         client_id: String,
     },
     SetPermissionMode {
         session: Uuid,
         mode: String,
+        client_id: String,
+    },
+    Restart {
+        session: Uuid,
+        mode: RestartMode,
+        #[serde(default)]
+        text: Option<String>,
         client_id: String,
     },
 }

@@ -1,3 +1,4 @@
+import { ackError } from "@/cold";
 import { type TranscriptState, applyEvents, emptyTranscript } from "@/transcript";
 import {
   type ClientMessage,
@@ -303,7 +304,7 @@ export class Client {
         if (ack === undefined) return;
         this.acks.delete(message.client_id);
         if (message.ok) ack.resolve();
-        else ack.reject(new Error(message.error ?? "Refused by the server"));
+        else ack.reject(ackError(message.error));
         return;
       }
       case "sessions_changed":

@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
+use chrono::{Local, Utc};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::{Mutex, watch};
 use tokio::task::AbortHandle;
@@ -14,11 +14,14 @@ use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 use crate::child::{Launch, Program};
-use crate::gauges::MainRequest;
+use crate::gauges::{self, MainRequest};
 use crate::protocol::Inbound;
-use crate::session::{Activity, Config, Event, EventBody, HostEvent, LiveStatus, Session};
+use crate::session::{
+    Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session,
+};
 use crate::store::{SessionRow, Store, StoredEvent};
 use crate::usage::{SessionContext, Snapshot};
+use crate::{seed, wire};
 
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -166,16 +169,90 @@ impl SessionManager {
             .session(id)
             .await?
             .with_context(|| format!("unknown session {id}"))?;
-        let session = self.spawn(
-            id,
-            row.cwd,
-            Launch::Resume(id),
-            row.last_seq,
-            row.permission_mode,
-        )?;
+        let session = self.spawn(id, row.cwd, row.launch, row.last_seq, row.permission_mode)?;
         live.insert(id, session.clone());
         let _ = self.inner.changes.send(id);
         Ok(session)
+    }
+
+    /// Fails with `wire::CACHE_COLD` while the discussion's cache is cold.
+    pub async fn ensure_warm(&self, id: Uuid) -> Result<()> {
+        let row = self
+            .inner
+            .store
+            .session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))?;
+        if gauges::is_cold(row.cache.as_ref(), row.updated_at, Utc::now()) {
+            bail!(wire::CACHE_COLD);
+        }
+        Ok(())
+    }
+
+    /// Moves the discussion to a fresh Claude session: stops its child, records a
+    /// `Restarted` event, then launches the new session with the seed and `text`
+    /// as its first message (continue) or `text` alone (blank). A blank restart
+    /// without text launches nothing; the next send does.
+    pub async fn restart(
+        &self,
+        id: Uuid,
+        mode: RestartMode,
+        text: String,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let mut live = self.inner.live.lock().await;
+        if let Some(session) = live.remove(&id) {
+            session.stop().await;
+        }
+        let store = &self.inner.store;
+        let row = store
+            .session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))?;
+        let history = seed::History::from_events(&store.events_after(id, 0, u32::MAX).await?);
+        let seed = match mode {
+            RestartMode::Continue => {
+                Some(history.seed(&row.cwd, row.created_at.with_timezone(&Local).date_naive()))
+            }
+            RestartMode::Blank => None,
+        };
+        let claude_session = Uuid::new_v4();
+        store.restart_claude_session(id, claude_session).await?;
+        let seq = row.last_seq + 1;
+        store.record_event(
+            id,
+            &Event {
+                seq,
+                time: Utc::now(),
+                body: EventBody::Host(HostEvent::Restarted {
+                    mode,
+                    exchanges: seed.as_ref().map_or(0, |seed| seed.exchanges),
+                    total_exchanges: history.total_exchanges(),
+                    seed: seed.as_ref().map(|seed| seed.text.clone()),
+                }),
+            },
+        );
+        let launches = mode == RestartMode::Continue || !text.trim().is_empty();
+        let session = if launches {
+            let session = self.spawn(
+                id,
+                row.cwd,
+                Launch::New(claude_session),
+                seq,
+                row.permission_mode,
+            )?;
+            live.insert(id, session.clone());
+            Some(session)
+        } else {
+            None
+        };
+        drop(live);
+        let _ = self.inner.changes.send(id);
+        match (session, seed) {
+            (Some(session), Some(seed)) => session.send_seeded(seed.text, text, client_id).await,
+            (Some(session), None) => session.send(text, client_id).await,
+            (None, _) => Ok(()),
+        }
     }
 
     /// Most recently updated first.

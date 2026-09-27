@@ -147,6 +147,17 @@ describe("cacheGauge", () => {
     expect(cacheGauge(null, 0)).toEqual({ kind: "unknown" });
     expect(cacheGauge({ last_request_at: "bad", ttl_secs: 300 }, 0)).toEqual({ kind: "unknown" });
   });
+
+  it("takes a discussion idle past any TTL as cold when no request is recorded", () => {
+    const idle = "2026-09-27T12:00:00Z";
+    expect(cacheGauge(null, at("2026-09-27T12:59:00Z"), idle)).toEqual({ kind: "unknown" });
+    expect(cacheGauge(null, at("2026-09-27T13:01:00Z"), idle)).toEqual({
+      kind: "cold",
+      coldAt: at("2026-09-27T13:00:00Z"),
+      ttlMs: 3_600_000,
+    });
+    expect(cacheGauge(null, at("2026-09-27T13:01:00Z"), "bad")).toEqual({ kind: "unknown" });
+  });
 });
 
 describe("contextTone", () => {

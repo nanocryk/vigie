@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::child::Launch;
 use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
 use crate::protocol::{ContextUsageResponse, GetUsageResponse, Inbound};
 use crate::session::{Event, EventBody, GateFailure, HostEvent};
@@ -24,7 +25,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -73,6 +74,13 @@ ALTER TABLE sessions ADD COLUMN context_max_tokens INTEGER;
 ALTER TABLE sessions ADD COLUMN context_autocompact INTEGER;
 ALTER TABLE sessions ADD COLUMN context_categories TEXT;
 "#,
+    // The Claude session behind the discussion when not its own id, and whether
+    // no child launched it yet.
+    r#"
+ALTER TABLE sessions ADD COLUMN claude_session_id TEXT;
+ALTER TABLE sessions ADD COLUMN claude_session_fresh INTEGER NOT NULL DEFAULT 0
+    CHECK (claude_session_fresh IN (0, 1));
+"#,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -118,6 +126,8 @@ pub struct SessionRow {
     /// `None` until a `get_context_usage` reply, or a main request and a
     /// `result`, reported the total and the window.
     pub context: Option<gauges::Context>,
+    /// How the next child picks the discussion's current Claude session.
+    pub launch: Launch,
 }
 
 /// What a line tells about the gauges of the main conversation.
@@ -240,8 +250,8 @@ impl Store {
         Ok(Self { jobs })
     }
 
-    /// Inserts the session, or marks a known one running again. A `None` mode
-    /// keeps the stored one.
+    /// Inserts the session, or marks a known one running again, its current Claude
+    /// session now launched. A `None` mode keeps the stored one.
     pub fn session_started(
         &self,
         id: Uuid,
@@ -257,12 +267,33 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?3, 'running', ?4)
                  ON CONFLICT (id) DO UPDATE SET
                      updated_at = excluded.updated_at, state = 'running',
-                     exit_code = NULL, gate_failure = NULL,
+                     exit_code = NULL, gate_failure = NULL, claude_session_fresh = 0,
                      permission_mode = COALESCE(excluded.permission_mode, permission_mode)",
                 params![id.to_string(), cwd, time, permission_mode],
             )?;
             Ok(())
         });
+    }
+
+    /// Points the discussion at `claude_session`, which no child launched yet, and
+    /// forgets the gauges of the previous one. Fails for an unknown session.
+    pub async fn restart_claude_session(&self, session: Uuid, claude_session: Uuid) -> Result<()> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET claude_session_id = ?2, claude_session_fresh = 1,
+                     cache_message_id = NULL, cache_request_at = NULL, cache_ttl_secs = NULL,
+                     context_model = NULL, context_tokens = NULL, context_window = NULL,
+                     context_source = NULL, context_max_tokens = NULL,
+                     context_autocompact = NULL, context_categories = NULL
+                 WHERE id = ?1",
+                params![session.to_string(), claude_session.to_string()],
+            )?;
+            if changed == 0 {
+                bail!("unknown session {session}");
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// Resolves once stored; fails for an unknown session.
@@ -621,7 +652,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh FROM sessions";
 
 struct RawSession {
     id: String,
@@ -641,6 +672,8 @@ struct RawSession {
     context_max_tokens: Option<u64>,
     context_autocompact: Option<u64>,
     context_categories: Option<String>,
+    claude_session_id: Option<String>,
+    claude_session_fresh: bool,
 }
 
 impl RawSession {
@@ -663,6 +696,8 @@ impl RawSession {
             context_max_tokens: row.get(14)?,
             context_autocompact: row.get(15)?,
             context_categories: row.get(16)?,
+            claude_session_id: row.get(17)?,
+            claude_session_fresh: row.get(18)?,
         })
     }
 
@@ -708,8 +743,18 @@ impl RawSession {
                 categories,
                 ..context
             });
+        let id = Uuid::parse_str(&self.id)?;
+        let claude_session = match self.claude_session_id.as_deref() {
+            Some(text) => Uuid::parse_str(text)?,
+            None => id,
+        };
+        let launch = if self.claude_session_fresh {
+            Launch::New(claude_session)
+        } else {
+            Launch::Resume(claude_session)
+        };
         Ok(SessionRow {
-            id: Uuid::parse_str(&self.id)?,
+            id,
             cwd: PathBuf::from(self.cwd),
             created_at: parse_time(&self.created_at)?,
             updated_at: parse_time(&self.updated_at)?,
@@ -718,6 +763,7 @@ impl RawSession {
             permission_mode: self.permission_mode,
             cache,
             context,
+            launch,
         })
     }
 }

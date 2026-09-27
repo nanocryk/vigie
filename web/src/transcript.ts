@@ -4,6 +4,7 @@ import {
   type Danger,
   type GateFailure,
   type HostEvent,
+  type RestartMode,
   type WireEvent,
   isRecord,
   parseCliLine,
@@ -42,7 +43,14 @@ type ItemBody =
       /** When its result arrived. */
       endTime: number | null;
     }
-  | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null };
+  | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
+  | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null };
+
+export function restartLabel(item: { mode: RestartMode; exchanges: number }): string {
+  if (item.mode === "blank") return "Restarted: blank";
+  const noun = item.exchanges === 1 ? "exchange" : "exchanges";
+  return `Restarted: ${item.exchanges} ${noun} given as context`;
+}
 
 /** Epoch ms of an RFC 3339 time; fractions beyond milliseconds are dropped. */
 export function parseTime(text: string): number | null {
@@ -89,6 +97,8 @@ export interface TranscriptState {
   cwd: string | null;
   /** CLI permission mode (`default`, `acceptEdits`, `plan`, ...), null until reported. */
   permissionMode: string | null;
+  /** Seed of the latest continue, until the echo of the message starting with it. */
+  pendingSeed: string | null;
 }
 
 interface Outgoing {
@@ -114,6 +124,7 @@ export const emptyTranscript: TranscriptState = {
   outbox: [],
   cwd: null,
   permissionMode: null,
+  pendingSeed: null,
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -260,6 +271,7 @@ class Draft {
   outbox: Outgoing[];
   cwd: string | null;
   permissionMode: string | null;
+  pendingSeed: string | null;
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
@@ -275,6 +287,7 @@ class Draft {
     this.outbox = state.outbox.map((entry) => ({ ...entry }));
     this.cwd = state.cwd;
     this.permissionMode = state.permissionMode;
+    this.pendingSeed = state.pendingSeed;
   }
 
   finish(): TranscriptState {
@@ -292,6 +305,7 @@ class Draft {
       outbox: this.outbox,
       cwd: this.cwd,
       permissionMode: this.permissionMode,
+      pendingSeed: this.pendingSeed,
     };
   }
 
@@ -378,6 +392,16 @@ class Draft {
         });
         return;
       }
+      case "restarted":
+        this.pendingSeed = event.seed;
+        this.add({
+          kind: "restart",
+          key,
+          mode: event.mode,
+          exchanges: event.exchanges,
+          seed: event.seed,
+        });
+        return;
       case "unknown":
         return;
     }
@@ -476,9 +500,18 @@ class Draft {
     this.echo(text, key);
   }
 
-  /** The CLI echoed a user message: the oldest matching one sent is received. */
-  private echo(text: string, key: string): void {
+  /**
+   * The CLI echoed a user message: the oldest matching one sent is received. The
+   * first echo after a continue starts with its seed, which the divider row holds;
+   * what follows it is the typed message, or the closing line when none was typed.
+   */
+  private echo(echoed: string, key: string): void {
     this.turnOpen = true;
+    const seed = this.pendingSeed;
+    this.pendingSeed = null;
+    const prefix = seed === null ? null : `${seed}\n\n`;
+    const seeded = prefix !== null && echoed.startsWith(prefix);
+    const text = seeded ? echoed.slice(prefix.length) : echoed;
     const matches = (entry: Outgoing, delivery: Delivery): boolean => {
       const item = this.items[entry.index];
       return item?.kind === "user" && item.delivery === delivery && item.text === text;
@@ -489,6 +522,7 @@ class Draft {
     const entry = this.outbox[position];
     const item = entry === undefined ? undefined : this.items[entry.index];
     if (entry === undefined || item?.kind !== "user") {
+      if (seeded) return;
       // History recorded before `user_sent` existed only has the echo.
       this.add({ kind: "user", key, text, delivery: "received", clientId: null });
       return;

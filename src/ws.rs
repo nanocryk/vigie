@@ -203,10 +203,16 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
         ClientMessage::Send {
             session,
             text,
+            rewarm,
             client_id,
         } => {
             let tag = Some(client_id.clone());
-            let result = async { manager.open(session).await?.send(text, tag).await };
+            let result = async {
+                if !rewarm {
+                    manager.ensure_warm(session).await?;
+                }
+                manager.open(session).await?.send(text, tag).await
+            };
             (client_id, result.await)
         }
         ClientMessage::Interrupt { session, client_id } => {
@@ -220,9 +226,13 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             session,
             request_id,
             answer,
+            rewarm,
             client_id,
         } => {
             let result = async {
+                if !rewarm {
+                    manager.ensure_warm(session).await?;
+                }
                 running(manager, session)
                     .await?
                     .answer(request_id, answer)
@@ -236,6 +246,18 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             client_id,
         } => {
             let result = manager.set_permission_mode(session, mode).await;
+            (client_id, result)
+        }
+        ClientMessage::Restart {
+            session,
+            mode,
+            text,
+            client_id,
+        } => {
+            let tag = Some(client_id.clone());
+            let result = manager
+                .restart(session, mode, text.unwrap_or_default(), tag)
+                .await;
             (client_id, result)
         }
         ClientMessage::Subscribe { .. } | ClientMessage::Unsubscribe { .. } => {
@@ -287,10 +309,7 @@ async fn stream_session(
     let mut session = match manager.live(id).await {
         Some(session) => session,
         None => {
-            if forwarder.catch_up().await.is_err() {
-                return;
-            }
-            let Some(next) = next_run(&manager, id, &mut changes).await else {
+            let Some(next) = next_run(&mut forwarder, &mut changes).await else {
                 return;
             };
             next
@@ -301,26 +320,31 @@ async fn stream_session(
             return;
         }
         session.closed().await;
-        let Some(next) = next_run(&manager, id, &mut changes).await else {
+        let Some(next) = next_run(&mut forwarder, &mut changes).await else {
             return;
         };
         session = next;
     }
 }
 
-/// Waits until the session has a running child again.
+/// Waits until the session has a running child again, sending what gets stored
+/// meanwhile without a child, such as a restart that launched nothing.
 async fn next_run(
-    manager: &SessionManager,
-    id: Uuid,
+    forwarder: &mut Forwarder,
     changes: &mut broadcast::Receiver<Uuid>,
 ) -> Option<Session> {
+    let id = forwarder.id;
     loop {
-        if let Some(session) = manager.live(id).await {
+        if let Some(session) = forwarder.manager.live(id).await {
             return Some(session);
         }
-        match changes.recv().await {
-            Ok(_) | Err(RecvError::Lagged(_)) => {}
-            Err(RecvError::Closed) => return None,
+        forwarder.catch_up().await.ok()?;
+        loop {
+            match changes.recv().await {
+                Ok(changed) if changed != id => {}
+                Ok(_) | Err(RecvError::Lagged(_)) => break,
+                Err(RecvError::Closed) => return None,
+            }
         }
     }
 }
