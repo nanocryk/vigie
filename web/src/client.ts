@@ -283,6 +283,8 @@ export class Client {
       case "sessions_changed":
         void this.refreshSessions();
         return;
+      case "usage_changed":
+        return;
       case "error": {
         console.error("server error", message.message);
         if (message.session !== null) {

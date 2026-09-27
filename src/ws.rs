@@ -76,6 +76,7 @@ async fn run(
     };
     let mut devices = auth.subscribe_changes();
     let mut changes = manager.subscribe_changes();
+    let mut usage_changes = manager.subscribe_usage();
     let result = loop {
         tokio::select! {
             frame = socket.recv() => match frame {
@@ -110,6 +111,14 @@ async fn run(
             change = changes.recv() => match change {
                 Ok(_) | Err(RecvError::Lagged(_)) => {
                     if let Err(err) = send(&mut socket, &ServerMessage::SessionsChanged).await {
+                        break Err(err);
+                    }
+                }
+                Err(RecvError::Closed) => break Ok(()),
+            },
+            change = usage_changes.recv() => match change {
+                Ok(()) | Err(RecvError::Lagged(_)) => {
+                    if let Err(err) = send(&mut socket, &ServerMessage::UsageChanged).await {
                         break Err(err);
                     }
                 }

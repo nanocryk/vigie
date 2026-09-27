@@ -73,6 +73,7 @@ export type ServerMessage =
   | { type: "event"; event: WireEvent }
   | { type: "ack"; client_id: string; ok: boolean; error: string | null }
   | { type: "sessions_changed" }
+  | { type: "usage_changed" }
   | { type: "error"; message: string; session: string | null };
 
 export function isRecord(raw: unknown): raw is Record<string, unknown> {
@@ -286,6 +287,7 @@ export function parseServerMessage(raw: unknown, label: string): ServerMessage {
         error: optStr(value, "error", label),
       };
     case "sessions_changed":
+    case "usage_changed":
       return { type };
     case "error":
       return {

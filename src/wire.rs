@@ -1,5 +1,6 @@
 //! Messages between the server and its clients: the WebSocket protocol at
-//! `/api/ws` and the bodies of the `/api/sessions` routes.
+//! `/api/ws` and the bodies of the `/api/sessions` routes. `GET /api/usage`
+//! answers `usage::Snapshot`.
 //!
 //! WebSocket frames are JSON text tagged by `type`.
 //!
@@ -27,6 +28,8 @@
 //! - `sessions_changed`: a session was created, changed activity, ended, or had
 //!   the permission mode of its stopped state changed;
 //!   `GET /api/sessions` has the new list.
+//! - `usage_changed`: a usage reading was taken or a turn finished;
+//!   `GET /api/usage` has the new snapshot.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 
 use std::path::PathBuf;
@@ -83,6 +86,7 @@ pub enum ServerMessage {
         error: Option<String>,
     },
     SessionsChanged,
+    UsageChanged,
     Error {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

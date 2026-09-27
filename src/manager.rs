@@ -17,6 +17,7 @@ use crate::child::{Launch, Program};
 use crate::protocol::Inbound;
 use crate::session::{Activity, Config, Event, EventBody, HostEvent, Session};
 use crate::store::{SessionRow, Store, StoredEvent};
+use crate::usage::{SessionContext, Snapshot};
 
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -38,6 +39,7 @@ struct Inner {
     /// Sessions spawned by this manager, closed ones included until reopened.
     live: Mutex<HashMap<Uuid, Session>>,
     changes: broadcast::Sender<Uuid>,
+    usage_changes: broadcast::Sender<()>,
     sampler: AbortHandle,
 }
 
@@ -57,6 +59,7 @@ impl SessionManager {
             program,
             live: Mutex::new(HashMap::new()),
             changes: broadcast::channel(CHANGES_CAPACITY).0,
+            usage_changes: broadcast::channel(CHANGES_CAPACITY).0,
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
         });
         Ok(Self { inner })
@@ -70,6 +73,30 @@ impl SessionManager {
     /// ends. The store already reflects the change when the id arrives.
     pub fn subscribe_changes(&self) -> broadcast::Receiver<Uuid> {
         self.inner.changes.subscribe()
+    }
+
+    /// Ticks after a usage reading or a finished turn is queued to the store, so
+    /// a snapshot taken on receipt includes it.
+    pub fn subscribe_usage(&self) -> broadcast::Receiver<()> {
+        self.inner.usage_changes.subscribe()
+    }
+
+    /// The usage snapshot, reporting on every session whose child is running.
+    pub async fn usage(&self) -> Result<Snapshot> {
+        let live = self.activities().await;
+        let sessions = self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|row| live.contains_key(&row.id))
+            .map(|row| SessionContext {
+                id: row.id,
+                cwd: row.cwd,
+                created_at: row.created_at,
+                permission_mode: row.permission_mode,
+            })
+            .collect();
+        self.inner.store.usage_snapshot(sessions, Utc::now()).await
     }
 
     /// Starts a new Claude session in `cwd`, with the same id on both sides.
@@ -195,6 +222,7 @@ impl SessionManager {
             session.activity(),
             events,
             Arc::downgrade(&self.inner),
+            self.inner.usage_changes.clone(),
         ));
         tokio::spawn(announce_changes(
             id,
@@ -218,7 +246,8 @@ async fn announce_changes(
     let _ = changes.send(id);
 }
 
-/// Samples usage each time the session goes idle after a turn, until it ends.
+/// Samples usage each time the session goes idle after a turn, until it ends,
+/// and announces the rate limit readings and finished turns the session reports.
 /// A lagged receiver may have missed that moment, so a lag counts as one. Holds
 /// no `Session` handle, so it never keeps a session alive.
 async fn sample_after_turns(
@@ -226,15 +255,29 @@ async fn sample_after_turns(
     activity: watch::Receiver<Activity>,
     mut events: broadcast::Receiver<Arc<Event>>,
     inner: Weak<Inner>,
+    usage_changes: broadcast::Sender<()>,
 ) {
     loop {
         let turn_ended = match events.recv().await {
             Ok(event) => match &event.body {
                 EventBody::Host(HostEvent::ChildExited { .. }) => return,
-                EventBody::Line(line) => matches!(line.parsed, Some(Inbound::Result(_))),
+                EventBody::Line(line) => match line.parsed {
+                    Some(Inbound::Result(_)) => {
+                        let _ = usage_changes.send(());
+                        true
+                    }
+                    Some(Inbound::RateLimitEvent(_)) => {
+                        let _ = usage_changes.send(());
+                        false
+                    }
+                    _ => false,
+                },
                 EventBody::Host(_) => false,
             },
-            Err(RecvError::Lagged(_)) => true,
+            Err(RecvError::Lagged(_)) => {
+                let _ = usage_changes.send(());
+                true
+            }
             Err(RecvError::Closed) => return,
         };
         if !turn_ended || *activity.borrow() != Activity::Idle {
@@ -247,7 +290,7 @@ async fn sample_after_turns(
         let store = inner.store.clone();
         drop(inner);
         if let Some(session) = session {
-            sample(&session, &store).await;
+            sample(&session, &store, &usage_changes).await;
         }
     }
 }
@@ -269,16 +312,20 @@ async fn sample_periodically(inner: Weak<Inner>) {
             .find(|session| !session.is_closed())
             .cloned();
         let store = inner.store.clone();
+        let usage_changes = inner.usage_changes.clone();
         drop(inner);
         if let Some(session) = session {
-            sample(&session, &store).await;
+            sample(&session, &store, &usage_changes).await;
         }
     }
 }
 
-async fn sample(session: &Session, store: &Store) {
+async fn sample(session: &Session, store: &Store, usage_changes: &broadcast::Sender<()>) {
     match session.usage_json().await {
-        Ok(response) => store.record_usage(Utc::now(), Some(session.id()), response.to_string()),
+        Ok(response) => {
+            store.record_usage(Utc::now(), Some(session.id()), response.to_string());
+            let _ = usage_changes.send(());
+        }
         Err(err) => tracing::debug!("get_usage for session {}: {err:#}", session.id()),
     }
 }

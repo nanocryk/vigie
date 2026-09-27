@@ -1,4 +1,5 @@
-//! Session history in SQLite: sessions, their events, and `get_usage` samples.
+//! Session history in SQLite: sessions, their events, `get_usage` samples, and
+//! the usage tables fed from both.
 //!
 //! One writer thread owns the connection and runs every job in submission order,
 //! writes and reads alike. A read therefore sees every write queued before it,
@@ -8,16 +9,21 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::protocol::{GetUsageResponse, Inbound};
 use crate::session::{Event, EventBody, GateFailure, HostEvent};
+use crate::usage::db::{MessageTokens, UsageDb};
+use crate::usage::inputs::{self, Reading};
+use crate::usage::units::Timestamp;
+use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -48,6 +54,7 @@ CREATE INDEX usage_samples_time ON usage_samples (time);
 "#,
     // The CLI permission mode the session runs with, or starts with when resumed.
     "ALTER TABLE sessions ADD COLUMN permission_mode TEXT;",
+    usage::db::MIGRATION,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -203,6 +210,19 @@ impl Store {
                 }
             },
         };
+        let (readings, message) = match &event.body {
+            EventBody::Line(line) => match &line.parsed {
+                Some(Inbound::RateLimitEvent(limits)) => {
+                    (inputs::from_rate_limit_event(&limits.rate_limit_info), None)
+                }
+                Some(Inbound::Assistant(assistant)) => {
+                    (Vec::new(), inputs::from_assistant(assistant))
+                }
+                _ => (Vec::new(), None),
+            },
+            EventBody::Host(_) => (Vec::new(), None),
+        };
+        let at = Timestamp::from_datetime(event.time);
         self.write("event", move |connection| {
             let session = session.to_string();
             connection.execute(
@@ -216,7 +236,7 @@ impl Store {
                  WHERE id = ?1",
                 params![session, seq, time, permission_mode],
             )?;
-            Ok(())
+            record_usage_inputs(connection, &session, at, &readings, message.as_ref())
         });
     }
 
@@ -254,17 +274,44 @@ impl Store {
     }
 
     pub fn record_usage(&self, time: DateTime<Utc>, session: Option<Uuid>, response: String) {
+        let readings = match serde_json::from_str::<GetUsageResponse>(&response) {
+            Ok(parsed) => inputs::from_get_usage(&parsed),
+            Err(err) => {
+                tracing::debug!("get_usage response without readings: {err}");
+                Vec::new()
+            }
+        };
         self.write("usage sample", move |connection| {
+            let session = session.map(|id| id.to_string());
             connection.execute(
                 "INSERT INTO usage_samples (time, session_id, response) VALUES (?1, ?2, ?3)",
-                params![
-                    format_time(time),
-                    session.map(|id| id.to_string()),
-                    response
-                ],
+                params![format_time(time), session, response],
             )?;
+            let db = UsageDb::new(connection);
+            let at = Timestamp::from_datetime(time);
+            for reading in readings {
+                db.record(reading.kind, reading.state, session.as_deref(), at)?;
+            }
             Ok(())
         });
+    }
+
+    /// Folds what has elapsed and projects both windows, reporting on `sessions`.
+    /// Local time decides which hour of the week a moment falls in.
+    pub async fn usage_snapshot(
+        &self,
+        sessions: Vec<SessionContext>,
+        now: DateTime<Utc>,
+    ) -> Result<Snapshot> {
+        self.call(move |connection| {
+            usage::snapshot(
+                &UsageDb::new(connection),
+                &sessions,
+                Timestamp::from_datetime(now),
+                &Local,
+            )
+        })
+        .await
     }
 
     /// Most recently updated first.
@@ -370,11 +417,11 @@ impl Store {
     fn write(
         &self,
         what: &'static str,
-        job: impl FnOnce(&Connection) -> rusqlite::Result<()> + Send + 'static,
+        job: impl FnOnce(&Connection) -> Result<()> + Send + 'static,
     ) {
         self.submit(Box::new(move |connection| {
             if let Err(err) = job(connection) {
-                tracing::warn!("history {what}: {err}");
+                tracing::warn!("history {what}: {err:#}");
             }
         }));
     }
@@ -415,6 +462,23 @@ fn run_writer(connection: Connection, queue: mpsc::Receiver<Job>) {
             }
         }
     }
+}
+
+fn record_usage_inputs(
+    connection: &Connection,
+    session: &str,
+    at: Timestamp,
+    readings: &[Reading],
+    message: Option<&MessageTokens>,
+) -> Result<()> {
+    let db = UsageDb::new(connection);
+    for reading in readings {
+        db.record(reading.kind, reading.state, Some(session), at)?;
+    }
+    if let Some(message) = message {
+        db.record_message(session, at, message)?;
+    }
+    Ok(())
 }
 
 /// Brings the schema to `MIGRATIONS.len()`, one transaction per migration.
@@ -564,7 +628,85 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(tables, ["events", "sessions", "usage_samples"]);
+        assert_eq!(
+            tables,
+            [
+                "events",
+                "sessions",
+                "usage_closed_hours",
+                "usage_messages",
+                "usage_meta",
+                "usage_priors",
+                "usage_readings",
+                "usage_samples",
+                "usage_slots"
+            ]
+        );
+    }
+
+    /// The `out` lines of the `basic` recording, and its `get_usage` answer.
+    fn basic_recording() -> (Vec<String>, String) {
+        let recording = crate::replay::Recording::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("spike/runs/basic.ndjson"),
+        )
+        .unwrap();
+        let lines: Vec<String> = recording
+            .steps
+            .iter()
+            .filter(|step| step.dir == crate::replay::Direction::Out)
+            .map(|step| step.msg.to_string())
+            .collect();
+        let usage = recording
+            .steps
+            .iter()
+            .find(|step| step.msg["response"]["response"]["rate_limits_available"] == true)
+            .map(|step| step.msg["response"]["response"].to_string())
+            .unwrap();
+        (lines, usage)
+    }
+
+    #[tokio::test]
+    async fn usage_inputs_are_recorded_as_they_arrive() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let id = Uuid::new_v4();
+        let cwd = dir.path().join("project");
+        store.session_started(id, &cwd, Utc::now(), None);
+        let (lines, usage) = basic_recording();
+        for (seq, raw) in lines.iter().enumerate() {
+            let body = EventBody::Line(Box::new(Line {
+                raw: raw.clone(),
+                parsed: serde_json::from_str(raw).ok(),
+            }));
+            store.record_event(id, &event(seq as u64 + 1, body));
+        }
+        store.record_usage(Utc::now(), Some(id), usage);
+
+        let recorded_at = parse_time("2026-09-27T11:05:00Z").unwrap();
+        let context = SessionContext {
+            id,
+            cwd,
+            created_at: recorded_at,
+            permission_mode: Some("bypassPermissions".into()),
+        };
+        let snapshot = store
+            .usage_snapshot(vec![context], recorded_at)
+            .await
+            .unwrap();
+        let five_hour = snapshot.five_hour.expect("a 5h window");
+        assert_eq!(five_hour.used, 7.0);
+        assert_eq!(
+            five_hour.resets_at,
+            parse_time("2026-09-27T13:00:00Z").unwrap()
+        );
+        assert!(five_hour.projected >= 7.0);
+        let seven_day = snapshot.seven_day.expect("a 7d window");
+        assert_eq!(seven_day.used, 51.0);
+        assert_eq!(snapshot.history.readings, 2, "the sample repeats the event");
+        let session = &snapshot.sessions[0];
+        assert!(session.bypass);
+        assert_eq!(session.model_mix.len(), 1);
+        assert_eq!(session.model_mix[0].share, 1.0);
     }
 
     #[tokio::test]

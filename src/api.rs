@@ -1,4 +1,4 @@
-//! REST routes over the sessions.
+//! REST routes over the sessions and the account usage.
 
 use axum::{
     Json,
@@ -42,6 +42,13 @@ pub async fn create_session(
     match created.await {
         Ok(view) => (StatusCode::CREATED, Json(view)).into_response(),
         Err(err) => internal_error("create session", &err),
+    }
+}
+
+pub async fn usage(State(state): State<AppState>) -> Response {
+    match state.manager.usage().await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => internal_error("usage snapshot", &err),
     }
 }
 

@@ -111,9 +111,13 @@ impl Server {
     }
 
     async fn rest(&self, method: Method, body: Option<Value>) -> (StatusCode, Value) {
+        self.request(method, "/vigie2/api/sessions", body).await
+    }
+
+    async fn request(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .method(method)
-            .uri("/vigie2/api/sessions")
+            .uri(uri)
             .header(header::COOKIE, format!("{}={DEVICE}", auth::COOKIE_NAME));
         if body.is_some() {
             request = request.header(header::CONTENT_TYPE, "application/json");
@@ -171,6 +175,7 @@ impl Server {
             acks: HashMap::new(),
             errors: Vec::new(),
             sessions_changed: 0,
+            usage_changed: 0,
         })
     }
 }
@@ -201,6 +206,7 @@ struct Client {
     acks: HashMap<String, (bool, Option<String>)>,
     errors: Vec<(String, Option<Uuid>)>,
     sessions_changed: usize,
+    usage_changed: usize,
 }
 
 impl Client {
@@ -250,6 +256,7 @@ impl Client {
                 assert!(self.acks.insert(client_id, (ok, error)).is_none());
             }
             ServerMessage::SessionsChanged => self.sessions_changed += 1,
+            ServerMessage::UsageChanged => self.usage_changed += 1,
             ServerMessage::Error { message, session } => self.errors.push((message, session)),
         }
     }
@@ -402,6 +409,47 @@ async fn sessions_are_created_over_rest_and_listed() {
     let started = client.until(|event| host_event(event, "started")).await;
     assert_eq!(client.events[started].seq, 1);
     assert_eq!(client.events[started].payload["cwd"], json!(server.cwd));
+}
+
+/// A turn reporting rate limits and one assistant message.
+const USAGE_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "user", "message": {"role": "user", "content": "hello"}, "parent_tool_use_id": null, "session_id": "s"}}
+{"t": 0, "dir": "out", "msg": {"type": "assistant", "message": {"id": "msg_1", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 10, "output_tokens": 5}}, "parent_tool_use_id": null, "session_id": "s", "uuid": "a1"}}
+{"t": 0, "dir": "out", "msg": {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "resetsAt": 4102444800, "rateLimitType": "five_hour", "unifiedWindows": {"five_hour": {"utilization": 0.07, "resetsAt": 4102444800}, "seven_day": {"utilization": 0.51, "resetsAt": 4102531200}}}, "session_id": "s", "uuid": "r0"}}
+{"t": 0, "dir": "out", "msg": {"type": "result", "subtype": "success", "is_error": false, "result": "hi", "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn", "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": "r1"}}
+"#;
+
+#[tokio::test]
+async fn usage_is_announced_after_a_turn_and_served_over_rest() {
+    let server = Server::start(USAGE_SCRIPT).await;
+    let mut client = server.client().await;
+    let id = server.create_session().await.id;
+    client
+        .send(&ClientMessage::Send {
+            session: id,
+            text: "hello".into(),
+            client_id: "send-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+    // One for the rate limit line, one for the finished turn.
+    while client.usage_changed < 2 {
+        client.pump().await;
+    }
+
+    let (status, body) = server.request(Method::GET, "/vigie2/api/usage", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["sessions"][0]["id"], json!(id));
+    assert_eq!(
+        body["sessions"][0]["model_mix"],
+        json!([{"family": "opus", "share": 1.0}])
+    );
+    assert_eq!(body["sessions"][0]["bypass"], false);
+    assert!(body["history"]["readings"].as_u64().unwrap() >= 2, "{body}");
+    assert!(body["facts"].is_array());
+    assert!(body["newest_reading"].is_string());
 }
 
 #[tokio::test]

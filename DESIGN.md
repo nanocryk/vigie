@@ -125,8 +125,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Usage module inside the app, doing what the custom Claude status bar does today, and more: 5h and 7d windows with projections, stats. Remade in this service to avoid useless dependencies, porting the existing Rust code from `../claude-projection-status`.
 - Estimates are calibrated from the tokens each turn reports, window usage measured before and after turns, and history. The same data feeds stats and projections.
-- History stores the raw CLI lines and periodic `get_usage` samples from the first slice on, so the usage module starts with data.
-- The usage storage is vigie2's own schema, starting from fresh data; nothing is imported from `claude-projection-status`'s `state.db`.
+- History stores the raw CLI lines and periodic `get_usage` samples.
+- The usage storage is vigie2's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
 - The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
 - Window bars: the spent part solid, the projection radiating horizontally from its edge toward the right, brighter when well supported and fainter when barely. Values animate when they change.
 - Readings are `get_usage` samples, taken only while a session is live, and `rate_limit_event` lines. When the newest is older than 10 minutes, the account column dims and shows its age.

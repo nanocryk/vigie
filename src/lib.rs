@@ -9,6 +9,7 @@ pub mod replay;
 pub mod server;
 pub mod session;
 pub mod store;
+pub mod usage;
 pub mod wire;
 pub mod ws;
 
