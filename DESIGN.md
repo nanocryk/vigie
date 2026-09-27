@@ -58,6 +58,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Classic chat layout: Claude's text in bubbles on the left, the user's on the right. A bubble spans the full width minus a fixed margin on the side opposite its sender. Bubbles are rectangular with small rounded corners (about 5px) and no speech tail.
 - Bubbles hold text only; tool uses appear outside bubbles.
+- A thin border in the focus-ring color marks each side: on the left of Claude's bubbles and tool rows (aligned), on the right of the user's bubbles.
 - Scroll never yanked: new content arriving while the view is scrolled up does not move the view.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
 - Approvals by swipe: right accepts, left rejects, with a way to add notes.

@@ -27,7 +27,9 @@ const BUBBLE = "rounded-[5px] px-3 py-2 whitespace-pre-wrap [overflow-wrap:anywh
 
 function UserBubble({ children, dim }: { children: ReactNode; dim?: boolean }) {
   return (
-    <div className={`bg-bubble-user ml-10 ${BUBBLE} ${dim === true ? "opacity-60" : ""}`}>
+    <div
+      className={`bg-bubble-user border-ring ml-10 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""}`}
+    >
       {children}
     </div>
   );
@@ -52,8 +54,8 @@ const PANEL =
 
 function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   return (
-    <details className="group open:bg-muted rounded-[5px] text-sm open:pb-2">
-      <summary className="hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-[5px] px-1 py-0.5">
+    <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
+      <summary className="hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-r-[5px] px-1 py-0.5">
         <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[item.status]}`}>
           {STATUS_TEXT[item.status]}
         </span>
@@ -101,7 +103,9 @@ const ItemView = memo(function ItemView({ item, last }: { item: Item; last: bool
     }
     case "claude":
       return (
-        <div className={`bg-bubble-claude voice-prose mr-10 ${BUBBLE}`}>
+        <div
+          className={`bg-bubble-claude border-ring voice-prose mr-10 border-l-2 ${BUBBLE} rounded-l-none`}
+        >
           {item.text}
           {item.streaming && <span className="text-primary animate-pulse"> _</span>}
         </div>
