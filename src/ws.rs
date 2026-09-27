@@ -226,14 +226,8 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             mode,
             client_id,
         } => {
-            let result = async {
-                running(manager, session)
-                    .await?
-                    .set_permission_mode(mode)
-                    .await?;
-                Ok(())
-            };
-            (client_id, result.await)
+            let result = manager.set_permission_mode(session, mode).await;
+            (client_id, result)
         }
         ClientMessage::Subscribe { .. } | ClientMessage::Unsubscribe { .. } => {
             (String::new(), Err(anyhow!("not a command")))

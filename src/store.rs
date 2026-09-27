@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::session::{Event, EventBody, GateFailure};
+use crate::session::{Event, EventBody, GateFailure, HostEvent};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 1] = [r#"
+const MIGRATIONS: [&str; 2] = [
+    r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     cwd TEXT NOT NULL,
@@ -44,7 +45,10 @@ CREATE TABLE usage_samples (
     response TEXT NOT NULL
 ) STRICT;
 CREATE INDEX usage_samples_time ON usage_samples (time);
-"#];
+"#,
+    // The CLI permission mode the session runs with, or starts with when resumed.
+    "ALTER TABLE sessions ADD COLUMN permission_mode TEXT;",
+];
 
 /// Jobs the writer thread folds into one transaction at most.
 const MAX_BATCH: usize = 256;
@@ -82,6 +86,8 @@ pub struct SessionRow {
     /// Seq of the latest event, 0 when there is none.
     pub last_seq: u64,
     pub state: SessionState,
+    /// Last known CLI permission mode; `None` for sessions from before it was stored.
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,26 +146,53 @@ impl Store {
         Ok(Self { jobs })
     }
 
-    /// Inserts the session, or marks a known one running again.
-    pub fn session_started(&self, id: Uuid, cwd: &Path, time: DateTime<Utc>) {
+    /// Inserts the session, or marks a known one running again. A `None` mode
+    /// keeps the stored one.
+    pub fn session_started(
+        &self,
+        id: Uuid,
+        cwd: &Path,
+        time: DateTime<Utc>,
+        permission_mode: Option<String>,
+    ) {
         let cwd = cwd.to_string_lossy().into_owned();
         self.write("session start", move |connection| {
             let time = format_time(time);
             connection.execute(
-                "INSERT INTO sessions (id, cwd, created_at, updated_at, state)
-                 VALUES (?1, ?2, ?3, ?3, 'running')
+                "INSERT INTO sessions (id, cwd, created_at, updated_at, state, permission_mode)
+                 VALUES (?1, ?2, ?3, ?3, 'running', ?4)
                  ON CONFLICT (id) DO UPDATE SET
                      updated_at = excluded.updated_at, state = 'running',
-                     exit_code = NULL, gate_failure = NULL",
-                params![id.to_string(), cwd, time],
+                     exit_code = NULL, gate_failure = NULL,
+                     permission_mode = COALESCE(excluded.permission_mode, permission_mode)",
+                params![id.to_string(), cwd, time, permission_mode],
             )?;
             Ok(())
         });
     }
 
+    /// Resolves once stored; fails for an unknown session.
+    pub async fn set_permission_mode(&self, session: Uuid, mode: String) -> Result<()> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET permission_mode = ?2 WHERE id = ?1",
+                params![session.to_string(), mode],
+            )?;
+            if changed == 0 {
+                bail!("unknown session {session}");
+            }
+            Ok(())
+        })
+        .await
+    }
+
     pub fn record_event(&self, session: Uuid, event: &Event) {
         let seq = event.seq;
         let time = format_time(event.time);
+        let permission_mode = match &event.body {
+            EventBody::Host(HostEvent::PermissionMode { mode }) => Some(mode.clone()),
+            _ => None,
+        };
         let (kind, payload) = match &event.body {
             EventBody::Line(line) => (EventKind::Line, line.raw.clone()),
             EventBody::Host(host) => match serde_json::to_string(host) {
@@ -178,8 +211,10 @@ impl Store {
                 params![session, seq, time, kind.as_str(), payload],
             )?;
             connection.execute(
-                "UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE id = ?1",
-                params![session, seq, time],
+                "UPDATE sessions SET last_seq = ?2, updated_at = ?3,
+                     permission_mode = COALESCE(?4, permission_mode)
+                 WHERE id = ?1",
+                params![session, seq, time, permission_mode],
             )?;
             Ok(())
         });
@@ -400,7 +435,7 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode FROM sessions";
 
 struct RawSession {
     id: String,
@@ -411,6 +446,7 @@ struct RawSession {
     state: String,
     exit_code: Option<i32>,
     gate_failure: Option<String>,
+    permission_mode: Option<String>,
 }
 
 impl RawSession {
@@ -424,6 +460,7 @@ impl RawSession {
             state: row.get(5)?,
             exit_code: row.get(6)?,
             gate_failure: row.get(7)?,
+            permission_mode: row.get(8)?,
         })
     }
 
@@ -450,6 +487,7 @@ impl RawSession {
             updated_at: parse_time(&self.updated_at)?,
             last_seq: self.last_seq,
             state,
+            permission_mode: self.permission_mode,
         })
     }
 }
@@ -530,14 +568,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_from_a_v1_file_keeps_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let id = Uuid::new_v4();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(MIGRATIONS[0]).unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO sessions (id, cwd, created_at, updated_at, state)
+                     VALUES (?1, 'C:\\p', ?2, ?2, 'stopped')",
+                    params![id.to_string(), format_time(Utc::now())],
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.state, SessionState::Stopped);
+        assert_eq!(row.permission_mode, None);
+        store.set_permission_mode(id, "plan".into()).await.unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
     async fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("history.db");
         let store = Store::open(&path).unwrap();
         let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
         let cwd = dir.path().join("project");
-        store.session_started(first, &cwd, Utc::now());
-        store.session_started(second, &cwd, Utc::now());
+        store.session_started(first, &cwd, Utc::now(), Some("default".into()));
+        store.session_started(second, &cwd, Utc::now(), None);
         let started = event(
             1,
             EventBody::Host(HostEvent::Started {
@@ -573,6 +637,8 @@ mod tests {
         assert_eq!(row.last_seq, 3);
         assert_eq!(row.state, SessionState::GateFailed { reason });
         assert_eq!(sessions[0].state, SessionState::Exited { code: Some(3) });
+        assert_eq!(row.permission_mode.as_deref(), Some("default"));
+        assert_eq!(sessions[0].permission_mode, None);
         assert_eq!(store.session(Uuid::new_v4()).await.unwrap(), None);
 
         let events = store.events_after(first, 0, 100).await.unwrap();
@@ -603,11 +669,31 @@ mod tests {
         assert_eq!(usage.session_id, None);
         assert_eq!(usage.response, r#"{"n":2}"#);
 
-        store.session_started(first, &cwd, Utc::now());
+        let mode_event = event(
+            4,
+            EventBody::Host(HostEvent::PermissionMode {
+                mode: "plan".into(),
+            }),
+        );
+        store.record_event(first, &mode_event);
+        store.session_started(first, &cwd, Utc::now(), None);
         store.stop_running().await.unwrap();
         let row = store.session(first).await.unwrap().unwrap();
         assert_eq!(row.state, SessionState::Stopped);
-        assert_eq!(row.last_seq, 3);
+        assert_eq!(row.last_seq, 4);
+        assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+        store
+            .set_permission_mode(first, "acceptEdits".into())
+            .await
+            .unwrap();
+        let row = store.session(first).await.unwrap().unwrap();
+        assert_eq!(row.permission_mode.as_deref(), Some("acceptEdits"));
+        assert!(
+            store
+                .set_permission_mode(Uuid::new_v4(), "plan".into())
+                .await
+                .is_err()
+        );
 
         drop(store);
         let reopened = Store::open(&path).unwrap();

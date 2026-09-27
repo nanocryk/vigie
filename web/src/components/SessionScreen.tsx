@@ -2,6 +2,7 @@ import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from
 
 import type { Client } from "@/client";
 import { AskCard } from "@/components/AskCard";
+import { PermissionMode } from "@/components/PermissionMode";
 import { BusyDot, ConnectionBadge } from "@/components/SessionList";
 import { ReloadButton } from "@/components/Reload";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
@@ -164,6 +165,12 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       .finally(() => setStopping(false));
   };
 
+  // A failed stop is reported until its turn ends.
+  const turnOpen = transcript.turnOpen;
+  useEffect(() => {
+    if (!turnOpen) setStopError(null);
+  }, [turnOpen]);
+
   const busy = view?.busy ?? false;
   // Asks die with their process; a session known to have none shows no card.
   const asks = view?.live === false ? [] : transcript.asks;
@@ -201,6 +208,37 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         pending={visiblePending}
         onRetry={retry}
         onDismiss={dismiss}
+        overlay={
+          transcript.turnOpen && (
+            <div className="pointer-events-auto flex items-center gap-2">
+              {stopError !== null && (
+                <span className="bg-background text-destructive rounded-[5px] px-2 py-1 text-xs shadow-sm">
+                  {stopError}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={stop}
+                disabled={stopping}
+                className="border-destructive text-destructive bg-background voice-ui h-10 shrink-0 rounded-[5px] border px-4 text-sm shadow-md disabled:opacity-50"
+              >
+                {stopping ? "Stopping..." : "Stop"}
+              </button>
+            </div>
+          )
+        }
+        tabs={
+          <PermissionMode
+            client={client}
+            session={id}
+            mode={
+              view?.live === true
+                ? transcript.permissionMode
+                : (view?.permission_mode ?? transcript.permissionMode)
+            }
+            enabled={view !== null}
+          />
+        }
       />
 
       {ask !== undefined && (
@@ -214,21 +252,6 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       )}
 
       <footer className="border-t px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        {(busy || stopError !== null) && (
-          <div className="mx-auto mb-2 flex max-w-5xl items-center gap-3">
-            {busy && (
-              <button
-                type="button"
-                onClick={stop}
-                disabled={stopping}
-                className="border-destructive text-destructive voice-ui rounded-[5px] border px-3 py-1 text-sm disabled:opacity-50"
-              >
-                {stopping ? "Stopping..." : "Stop"}
-              </button>
-            )}
-            {stopError !== null && <span className="text-destructive text-xs">{stopError}</span>}
-          </div>
-        )}
         <Composer session={id} onSend={send} />
       </footer>
     </>

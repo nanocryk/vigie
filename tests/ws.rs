@@ -467,6 +467,16 @@ async fn two_clients_share_a_session_and_its_asks() {
         })
         .await;
     assert_eq!(second.ack("mode-1").await, (true, None));
+    // The launch reported default first; the change follows.
+    let modes: Vec<&Value> = second.events[..]
+        .iter()
+        .filter(|event| host_event(event, "permission_mode"))
+        .map(|event| &event.payload["mode"])
+        .collect();
+    assert_eq!(modes.first().copied(), Some(&json!("default")));
+    second
+        .until(|event| host_event(event, "permission_mode") && event.payload["mode"] == "plan")
+        .await;
     second
         .send(&ClientMessage::Send {
             session: id,
@@ -541,6 +551,58 @@ async fn subscribing_to_a_stopped_session_replays_without_spawning() {
     assert_eq!(client.events[0].seq, 1);
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(server.manager.live(id).await.is_none());
+}
+
+#[tokio::test]
+async fn a_stopped_session_stores_its_mode_and_the_next_send_launches_with_it() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let session = server.manager.live(id).await.expect("live after create");
+    session.stop().await;
+    assert!(server.manager.live(id).await.is_none());
+
+    let mut client = server.client().await;
+    let changes_before = client.sessions_changed;
+    client
+        .send(&ClientMessage::SetPermissionMode {
+            session: id,
+            mode: "plan".into(),
+            client_id: "mode-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("mode-1").await, (true, None));
+    assert!(
+        server.manager.live(id).await.is_none(),
+        "setting the mode spawned"
+    );
+    while client.sessions_changed == changes_before {
+        client.pump().await;
+    }
+    let (status, body) = server.rest(Method::GET, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let list: SessionList = serde_json::from_value(body).unwrap();
+    assert_eq!(list.sessions[0].permission_mode.as_deref(), Some("plan"));
+    assert!(!list.sessions[0].live);
+
+    let stopped_at = list.sessions[0].last_seq;
+    client.send(&subscribe(id, stopped_at)).await;
+    client
+        .send(&ClientMessage::Send {
+            session: id,
+            text: "hello".into(),
+            client_id: "send-1".into(),
+        })
+        .await;
+    assert_eq!(client.ack("send-1").await, (true, None));
+    let changed = client
+        .until(|event| host_event(event, "permission_mode"))
+        .await;
+    assert_eq!(client.events[changed].payload["mode"], "plan");
+    assert!(
+        client.events[..changed]
+            .iter()
+            .any(|event| host_event(event, "started"))
+    );
 }
 
 #[tokio::test]

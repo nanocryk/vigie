@@ -17,7 +17,14 @@ export type ToolStatus = "running" | "ok" | "error" | "unfinished";
  */
 export type Delivery = "on_host" | "received" | "handled";
 
-export type Item =
+/**
+ * `time` (epoch ms, null when the event time does not parse) is when the item
+ * began: the server sending a user message, the first text of a Claude bubble,
+ * the tool call line.
+ */
+export type Item = { time: number | null } & ItemBody;
+
+type ItemBody =
   | { kind: "user"; key: string; text: string; delivery: Delivery; clientId: string | null }
   | { kind: "claude"; key: string; text: string; streaming: boolean }
   | { kind: "thinking"; key: string; text: string }
@@ -30,8 +37,24 @@ export type Item =
       input: unknown;
       status: ToolStatus;
       output: string | null;
+      /** When its result arrived. */
+      endTime: number | null;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null };
+
+/** Epoch ms of an RFC 3339 time; fractions beyond milliseconds are dropped. */
+export function parseTime(text: string): number | null {
+  const time = Date.parse(text.replace(/(\.\d{3})\d+/, "$1"));
+  return Number.isNaN(time) ? null : time;
+}
+
+/** A tool row shows its time only when the minute differs from the item above. */
+export function toolTimeVisible(items: readonly Item[], index: number): boolean {
+  const item = items[index];
+  if (item?.time === null || item === undefined) return false;
+  const previous = items[index - 1]?.time ?? null;
+  return previous === null || Math.floor(previous / 60_000) !== Math.floor(item.time / 60_000);
+}
 
 export interface PendingAsk {
   requestId: string;
@@ -62,6 +85,8 @@ export interface TranscriptState {
   outbox: readonly Outgoing[];
   /** Folder the session runs in, from its `started` event; tool paths inside it show relative. */
   cwd: string | null;
+  /** CLI permission mode (`default`, `acceptEdits`, `plan`, ...), null until reported. */
+  permissionMode: string | null;
 }
 
 interface Outgoing {
@@ -86,6 +111,7 @@ export const emptyTranscript: TranscriptState = {
   turnOpen: false,
   outbox: [],
   cwd: null,
+  permissionMode: null,
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -231,6 +257,7 @@ class Draft {
   turnOpen: boolean;
   outbox: Outgoing[];
   cwd: string | null;
+  permissionMode: string | null;
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
@@ -245,6 +272,7 @@ class Draft {
     this.turnOpen = state.turnOpen;
     this.outbox = state.outbox.map((entry) => ({ ...entry }));
     this.cwd = state.cwd;
+    this.permissionMode = state.permissionMode;
   }
 
   finish(): TranscriptState {
@@ -261,12 +289,21 @@ class Draft {
       turnOpen: this.turnOpen,
       outbox: this.outbox,
       cwd: this.cwd,
+      permissionMode: this.permissionMode,
     };
+  }
+
+  /** Time of the event being applied. */
+  private time: number | null = null;
+
+  private add(body: ItemBody): void {
+    this.items.push({ ...body, time: this.time });
   }
 
   apply(event: WireEvent): void {
     if (event.seq <= this.lastSeq) return;
     this.lastSeq = event.seq;
+    this.time = parseTime(event.time);
     const key = String(event.seq);
     if (event.kind === "host") this.host(event.payload, key);
     else this.line(parseCliLine(event.payload), key);
@@ -283,7 +320,7 @@ class Draft {
         return;
       case "user_sent":
         this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
-        this.items.push({
+        this.add({
           kind: "user",
           key,
           text: event.text,
@@ -306,8 +343,11 @@ class Draft {
         this.asks = this.asks.filter((ask) => ask.requestId !== event.request_id);
         this.requests.delete(event.request_id);
         return;
+      case "permission_mode":
+        this.permissionMode = event.mode;
+        return;
       case "auth_gate_failed":
-        this.items.push({
+        this.add({
           kind: "notice",
           key,
           tone: "error",
@@ -327,7 +367,7 @@ class Draft {
             : item,
         );
         const code = event.code === null ? "no exit code" : `code ${event.code}`;
-        this.items.push({
+        this.add({
           kind: "notice",
           key,
           tone: event.code === 0 ? "info" : "error",
@@ -354,6 +394,10 @@ class Draft {
         return;
       case "system":
         if (line.subtype === "init") this.turnOpen = true;
+        // History recorded before `permission_mode` host events only has these.
+        if ((line.subtype === "init" || line.subtype === "status") && line.permissionMode !== null) {
+          this.permissionMode = line.permissionMode;
+        }
         return;
       case "stream_event":
         if (line.parentToolUseId !== null) return;
@@ -374,7 +418,7 @@ class Draft {
         return;
       case "result":
         if (line.isError && !(line.subtype === "error_during_execution" && this.interrupted)) {
-          this.items.push({
+          this.add({
             kind: "notice",
             key,
             tone: "error",
@@ -407,7 +451,7 @@ class Draft {
     const text = texts.join("\n");
     if (text.startsWith(INTERRUPT_PREFIX)) {
       this.interrupted = true;
-      this.items.push({
+      this.add({
         kind: "notice",
         key,
         tone: "info",
@@ -433,7 +477,7 @@ class Draft {
     const item = entry === undefined ? undefined : this.items[entry.index];
     if (entry === undefined || item?.kind !== "user") {
       // History recorded before `user_sent` existed only has the echo.
-      this.items.push({ kind: "user", key, text, delivery: "received", clientId: null });
+      this.add({ kind: "user", key, text, delivery: "received", clientId: null });
       return;
     }
     this.items[entry.index] = { ...item, delivery: "received" };
@@ -470,6 +514,7 @@ class Draft {
       ...item,
       status: block.isError ? "error" : "ok",
       output: block.content,
+      endTime: this.time,
     };
   }
 
@@ -485,16 +530,16 @@ class Draft {
           if (index !== undefined && item?.kind === "claude") {
             this.items[index] = { ...item, text: block.text, streaming: false };
           } else {
-            this.items.push({ kind: "claude", key: blockKey, text: block.text, streaming: false });
+            this.add({ kind: "claude", key: blockKey, text: block.text, streaming: false });
           }
           return;
         }
         case "thinking":
-          this.items.push({ kind: "thinking", key: blockKey, text: block.thinking });
+          this.add({ kind: "thinking", key: blockKey, text: block.thinking });
           return;
         case "tool_use":
           this.tools.set(block.id, this.items.length);
-          this.items.push({
+          this.add({
             kind: "tool",
             key: blockKey,
             toolUseId: block.id,
@@ -503,6 +548,7 @@ class Draft {
             input: block.input,
             status: "running",
             output: null,
+            endTime: null,
           });
           return;
         case "tool_result":
@@ -522,7 +568,7 @@ class Draft {
       return;
     }
     const created = this.items.length;
-    this.items.push({ kind: "claude", key: `${key}:live`, text, streaming: true });
+    this.add({ kind: "claude", key: `${key}:live`, text, streaming: true });
     this.liveBlocks.set(liveKey, created);
     const open = this.openText.get(id);
     if (open === undefined) this.openText.set(id, [created]);

@@ -24,6 +24,8 @@ export interface SessionView {
   last_seq: number;
   live: boolean;
   busy: boolean;
+  /** Stored mode the next launch passes; null when never recorded. */
+  permission_mode: string | null;
 }
 
 export type Answer =
@@ -58,6 +60,7 @@ export type HostEvent =
       danger: Danger;
     }
   | { event: "ask_resolved"; request_id: string }
+  | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
   | { event: "child_exited"; code: number | null; stderr_tail: string[] }
   | { event: "unknown"; raw: unknown };
@@ -169,6 +172,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     last_seq: num(value, "last_seq", label),
     live: bool(value, "live", label),
     busy: bool(value, "busy", label),
+    permission_mode: optStr(value, "permission_mode", label),
   };
 }
 
@@ -213,6 +217,10 @@ export function parseHostEvent(raw: unknown): HostEvent {
       return sentText === null
         ? { event: "unknown", raw }
         : { event: "user_sent", text: sentText, client_id: text("client_id") };
+    }
+    case "permission_mode": {
+      const mode = text("mode");
+      return mode === null ? { event: "unknown", raw } : { event: "permission_mode", mode };
     }
     case "ask_queued": {
       const requestId = text("request_id");
@@ -321,7 +329,7 @@ export type CliLine =
     }
   | { type: "stream_event"; parentToolUseId: string | null; event: StreamEvent }
   | { type: "result"; subtype: string; isError: boolean }
-  | { type: "system"; subtype: string }
+  | { type: "system"; subtype: string; permissionMode: string | null }
   | {
       type: "can_use_tool";
       requestId: string;
@@ -449,7 +457,9 @@ export function parseCliLine(raw: unknown): CliLine {
     }
     case "system": {
       const subtype = stringOrNull(raw["subtype"]);
-      return subtype === null ? { type: "raw", raw } : { type: "system", subtype };
+      return subtype === null
+        ? { type: "raw", raw }
+        : { type: "system", subtype, permissionMode: stringOrNull(raw["permissionMode"]) };
     }
     case "control_request": {
       const requestId = stringOrNull(raw["request_id"]);

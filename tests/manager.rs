@@ -221,8 +221,28 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
     let rows = manager.list().await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, SessionState::Stopped);
+    // A new session launches in default mode, which the CLI reports back.
+    assert_eq!(rows[0].permission_mode.as_deref(), Some("default"));
     let first_run = rows[0].last_seq;
-    assert_eq!(first_run, 3);
+    assert_eq!(first_run, 4);
+
+    // A stopped session only stores the mode; the resume launches with it.
+    let mut changes = manager.subscribe_changes();
+    manager
+        .set_permission_mode(id, "plan".into())
+        .await
+        .unwrap();
+    assert_eq!(changes.recv().await.unwrap(), id);
+    assert!(manager.live(id).await.is_none(), "setting the mode spawned");
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+    assert_eq!(row.last_seq, first_run);
+    assert!(
+        manager
+            .set_permission_mode(id, "bypassPermissions".into())
+            .await
+            .is_err()
+    );
 
     let session = manager.open(id).await.unwrap();
     let again = manager.open(id).await.unwrap();
@@ -248,8 +268,47 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
         1,
         "a live session is not respawned"
     );
+    assert!(
+        stored
+            .iter()
+            .filter(|event| event.kind == EventKind::Host)
+            .any(|event| host(event)
+                == HostEvent::PermissionMode {
+                    mode: "plan".into()
+                }),
+        "the resumed CLI was not launched in plan mode"
+    );
     assert_clean_exit(stored.last().unwrap());
     assert!(manager.open(Uuid::new_v4()).await.is_err());
+}
+
+/// Initialization, then one `set_permission_mode` exchange.
+const MODE_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "mode", "request": {"subtype": "set_permission_mode", "mode": "acceptEdits"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "mode", "response": {"mode": "acceptEdits"}}}}
+"#;
+
+#[tokio::test]
+async fn the_row_follows_the_mode_of_a_live_session() {
+    let env = Env::new();
+    let script = env.script("mode.ndjson", MODE_SCRIPT);
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    manager
+        .set_permission_mode(id, "acceptEdits".into())
+        .await
+        .unwrap();
+    assert!(manager.live(id).await.is_some());
+    manager.store().flush().await.unwrap();
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(row.permission_mode.as_deref(), Some("acceptEdits"));
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
 }
 
 #[tokio::test]
@@ -258,7 +317,7 @@ async fn a_restart_without_shutdown_leaves_no_session_running() {
     let script = env.script("init.ndjson", INIT_SCRIPT);
     let store = Store::open(&env.db).unwrap();
     let id = Uuid::new_v4();
-    store.session_started(id, &env.cwd, chrono::Utc::now());
+    store.session_started(id, &env.cwd, chrono::Utc::now(), None);
     store.flush().await.unwrap();
     drop(store);
 

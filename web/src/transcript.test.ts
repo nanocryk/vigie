@@ -3,10 +3,18 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { type Item, applyEvents, emptyTranscript, toolSummary } from "@/transcript";
+import {
+  type Item,
+  applyEvents,
+  emptyTranscript,
+  toolSummary,
+  toolTimeVisible,
+} from "@/transcript";
 import { type WireEvent, isRecord, parseHostEvent } from "@/wire";
 
 const SESSION = "00000000-0000-0000-0000-000000000001";
+/** Event times are this plus the recording's `t` (ms). */
+const RECORDING_START = Date.parse("2026-09-27T10:00:59.000Z");
 
 /**
  * Turns a spike recording into the events the server would send: every `out`
@@ -18,8 +26,11 @@ function recordingEvents(name: string, legacy = false): WireEvent[] {
   const file = path.resolve(import.meta.dirname, "../../spike/runs", `${name}.ndjson`);
   const events: WireEvent[] = [];
   const queued = new Set<string>();
+  let elapsed = 0;
   const push = (kind: "line" | "host", payload: unknown): void => {
-    const base = { session: SESSION, seq: events.length + 1, time: "2026-09-27T00:00:00Z" };
+    // The server's microsecond precision, to exercise its parsing.
+    const time = new Date(RECORDING_START + elapsed).toISOString().replace("Z", "123Z");
+    const base = { session: SESSION, seq: events.length + 1, time };
     events.push(
       kind === "line"
         ? { ...base, kind, payload }
@@ -31,6 +42,7 @@ function recordingEvents(name: string, legacy = false): WireEvent[] {
     const step: unknown = JSON.parse(text);
     if (!isRecord(step) || !isRecord(step["msg"])) throw new Error(`bad step: ${text}`);
     const msg = step["msg"];
+    if (typeof step["t"] === "number") elapsed = step["t"];
     if (step["dir"] === "out") {
       push("line", msg);
       const request = msg["request"];
@@ -261,6 +273,91 @@ describe("transcript from recordings", () => {
       ["claude", "ok"],
     ]);
     expect(state.asks).toEqual([]);
+  });
+});
+
+describe("times", () => {
+  const at = (t: number) => RECORDING_START + t;
+
+  it("come from user_sent, the first text, and the tool call and result lines", () => {
+    const state = transcript("permissions");
+    const [user, bash, , output] = state.items;
+    expect(user).toMatchObject({ kind: "user", time: at(874) });
+    expect(bash).toMatchObject({ kind: "tool", name: "Bash", time: at(2835), endTime: at(4872) });
+    // Streamed: the bubble dates from its first delta, before the final assistant line.
+    expect(output?.kind).toBe("claude");
+    expect(output?.time).toBeGreaterThan(at(4872));
+    expect(output?.time).toBeLessThan(at(6849));
+  });
+
+  it("legacy history dates the user bubble from its echo", () => {
+    const legacy = applyEvents(emptyTranscript, recordingEvents("interrupt", true));
+    expect(legacy.items[0]).toMatchObject({ kind: "user", time: at(1757) });
+  });
+
+  it("a tool row shows its time only when the minute changes from the item above", () => {
+    const minute = Date.parse("2026-09-27T10:05:00Z");
+    const item = (time: number | null, kind: "tool" | "notice" = "tool"): Item =>
+      kind === "tool"
+        ? {
+            kind,
+            key: String(time),
+            time,
+            toolUseId: "t",
+            name: "Bash",
+            summary: "",
+            input: {},
+            status: "ok",
+            output: null,
+            endTime: null,
+          }
+        : { kind, key: String(time), time, tone: "info", text: "", detail: null };
+    const items = [
+      item(minute + 5_000),
+      item(minute + 50_000),
+      item(minute + 61_000, "notice"),
+      item(minute + 62_000),
+      item(minute + 130_000),
+      item(null),
+    ];
+    expect(items.map((_, index) => toolTimeVisible(items, index))).toEqual([
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+});
+
+describe("permission mode", () => {
+  const hostMode = (seq: number, mode: string): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "host",
+    payload: { event: "permission_mode", mode },
+  });
+
+  it("follows permission_mode host events", () => {
+    expect(emptyTranscript.permissionMode).toBeNull();
+    const state = applyEvents(emptyTranscript, [hostMode(1, "default"), hostMode(2, "acceptEdits")]);
+    expect(state.permissionMode).toBe("acceptEdits");
+  });
+
+  it("falls back to system init and status lines in older history", () => {
+    const events = recordingEvents("plan", true);
+    const firstInit = events.findIndex(
+      (event) =>
+        event.kind === "line" &&
+        isRecord(event.payload) &&
+        event.payload["type"] === "system" &&
+        event.payload["subtype"] === "init",
+    );
+    expect(applyEvents(emptyTranscript, events.slice(0, firstInit + 1)).permissionMode).toBe("plan");
+    // Approving the plan puts the CLI back in default mode, reported by a status line.
+    expect(applyEvents(emptyTranscript, events).permissionMode).toBe("default");
   });
 });
 

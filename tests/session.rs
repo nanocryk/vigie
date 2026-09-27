@@ -46,6 +46,8 @@ struct Harness {
     events: broadcast::Receiver<Arc<Event>>,
     last_seq: u64,
     claude_session: Uuid,
+    /// Every `PermissionMode` event seen, in order.
+    modes: Vec<String>,
     _cwd: TempDir,
 }
 
@@ -63,6 +65,7 @@ impl Harness {
             },
             history: None,
             last_seq: 0,
+            permission_mode: None,
         };
         let (session, events) = Session::spawn(config).expect("spawn session");
         Self {
@@ -70,6 +73,7 @@ impl Harness {
             events,
             last_seq: 0,
             claude_session,
+            modes: Vec::new(),
             _cwd: cwd,
         }
     }
@@ -82,6 +86,9 @@ impl Harness {
             .expect("event stream ended");
         assert_eq!(event.seq, self.last_seq + 1, "sequence gap");
         self.last_seq = event.seq;
+        if let EventBody::Host(HostEvent::PermissionMode { mode }) = &event.body {
+            self.modes.push(mode.clone());
+        }
         if let EventBody::Line(line) = &event.body {
             let parsed = line.parsed.as_ref().expect("line parses");
             let raw: Value = serde_json::from_str(&line.raw).expect("raw line is JSON");
@@ -371,6 +378,41 @@ async fn background_task_starts_its_own_turn() {
     assert!(second.result.unwrap_or_default().contains("exit"));
     assert_eq!(*harness.session.activity().borrow(), Activity::Idle);
     harness.finish().await;
+}
+
+/// `initialize` reports default, `set_permission_mode` switches to plan, and
+/// approving the plan moves the CLI back to default (a `system/status`).
+#[tokio::test]
+async fn permission_mode_changes_are_announced_once_each() {
+    let mut harness = Harness::start(&recording("plan"));
+    let changed = harness.session.set_permission_mode("plan").await.unwrap();
+    assert_eq!(changed.mode, "plan");
+    harness
+        .session
+        .send(
+            "Plan creating hello.txt containing hi. Keep the plan to two lines and submit it \
+             with ExitPlanMode. Once approved, create the file, then reply done.",
+            None,
+        )
+        .await
+        .unwrap();
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: None,
+    };
+    for expected in ["ExitPlanMode", "Write"] {
+        let (request_id, tool_name) = harness.until_ask().await;
+        assert_eq!(tool_name, expected);
+        harness
+            .session
+            .answer(request_id, allow.clone())
+            .await
+            .unwrap();
+    }
+    harness.until_result().await;
+    let modes = harness.modes.clone();
+    harness.finish().await;
+    assert_eq!(modes, ["default", "plan", "default"]);
 }
 
 async fn assert_gate_fails(harness: &mut Harness, expected: GateFailure) {

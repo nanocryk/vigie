@@ -9,7 +9,9 @@ import {
   useState,
 } from "react";
 
-import type { Delivery, Item, ToolStatus } from "@/transcript";
+import { useNow } from "@/components/useNow";
+import { formatDuration, formatExact, formatStamp } from "@/format";
+import { type Delivery, type Item, type ToolStatus, toolTimeVisible } from "@/transcript";
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
@@ -52,7 +54,24 @@ const STATUS_CLASS: Record<ToolStatus, string> = {
 const PANEL =
   "bg-background voice-code max-h-80 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]";
 
-function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
+const STAMP = "text-muted-foreground voice-ui text-[0.6875rem] leading-none";
+
+/** Exact start time and, once the result is in, the call's duration. */
+function toolTiming(item: Extract<Item, { kind: "tool" }>): string | null {
+  if (item.time === null) return null;
+  const exact = formatExact(item.time);
+  return item.endTime === null ? exact : `${exact} · ${formatDuration(item.endTime - item.time)}`;
+}
+
+function ToolRow({
+  item,
+  stamp,
+}: {
+  item: Extract<Item, { kind: "tool" }>;
+  /** Shown at the row's end; null hides it. */
+  stamp: string | null;
+}) {
+  const timing = toolTiming(item);
   return (
     <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
       <summary className="hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-r-[5px] px-1 py-0.5">
@@ -61,8 +80,10 @@ function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         </span>
         <span className="voice-ui shrink-0">{item.name}</span>
         <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
+        {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
       </summary>
       <div className="mt-1 mr-2 ml-9 space-y-2">
+        {timing !== null && <div className={STAMP}>{timing}</div>}
         {item.output !== null && (
           <pre className={`${PANEL} ${item.status === "error" ? "text-destructive" : ""}`}>
             {item.output === "" ? "(no output)" : item.output}
@@ -83,14 +104,38 @@ const DELIVERY_LABEL: Record<Delivery, string | null> = {
   handled: "handled locally",
 };
 
+function BubbleTime({ time, now }: { time: number | null; now: number }) {
+  if (time === null) return null;
+  return (
+    <div className={`${STAMP} mt-1.5 text-right`}>
+      {formatStamp(time, now)}
+    </div>
+  );
+}
+
 // Items keep their identity until they change, so unchanged rows skip rendering.
-const ItemView = memo(function ItemView({ item, last }: { item: Item; last: boolean }) {
+const ItemView = memo(function ItemView({
+  item,
+  last,
+  now,
+  toolTime,
+}: {
+  item: Item;
+  last: boolean;
+  /** Reference for the time labels, refreshed on wake. */
+  now: number;
+  /** A tool row shows its time (the minute differs from the item above). */
+  toolTime: boolean;
+}) {
   switch (item.kind) {
     case "user": {
       const label = last ? DELIVERY_LABEL[item.delivery] : null;
       return (
         <div className="space-y-1">
-          <UserBubble>{item.text}</UserBubble>
+          <UserBubble>
+            {item.text}
+            <BubbleTime time={item.time} now={now} />
+          </UserBubble>
           {label !== null && (
             <div
               className={`text-muted-foreground voice-ui px-1 text-xs ${item.delivery === "handled" ? "text-left" : "text-right"}`}
@@ -108,6 +153,7 @@ const ItemView = memo(function ItemView({ item, last }: { item: Item; last: bool
         >
           {item.text}
           {item.streaming && <span className="text-primary animate-pulse"> _</span>}
+          <BubbleTime time={item.time} now={now} />
         </div>
       );
     case "thinking":
@@ -120,7 +166,12 @@ const ItemView = memo(function ItemView({ item, last }: { item: Item; last: bool
         </details>
       );
     case "tool":
-      return <ToolRow item={item} />;
+      return (
+        <ToolRow
+          item={item}
+          stamp={toolTime && item.time !== null ? formatStamp(item.time, now) : null}
+        />
+      );
     case "notice": {
       const tone = item.tone === "error" ? "text-destructive" : "text-muted-foreground";
       return item.detail === null ? (
@@ -183,16 +234,23 @@ export function TranscriptView({
   pending,
   onRetry,
   onDismiss,
+  overlay,
+  tabs,
 }: {
   items: readonly Item[];
   pending: readonly PendingSend[];
   onRetry: (pending: PendingSend) => void;
   onDismiss: (pending: PendingSend) => void;
+  /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
+  overlay?: ReactNode;
+  /** Tabs resting on the bottom edge, over the discussion; the content keeps room for them. */
+  tabs?: ReactNode;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  const now = useNow();
 
   const stick = useCallback(() => {
     const element = scroller.current;
@@ -251,7 +309,7 @@ export function TranscriptView({
         <div
           ref={content}
           onClickCapture={onSummaryClick}
-          className="mx-auto max-w-5xl space-y-2 px-3 py-4"
+          className={`mx-auto max-w-5xl space-y-2 px-3 pt-4 ${tabs === undefined ? "pb-4" : "pb-12"}`}
         >
           {items.length === 0 && pending.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">No messages yet.</p>
@@ -261,6 +319,8 @@ export function TranscriptView({
               key={item.key}
               item={item}
               last={index === lastUser && pending.length === 0}
+              now={now}
+              toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
             />
           ))}
           {pending.map((send) => (
@@ -268,14 +328,24 @@ export function TranscriptView({
           ))}
         </div>
       </div>
-      {showJump && (
-        <button
-          type="button"
-          onClick={jump}
-          className="bg-primary text-primary-foreground voice-ui absolute right-4 bottom-3 rounded-[5px] px-3 py-1.5 text-xs shadow-md"
-        >
-          latest &darr;
-        </button>
+      <div className="pointer-events-none absolute inset-x-0 bottom-3">
+        <div className="mx-auto flex max-w-5xl flex-col items-end gap-2 px-3">
+          {showJump && (
+            <button
+              type="button"
+              onClick={jump}
+              className="bg-primary text-primary-foreground voice-ui pointer-events-auto rounded-[5px] px-3 py-1.5 text-xs shadow-md"
+            >
+              latest &darr;
+            </button>
+          )}
+          {overlay}
+        </div>
+      </div>
+      {tabs !== undefined && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0">
+          <div className="mx-auto flex max-w-5xl items-end gap-1 px-3">{tabs}</div>
+        </div>
       )}
     </div>
   );

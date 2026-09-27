@@ -3,7 +3,8 @@
 //! Usage: `fake-claude [--realtime] <recording.ndjson> [claude flags...]`. The
 //! first argument other than `--realtime` is the recording; the rest is the
 //! real CLI's argv. Its `--session-id` or `--resume` value replaces the
-//! recorded session id; other flags are ignored.
+//! recorded session id, and its `--permission-mode` value is reported as the
+//! `initialize` response's `current_permission_mode`; other flags are ignored.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,6 +22,8 @@ async fn main() -> ExitCode {
             options.pace = Pace::Realtime;
         } else if arg == "--session-id" || arg == "--resume" {
             options.session_id = args.next();
+        } else if arg == "--permission-mode" {
+            options.permission_mode = args.next();
         } else if recording_path.is_none() {
             recording_path = Some(arg.into());
         }

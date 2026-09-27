@@ -82,15 +82,20 @@ impl Launch {
     }
 }
 
-/// The CLI arguments after `Program::leading_args`.
-pub fn args(launch: Launch) -> Vec<OsString> {
+/// The CLI arguments after `Program::leading_args`; `permission_mode` becomes
+/// `--permission-mode` when known.
+pub fn args(launch: Launch, permission_mode: Option<&str>) -> Vec<OsString> {
     let (flag, id) = match launch {
         Launch::New(id) => ("--session-id", id),
         Launch::Resume(id) => ("--resume", id),
     };
+    let mode = permission_mode
+        .into_iter()
+        .flat_map(|mode| [OsString::from("--permission-mode"), mode.into()]);
     FLAGS
         .iter()
         .map(OsString::from)
+        .chain(mode)
         .chain([flag.into(), id.to_string().into()])
         .collect()
 }
@@ -135,11 +140,12 @@ impl Child {
         program: &Program,
         cwd: &Path,
         launch: Launch,
+        permission_mode: Option<&str>,
         host_session: Uuid,
     ) -> Result<Self> {
         let mut process = Command::new(&program.path)
             .args(&program.leading_args)
-            .args(args(launch))
+            .args(args(launch, permission_mode))
             .current_dir(cwd)
             .env_clear()
             .envs(env(std::env::vars_os(), host_session))
@@ -272,14 +278,30 @@ mod tests {
     #[test]
     fn args_pick_new_or_resume() {
         let id = Uuid::new_v4();
-        let new = args(Launch::New(id));
+        let new = args(Launch::New(id), None);
         assert_eq!(new[0], "-p");
         assert!(new.contains(&OsString::from("--replay-user-messages")));
+        assert!(!new.contains(&OsString::from("--permission-mode")));
         assert_eq!(
             new[new.len() - 2..],
             [OsString::from("--session-id"), id.to_string().into()]
         );
-        let resume = args(Launch::Resume(id));
+        let resume = args(Launch::Resume(id), None);
+        assert_eq!(
+            resume[resume.len() - 2..],
+            [OsString::from("--resume"), id.to_string().into()]
+        );
+    }
+
+    #[test]
+    fn args_carry_a_known_permission_mode() {
+        let id = Uuid::new_v4();
+        let resume = args(Launch::Resume(id), Some("plan"));
+        let flag = resume
+            .iter()
+            .position(|arg| arg == "--permission-mode")
+            .expect("--permission-mode present");
+        assert_eq!(resume[flag + 1], "plan");
         assert_eq!(
             resume[resume.len() - 2..],
             [OsString::from("--resume"), id.to_string().into()]

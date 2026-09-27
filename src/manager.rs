@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::{Mutex, watch};
@@ -21,6 +21,10 @@ use crate::store::{SessionRow, Store, StoredEvent};
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CHANGES_CAPACITY: usize = 256;
+/// Permission mode of a new session.
+const DEFAULT_MODE: &str = "default";
+/// Modes a stopped session accepts; any other would only fail at the next launch.
+const STORED_MODES: [&str; 3] = [DEFAULT_MODE, "acceptEdits", "plan"];
 
 /// Cheap to clone; every clone shares the same sessions.
 #[derive(Clone)]
@@ -72,10 +76,30 @@ impl SessionManager {
     pub async fn create(&self, cwd: PathBuf) -> Result<Session> {
         let id = Uuid::new_v4();
         let mut live = self.inner.live.lock().await;
-        let session = self.spawn(id, cwd, Launch::New(id), 0)?;
+        let session = self.spawn(id, cwd, Launch::New(id), 0, Some(DEFAULT_MODE.into()))?;
         live.insert(id, session.clone());
         let _ = self.inner.changes.send(id);
         Ok(session)
+    }
+
+    /// Changes the permission mode: through the CLI when the child runs, else in
+    /// the stored row, without spawning, for the next launch to pass.
+    pub async fn set_permission_mode(&self, id: Uuid, mode: String) -> Result<()> {
+        let live = self.inner.live.lock().await;
+        if let Some(session) = live.get(&id).filter(|session| !session.is_closed()) {
+            let session = session.clone();
+            drop(live);
+            session.set_permission_mode(mode).await?;
+            return Ok(());
+        }
+        if !STORED_MODES.contains(&mode.as_str()) {
+            bail!("permission mode {mode} cannot be set on a stopped session");
+        }
+        // Held while storing, so a concurrent `open` launches with the new mode.
+        self.inner.store.set_permission_mode(id, mode).await?;
+        drop(live);
+        let _ = self.inner.changes.send(id);
+        Ok(())
     }
 
     /// The session if its child is running, without spawning one.
@@ -113,7 +137,13 @@ impl SessionManager {
             .session(id)
             .await?
             .with_context(|| format!("unknown session {id}"))?;
-        let session = self.spawn(id, row.cwd, Launch::Resume(id), row.last_seq)?;
+        let session = self.spawn(
+            id,
+            row.cwd,
+            Launch::Resume(id),
+            row.last_seq,
+            row.permission_mode,
+        )?;
         live.insert(id, session.clone());
         let _ = self.inner.changes.send(id);
         Ok(session)
@@ -143,7 +173,14 @@ impl SessionManager {
         self.inner.store.flush().await
     }
 
-    fn spawn(&self, id: Uuid, cwd: PathBuf, launch: Launch, last_seq: u64) -> Result<Session> {
+    fn spawn(
+        &self,
+        id: Uuid,
+        cwd: PathBuf,
+        launch: Launch,
+        last_seq: u64,
+        permission_mode: Option<String>,
+    ) -> Result<Session> {
         let (session, events) = Session::spawn(Config {
             id,
             cwd,
@@ -151,6 +188,7 @@ impl SessionManager {
             program: self.inner.program.clone(),
             history: Some(self.inner.store.clone()),
             last_seq,
+            permission_mode,
         })?;
         tokio::spawn(sample_after_turns(
             id,

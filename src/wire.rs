@@ -15,14 +15,17 @@
 //!   {updated_input?, note?}`, `deny {message}` or `questions {answers}`, tagged by
 //!   `kind`. A non-blank allow `note` is then sent as a user message queued for the
 //!   running turn, with its own `user_sent` event.
-//! - `set_permission_mode {session, mode, client_id}`
+//! - `set_permission_mode {session, mode, client_id}`: a live session asks the CLI;
+//!   a stopped one only stores the mode (`default`, `acceptEdits` or `plan`) for its
+//!   next launch and announces `sessions_changed`.
 //!
 //! Server to client:
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
 //!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
-//! - `sessions_changed`: a session was created, changed activity or ended;
+//! - `sessions_changed`: a session was created, changed activity, ended, or had
+//!   the permission mode of its stopped state changed;
 //!   `GET /api/sessions` has the new list.
 //! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
 
@@ -147,6 +150,8 @@ pub struct SessionView {
     pub live: bool,
     /// A turn or a background task is running.
     pub busy: bool,
+    /// Stored permission mode, passed at the next launch; `None` when never recorded.
+    pub permission_mode: Option<String>,
 }
 
 impl SessionView {
@@ -160,6 +165,7 @@ impl SessionView {
             last_seq: row.last_seq,
             live,
             busy,
+            permission_mode: row.permission_mode,
         }
     }
 }

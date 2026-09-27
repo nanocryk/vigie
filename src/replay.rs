@@ -5,7 +5,7 @@
 //! lines are written as recorded; an `in` line blocks until the host sends a
 //! matching line.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -86,6 +86,9 @@ pub struct Options {
     pub pace: Pace,
     /// Replaces the recorded `session_id` of every emitted line.
     pub session_id: Option<String>,
+    /// Sets `current_permission_mode` in the answer to the `initialize` request,
+    /// as the CLI reports its `--permission-mode`.
+    pub permission_mode: Option<String>,
 }
 
 impl Default for Options {
@@ -93,8 +96,23 @@ impl Default for Options {
         Self {
             pace: Pace::Instant,
             session_id: None,
+            permission_mode: None,
         }
     }
+}
+
+/// Recorded request ids of the host's `initialize` requests.
+fn initialize_ids(recording: &Recording) -> HashSet<String> {
+    recording
+        .steps
+        .iter()
+        .filter(|step| {
+            step.dir == Direction::In
+                && is_control_request(&step.msg)
+                && step.msg["request"]["subtype"] == "initialize"
+        })
+        .filter_map(|step| step.msg["request_id"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// The `get_usage` answer of the `basic` recording, served for any `get_usage`
@@ -206,6 +224,7 @@ where
     // Recorded host request id -> id the host used in this run.
     let mut request_ids: HashMap<String, String> = HashMap::new();
     let mut clock = 0;
+    let initialize = initialize_ids(recording);
     for step in &recording.steps {
         match step.dir {
             Direction::Out => {
@@ -217,6 +236,18 @@ where
                     && let Some(slot) = msg.get_mut("session_id")
                 {
                     *slot = Value::String(session_id.clone());
+                }
+                if let Some(mode) = &options.permission_mode
+                    && step.msg["type"] == "control_response"
+                    && step.msg["response"]["request_id"]
+                        .as_str()
+                        .is_some_and(|id| initialize.contains(id))
+                    && let Some(response) = msg["response"]["response"].as_object_mut()
+                {
+                    response.insert(
+                        "current_permission_mode".into(),
+                        Value::String(mode.clone()),
+                    );
                 }
                 write_line(&mut output, &msg).await?;
             }
@@ -554,6 +585,7 @@ mod tests {
         let options = Options {
             pace: Pace::Instant,
             session_id: Some("host-session".into()),
+            permission_mode: None,
         };
         let rewrite_out = |msg: &Value| {
             let mut msg = msg.clone();
@@ -563,6 +595,22 @@ mod tests {
             msg
         };
         drive_with("permissions", options, Value::clone, rewrite_out).await;
+    }
+
+    #[tokio::test]
+    async fn launch_permission_mode_is_reported_by_initialize() {
+        let options = Options {
+            permission_mode: Some("plan".into()),
+            ..Options::default()
+        };
+        let rewrite_out = |msg: &Value| {
+            let mut msg = msg.clone();
+            if msg["type"] == "control_response" && msg["response"]["request_id"] == "spike-1" {
+                msg["response"]["response"]["current_permission_mode"] = "plan".into();
+            }
+            msg
+        };
+        drive_with("basic", options, Value::clone, rewrite_out).await;
     }
 
     fn get_usage(request_id: &str) -> Value {

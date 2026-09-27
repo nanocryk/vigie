@@ -58,6 +58,9 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Classic chat layout: Claude's text in bubbles on the left, the user's on the right. A bubble spans the full width minus a fixed margin on the side opposite its sender. Bubbles are rectangular with small rounded corners (about 5px) and no speech tail.
 - Bubbles hold text only; tool uses appear outside bubbles.
+- Timestamps, in the device's local time and 24-hour clock: `HH:MM` the same day, `Tue HH:MM` within the last week, `May 12 HH:MM` beyond, with the year added when not the current one. Recomputed when the app comes back to the foreground.
+  - Bubbles always show theirs, small and muted in the bottom-right corner, for both sides. The user's bubble shows when the server sent it to Claude; Claude's shows when its text started.
+  - Tool rows show theirs right-aligned at the row's end, only when the minute differs from the item above. Expanding a row shows the exact time with seconds and the call's duration.
 - A thin border in the focus-ring color marks each side: on the left of Claude's bubbles and tool rows (aligned), on the right of the user's bubbles.
 - Scroll never yanked: new content arriving while the view is scrolled up does not move the view.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
@@ -76,6 +79,9 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Subagents integrated directly, their discussion visible.
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
 - Session controls: model, effort, permission mode.
+- Stop: a floating button above Send, shown only while a turn runs (not for background tasks alone). Send stays available to queue messages.
+- Session control tabs (permission mode first; model, effort, agent later) float over the bottom of the discussion, resting on the composer's top edge on the left, without a solid background line: while scrolling they peek over the bubbles, and the discussion ends with enough space that, scrolled to the bottom, the tabs cover nothing. Tapping a tab opens a list upward to pick directly (mode: Manual, Accept edits, Plan): only the other modes are listed, as square chips of the tab's width in their mode's color. Each mode has its own tab color: yellow for Manual, teal for Accept edits, purple for Plan.
+- The permission mode is stored per session and kept current (picked in the tab, or reported by the CLI). Every start of the child (resume after a cold cache, a crash or a server restart) passes it with `--permission-mode`, so a session comes back in its mode. On a stopped session, picking a mode only stores it; the next message starts the child in it. New sessions start in Manual; a cold-cache "continue" inherits the mode of the session it continues.
 - Picker for skills and slash commands.
 - File references (`path:line`) and URLs in messages are links, opened inside the app.
 - Attachments in prompts, including screenshots taken on the phone, better integrated than in Vigie.

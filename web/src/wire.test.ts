@@ -74,12 +74,25 @@ describe("parseSessionList", () => {
             last_seq: 9,
             live: false,
             busy: false,
+            permission_mode: "plan",
+          },
+          {
+            id: "b",
+            cwd: "/old",
+            created_at: "c",
+            updated_at: "u",
+            state: { kind: "stopped" },
+            last_seq: 1,
+            live: false,
+            busy: false,
           },
         ],
       },
       "list",
     );
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
+    expect(list[0]?.permission_mode).toBe("plan");
+    expect(list[1]?.permission_mode).toBeNull();
   });
 });
 

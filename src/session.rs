@@ -3,7 +3,7 @@
 //! Commands go in through `Session`. Every stdout line and a few host events come
 //! out on a broadcast channel, numbered by a per-session sequence.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,6 +50,8 @@ pub struct Config {
     pub history: Option<Store>,
     /// Seq of the session's latest event; the next one gets `last_seq + 1`.
     pub last_seq: u64,
+    /// `--permission-mode` for the child; `None` lets the CLI pick its default.
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +99,11 @@ pub enum HostEvent {
     AskResolved {
         request_id: String,
         resolution: Resolution,
+    },
+    /// The CLI's permission mode changed, as reported by `initialize`, `system/init`,
+    /// `system/status` or a successful `set_permission_mode`.
+    PermissionMode {
+        mode: String,
     },
     /// The child was killed; the session ends with the following `ChildExited`.
     AuthGateFailed {
@@ -233,9 +240,15 @@ impl Session {
     /// Spawns the child and its actor. The returned receiver sees every event from
     /// `Started` on; later subscribers only see events sent after they subscribe.
     pub fn spawn(config: Config) -> Result<(Self, broadcast::Receiver<Arc<Event>>)> {
-        let child = Child::spawn(&config.program, &config.cwd, config.launch, config.id)?;
+        let child = Child::spawn(
+            &config.program,
+            &config.cwd,
+            config.launch,
+            config.permission_mode.as_deref(),
+            config.id,
+        )?;
         if let Some(history) = &config.history {
-            history.session_started(config.id, &config.cwd, Utc::now());
+            history.session_started(config.id, &config.cwd, Utc::now(), config.permission_mode);
         }
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
         let (activity_sender, activity) = watch::channel(Activity::Idle);
@@ -253,6 +266,8 @@ impl Session {
             tracker: ActivityTracker::default(),
             asks: Vec::new(),
             requests: HashMap::new(),
+            mode_requests: HashSet::new(),
+            permission_mode: None,
             next_request: 0,
             state: State::Ready,
             kill_at: None,
@@ -406,6 +421,10 @@ struct Actor {
     asks: Vec<PendingAsk>,
     /// Host control requests awaiting their `control_response`.
     requests: HashMap<String, oneshot::Sender<Result<ControlResponse>>>,
+    /// Ids among `requests` that are `set_permission_mode` requests.
+    mode_requests: HashSet<String>,
+    /// Last mode announced with `HostEvent::PermissionMode`.
+    permission_mode: Option<String>,
     next_request: u64,
     state: State,
     kill_at: Option<Instant>,
@@ -472,10 +491,19 @@ impl Actor {
 
     async fn handle_line(&mut self, line: &Inbound) {
         match line {
-            Inbound::System(System::Init(init)) if init.api_key_source != OAUTH_KEY_SOURCE => {
-                self.fail_gate(GateFailure::ApiKeySource {
-                    source: init.api_key_source.clone(),
-                });
+            Inbound::System(System::Init(init)) => {
+                if init.api_key_source != OAUTH_KEY_SOURCE {
+                    self.fail_gate(GateFailure::ApiKeySource {
+                        source: init.api_key_source.clone(),
+                    });
+                } else {
+                    self.set_mode(&init.permission_mode);
+                }
+            }
+            Inbound::System(System::Status(status)) => {
+                if let Some(mode) = &status.permission_mode {
+                    self.set_mode(mode);
+                }
             }
             Inbound::RateLimitEvent(event)
                 if event.rate_limit_info.is_using_overage == Some(true)
@@ -531,8 +559,24 @@ impl Actor {
         if matches!(&self.state, State::Initializing { request_id: id } if id == request_id) {
             self.check_initialize(response);
         } else if let Some(reply) = self.requests.remove(request_id) {
+            if self.mode_requests.remove(request_id)
+                && let Ok(changed) = response.payload::<SetPermissionModeResponse>()
+            {
+                self.set_mode(&changed.mode);
+            }
             let _ = reply.send(Ok(response.clone()));
         }
+    }
+
+    /// Announces `mode` when it differs from the last one announced.
+    fn set_mode(&mut self, mode: &str) {
+        if self.permission_mode.as_deref() == Some(mode) {
+            return;
+        }
+        self.permission_mode = Some(mode.to_string());
+        self.emit_host(HostEvent::PermissionMode {
+            mode: mode.to_string(),
+        });
     }
 
     fn check_initialize(&mut self, response: &ControlResponse) {
@@ -541,6 +585,9 @@ impl Actor {
                 let provider = initialize.account.and_then(|account| account.api_provider);
                 if provider.as_deref() == Some(FIRST_PARTY) {
                     self.state = State::Ready;
+                    if let Some(mode) = &initialize.current_permission_mode {
+                        self.set_mode(mode);
+                    }
                 } else {
                     self.fail_gate(GateFailure::ApiProvider { provider });
                 }
@@ -581,10 +628,14 @@ impl Actor {
             }
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
+                let sets_mode = matches!(request, HostRequest::SetPermissionMode { .. });
                 let line =
                     Outbound::ControlRequest(ControlRequest::new(request_id.clone(), request));
                 match self.write(line).await {
                     Ok(()) => {
+                        if sets_mode {
+                            self.mode_requests.insert(request_id.clone());
+                        }
                         self.requests.insert(request_id, reply);
                     }
                     Err(err) => {
@@ -702,6 +753,7 @@ impl Actor {
         self.tracker = ActivityTracker::default();
         self.publish_activity();
         self.requests.clear();
+        self.mode_requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();
         self.emit_host(HostEvent::ChildExited { code, stderr_tail });
         let end = self.end.take().unwrap_or(SessionState::Exited { code });
