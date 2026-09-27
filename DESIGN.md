@@ -124,6 +124,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - React, TypeScript and Vite: a single-page app served by the host server.
 - Tailwind and shadcn/ui, restyled with vigie2's own theme rather than the shadcn defaults.
 - Motion for gestures and animation (swipe cards).
+- Recursive Mono for all text, prose included, so code-related text never misaligns. Its settings vary by role to keep the UI "varied while consistent".
 
 ## Development
 
