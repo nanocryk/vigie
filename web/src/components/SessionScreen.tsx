@@ -30,6 +30,9 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Send and the floating Stop above it share this size. */
+const ACTION_SIZE = "voice-ui h-12 w-20 shrink-0 rounded-[5px] text-sm";
+
 function Composer({
   session,
   onSend,
@@ -85,7 +88,7 @@ function Composer({
         onKeyDown={onKeyDown}
         enterKeyHint={coarsePointer() ? "enter" : "send"}
         placeholder="Message Claude"
-        className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-10 flex-1 resize-none rounded-[5px] border px-3 py-2 text-base outline-none focus:ring-2"
+        className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-12 flex-1 resize-none rounded-[5px] border px-3 py-3.5 text-sm outline-none focus:ring-2"
       />
       <button
         type="button"
@@ -93,7 +96,7 @@ function Composer({
         onMouseDown={(event) => event.preventDefault()}
         onClick={submit}
         disabled={text.trim() === ""}
-        className="bg-primary text-primary-foreground voice-ui h-10 shrink-0 rounded-[5px] px-4 text-sm disabled:opacity-50"
+        className={`bg-primary text-primary-foreground ${ACTION_SIZE} disabled:opacity-50`}
       >
         Send
       </button>
@@ -227,6 +230,7 @@ export function SessionScreen({
         pending={visiblePending}
         onRetry={retry}
         onDismiss={dismiss}
+        awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         overlay={
           transcript.turnOpen && (
             <div className="pointer-events-auto flex items-center gap-2">
@@ -239,7 +243,7 @@ export function SessionScreen({
                 type="button"
                 onClick={stop}
                 disabled={stopping}
-                className="border-destructive text-destructive bg-background voice-ui h-10 shrink-0 rounded-[5px] border px-4 text-sm shadow-md disabled:opacity-50"
+                className={`border-destructive text-destructive bg-background ${ACTION_SIZE} border shadow-md disabled:opacity-50`}
               >
                 {stopping ? "Stopping..." : "Stop"}
               </button>
@@ -267,10 +271,11 @@ export function SessionScreen({
           session={id}
           ask={ask}
           queued={asks.length - 1}
+          cwd={view?.cwd ?? null}
         />
       )}
 
-      <footer className="border-t px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
         <Composer session={id} onSend={send} />
       </footer>
     </>

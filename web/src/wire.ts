@@ -447,6 +447,8 @@ export type CliLine =
       isReplay: boolean;
       isMeta: boolean;
       content: string | ContentBlock[];
+      /** The CLI's structured result of the tool call answered by this line, if any. */
+      toolUseResult: unknown;
     }
   | {
       type: "assistant";
@@ -563,6 +565,7 @@ export function parseCliLine(raw: unknown): CliLine {
         isReplay: raw["isReplay"] === true,
         isMeta: raw["isMeta"] === true,
         content: parsed,
+        toolUseResult: raw["tool_use_result"],
       };
     }
     case "assistant": {

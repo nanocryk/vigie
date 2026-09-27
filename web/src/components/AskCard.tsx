@@ -1,7 +1,9 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 
 import type { Client } from "@/client";
+import { DiffBlock } from "@/components/Diff";
 import { Swipe } from "@/components/Swipe";
+import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import type { Side } from "@/swipe";
 import { type PendingAsk, toolSummary } from "@/transcript";
 import { type Answer, isRecord } from "@/wire";
@@ -100,15 +102,40 @@ function QuestionView({
   );
 }
 
-function InputView({ ask }: { ask: PendingAsk }) {
+function InputView({ ask, cwd = null }: { ask: PendingAsk; cwd?: string | null }) {
+  const diff = useMemo(
+    () =>
+      ask.input === undefined || !DIFF_TOOLS.has(ask.toolName)
+        ? null
+        : toolDiff({
+            name: ask.toolName,
+            input: ask.input,
+            result: undefined,
+            status: "running",
+            path: toolSummary(ask.toolName, ask.input, cwd),
+          }),
+    [ask, cwd],
+  );
   if (ask.input === undefined) {
     return <p className="text-muted-foreground text-sm">Input not received.</p>;
   }
   return (
     <>
-      <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {toolSummary(ask.toolName, ask.input)}
-      </div>
+      {diff === null ? (
+        <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {toolSummary(ask.toolName, ask.input, cwd)}
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <div className="voice-code min-w-0 truncate text-sm">
+            <span className="voice-ui">{diff.verb}</span>({diff.path})
+          </div>
+          <div className="text-muted-foreground voice-ui text-xs">
+            &#x2514; {changeSummary(diff.added, diff.removed)}
+          </div>
+          <DiffBlock diff={diff} maxHeight="max-h-[40dvh]" />
+        </div>
+      )}
       <details className="mt-1">
         <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
           full input
@@ -178,11 +205,13 @@ function ApprovalCard({
   session,
   ask,
   queued,
+  cwd,
 }: {
   client: Client;
   session: string;
   ask: PendingAsk;
   queued: number;
+  cwd: string | null;
 }) {
   const { sending, error, answer } = useAnswer(client, session, ask.requestId);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -217,7 +246,11 @@ function ApprovalCard({
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="voice-heading text-sm">
-              {plan !== null ? "Plan approval" : `Allow ${ask.toolName}?`}
+              {plan !== null
+                ? "Plan approval"
+                : DIFF_TOOLS.has(ask.toolName)
+                  ? "Allow this change?"
+                  : `Allow ${ask.toolName}?`}
             </h2>
             {queued > 0 && (
               <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
@@ -240,7 +273,7 @@ function ApprovalCard({
               {plan}
             </div>
           ) : (
-            <InputView ask={ask} />
+            <InputView ask={ask} cwd={cwd} />
           )}
           {noteOpen ? (
             <textarea
@@ -274,15 +307,18 @@ export function AskCard({
   session,
   ask,
   queued,
+  cwd,
 }: {
   client: Client;
   session: string;
   ask: PendingAsk;
   /** Asks waiting behind this one. */
   queued: number;
+  /** The session folder; paths inside it show relative. */
+  cwd: string | null;
 }) {
   if (ask.toolName !== "AskUserQuestion") {
-    return <ApprovalCard client={client} session={session} ask={ask} queued={queued} />;
+    return <ApprovalCard client={client} session={session} ask={ask} queued={queued} cwd={cwd} />;
   }
   return <DecisionCard client={client} session={session} ask={ask} queued={queued} />;
 }

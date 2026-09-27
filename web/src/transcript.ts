@@ -37,6 +37,8 @@ type ItemBody =
       input: unknown;
       status: ToolStatus;
       output: string | null;
+      /** The CLI's `tool_use_result`, undefined until reported. */
+      result: unknown;
       /** When its result arrived. */
       endTime: number | null;
     }
@@ -384,7 +386,9 @@ class Draft {
   private line(line: CliLine, key: string): void {
     switch (line.type) {
       case "user":
-        if (line.parentToolUseId === null) this.user(line.content, line.isMeta, key);
+        if (line.parentToolUseId === null) {
+          this.user(line.content, line.isMeta, line.toolUseResult, key);
+        }
         return;
       case "assistant":
         if (line.parentToolUseId !== null) return;
@@ -439,13 +443,22 @@ class Draft {
     }
   }
 
-  private user(content: string | ContentBlock[], isMeta: boolean, key: string): void {
+  private user(
+    content: string | ContentBlock[],
+    isMeta: boolean,
+    toolUseResult: unknown,
+    key: string,
+  ): void {
     const blocks: ContentBlock[] =
       typeof content === "string" ? [{ type: "text", text: content }] : content;
+    // The line's structured result belongs to its tool call only when it answers a single one.
+    const single = blocks.filter((block) => block.type === "tool_result").length === 1;
     const texts: string[] = [];
     for (const block of blocks) {
       if (block.type === "text") texts.push(block.text);
-      else if (block.type === "tool_result") this.toolResult(block);
+      else if (block.type === "tool_result") {
+        this.toolResult(block, single ? toolUseResult : undefined);
+      }
     }
     if (texts.length === 0 || isMeta) return;
     const text = texts.join("\n");
@@ -505,7 +518,10 @@ class Draft {
     }
   }
 
-  private toolResult(block: Extract<ContentBlock, { type: "tool_result" }>): void {
+  private toolResult(
+    block: Extract<ContentBlock, { type: "tool_result" }>,
+    result: unknown,
+  ): void {
     const index = this.tools.get(block.toolUseId);
     if (index === undefined) return;
     const item = this.items[index];
@@ -514,6 +530,7 @@ class Draft {
       ...item,
       status: block.isError ? "error" : "ok",
       output: block.content,
+      result,
       endTime: this.time,
     };
   }
@@ -548,6 +565,7 @@ class Draft {
             input: block.input,
             status: "running",
             output: null,
+            result: undefined,
             endTime: null,
           });
           return;

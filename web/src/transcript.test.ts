@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { toolDiff } from "@/diff";
 import {
   type Item,
   applyEvents,
@@ -309,6 +310,7 @@ describe("times", () => {
             input: {},
             status: "ok",
             output: null,
+            result: undefined,
             endTime: null,
           }
         : { kind, key: String(time), time, tone: "info", text: "", detail: null };
@@ -358,6 +360,23 @@ describe("permission mode", () => {
     expect(applyEvents(emptyTranscript, events.slice(0, firstInit + 1)).permissionMode).toBe("plan");
     // Approving the plan puts the CLI back in default mode, reported by a status line.
     expect(applyEvents(emptyTranscript, events).permissionMode).toBe("default");
+  });
+
+  it("a tool row keeps the CLI's structured result, which a Write diff reads", () => {
+    const writes = transcript("plan").items.filter(
+      (item) => item.kind === "tool" && item.name === "Write",
+    );
+    const hello = writes.at(-1);
+    if (hello?.kind !== "tool") throw new Error("no Write row");
+    expect(hello.result).toMatchObject({ type: "create", content: "hi", structuredPatch: [] });
+    const diff = toolDiff({ ...hello, path: hello.summary });
+    expect(diff?.verb).toBe("Write");
+    expect(diff?.hunks).toEqual([[{ kind: "added", text: "hi", number: 1 }]]);
+    const denied = transcript("permissions").items.find(
+      (item) => item.kind === "tool" && item.name === "Write",
+    );
+    if (denied?.kind !== "tool") throw new Error("no denied Write row");
+    expect(toolDiff({ ...denied, path: denied.summary })).toBeNull();
   });
 });
 

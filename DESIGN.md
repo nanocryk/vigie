@@ -63,6 +63,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - Classic chat layout: Claude's text in bubbles on the left, the user's on the right. A bubble spans the full width minus a fixed margin on the side opposite its sender. Bubbles are rectangular with small rounded corners (about 5px) and no speech tail.
 - Bubbles hold text only; tool uses appear outside bubbles.
+- Both sides' bubbles render markdown (GFM tables, lists, code blocks with syntax highlighting), at 14 px like the composer. Links open in a new tab on desktop and in the external browser from the installed app.
 - Timestamps, in the device's local time and 24-hour clock: `HH:MM` the same day, `Tue HH:MM` within the last week, `May 12 HH:MM` beyond, with the year added when not the current one. Recomputed when the app comes back to the foreground.
   - Bubbles always show theirs, small and muted in the bottom-right corner, for both sides. The user's bubble shows when the server sent it to Claude; Claude's shows when its text started.
   - Tool rows show theirs right-aligned at the row's end, only when the minute differs from the item above. Expanding a row shows the exact time with seconds and the call's duration.
@@ -80,11 +81,12 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Dangerous means what the CLI flags, plus vigie2's own checks on top: `rm -r` / `rm -rf`, `git push --force`, `git reset --hard`, writes outside the session folder.
   - The swipe is a shared component, used elsewhere in the app too (e.g. swipe left on a discussion to archive it).
   - Animation: at rest the panel is undecided yellow, the "waiting for a decision" color. While the finger moves, it goes toward the decision's green or red, and snaps to a more intense shade on reaching the threshold, like a latch. After the first swipe, the yellow fills back in over the 3 s, showing the choice fading away. The fill sweeps toward the chosen side: left to right after a right swipe, right to left after a left swipe.
-- Diffs viewable like a developer reads code.
+- Diffs viewable like a developer reads code. Edit and Write rows show their diff as the TUI does: `Update(path)` with the path relative to the session folder, an "Added N lines, removed M lines" summary, a line-number gutter, added lines on teal with `+`, removed lines on red with `-`, syntax highlighting. Expanded by default and collapsible; a reload expands them again. The raw tool result stays one toggle away. While an edit waits for approval, its diff is in the approval panel (the thing swiped), and the discussion shows a one-line "awaiting approval" row in its place.
 - Subagents integrated directly, their discussion visible.
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
 - Session controls: model, effort, permission mode.
-- Stop: a floating button above Send, shown only while a turn runs (not for background tasks alone). Send stays available to queue messages.
+- Stop: a floating button above Send, of Send's size, shown only while a turn runs (not for background tasks alone). Send stays available to queue messages.
+- The composer's text area and Send fill the bottom bar's height, making Send a large target.
 - Session control tabs (permission mode first; model, effort, agent later) float over the bottom of the discussion, resting on the composer's top edge on the left, without a solid background line: while scrolling they peek over the bubbles, and the discussion ends with enough space that, scrolled to the bottom, the tabs cover nothing. Tapping a tab opens a list upward to pick directly (mode: Manual, Accept edits, Plan): only the other modes are listed, as square chips of the tab's width in their mode's color. Each mode has its own tab color: yellow for Manual, teal for Accept edits, purple for Plan.
 - With a keyboard, Shift+Tab cycles the permission mode in the TUI order: Manual, Accept edits, Plan, Manual. A mode outside that list cycles as Manual.
 - The permission mode is stored per session and kept current (picked in the tab, or reported by the CLI). Every start of the child (resume after a cold cache, a crash or a server restart) passes it with `--permission-mode`, so a session comes back in its mode. On a stopped session, picking a mode only stores it; the next message starts the child in it. New sessions start in Manual; a cold-cache "continue" inherits the mode of the session it continues.

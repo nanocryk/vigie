@@ -5,11 +5,15 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 
+import { DiffBlock } from "@/components/Diff";
+import { Markdown } from "@/components/Markdown";
 import { useNow } from "@/components/useNow";
+import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
 import { type Delivery, type Item, type ToolStatus, toolTimeVisible } from "@/transcript";
 
@@ -25,7 +29,7 @@ export interface PendingSend {
   error: string | null;
 }
 
-const BUBBLE = "rounded-[5px] px-3 py-2 whitespace-pre-wrap [overflow-wrap:anywhere]";
+const BUBBLE = "min-w-0 rounded-[5px] px-3 py-2 text-sm";
 
 function UserBubble({ children, dim }: { children: ReactNode; dim?: boolean }) {
   return (
@@ -63,35 +67,117 @@ function toolTiming(item: Extract<Item, { kind: "tool" }>): string | null {
   return item.endTime === null ? exact : `${exact} · ${formatDuration(item.endTime - item.time)}`;
 }
 
+type ToolItem = Extract<Item, { kind: "tool" }>;
+
+const TOOL_SUMMARY =
+  "hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-r-[5px] px-1 py-0.5";
+
+function StatusMark({ status }: { status: ToolStatus }) {
+  return (
+    <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[status]}`}>
+      {STATUS_TEXT[status]}
+    </span>
+  );
+}
+
+function ToolOutput({ item }: { item: ToolItem }) {
+  return (
+    item.output !== null && (
+      <pre className={`${PANEL} ${item.status === "error" ? "text-destructive" : ""}`}>
+        {item.output === "" ? "(no output)" : item.output}
+      </pre>
+    )
+  );
+}
+
+function ToolInput({ item }: { item: ToolItem }) {
+  return (
+    <details>
+      <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">input</summary>
+      <pre className={`${PANEL} mt-1`}>{JSON.stringify(item.input, null, 2)}</pre>
+    </details>
+  );
+}
+
 function ToolRow({
   item,
   stamp,
+  awaiting,
 }: {
-  item: Extract<Item, { kind: "tool" }>;
+  item: ToolItem;
   /** Shown at the row's end; null hides it. */
   stamp: string | null;
+  awaiting: boolean;
 }) {
+  const diff = useMemo(
+    () => (DIFF_TOOLS.has(item.name) ? toolDiff({ ...item, path: item.summary }) : null),
+    [item],
+  );
+  if (diff !== null && awaiting) {
+    return (
+      <div className="border-ring border-l-2 text-sm">
+        <div className={TOOL_SUMMARY}>
+          <StatusMark status={item.status} />
+          <span className="voice-code min-w-0 truncate">
+            <span className="voice-ui">{diff.verb}</span>({diff.path})
+          </span>
+          <span className="text-muted-foreground voice-ui ml-auto shrink-0 pl-2 text-xs">
+            awaiting approval
+          </span>
+        </div>
+      </div>
+    );
+  }
+  if (diff !== null) return <DiffRow item={item} diff={diff} stamp={stamp} />;
   const timing = toolTiming(item);
   return (
     <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
-      <summary className="hover:bg-muted flex cursor-pointer list-none items-baseline gap-2 rounded-r-[5px] px-1 py-0.5">
-        <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[item.status]}`}>
-          {STATUS_TEXT[item.status]}
-        </span>
+      <summary className={TOOL_SUMMARY}>
+        <StatusMark status={item.status} />
         <span className="voice-ui shrink-0">{item.name}</span>
         <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
         {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
       </summary>
       <div className="mt-1 mr-2 ml-9 space-y-2">
         {timing !== null && <div className={STAMP}>{timing}</div>}
-        {item.output !== null && (
-          <pre className={`${PANEL} ${item.status === "error" ? "text-destructive" : ""}`}>
-            {item.output === "" ? "(no output)" : item.output}
-          </pre>
-        )}
-        <details>
-          <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">input</summary>
-          <pre className={`${PANEL} mt-1`}>{JSON.stringify(item.input, null, 2)}</pre>
+        <ToolOutput item={item} />
+        <ToolInput item={item} />
+      </div>
+    </details>
+  );
+}
+
+/** A file change, TUI style: open until its header is tapped, open again after a reload. */
+function DiffRow({ item, diff, stamp }: { item: ToolItem; diff: FileDiff; stamp: string | null }) {
+  const [open, setOpen] = useState(true);
+  const timing = toolTiming(item);
+  return (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      className="border-ring rounded-r-[5px] border-l-2 text-sm"
+    >
+      <summary className={TOOL_SUMMARY}>
+        <StatusMark status={item.status} />
+        <span className="voice-code min-w-0 truncate">
+          <span className="voice-ui">{diff.verb}</span>({diff.path})
+        </span>
+        {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
+      </summary>
+      <div className="mt-0.5 mr-2 ml-2 space-y-1 pb-1">
+        <div className="flex items-baseline gap-2 pl-7">
+          <span className="text-muted-foreground voice-ui text-xs">
+            &#x2514; {changeSummary(diff.added, diff.removed)}
+          </span>
+          {timing !== null && <span className={`${STAMP} ml-auto`}>{timing}</span>}
+        </div>
+        <DiffBlock diff={diff} />
+        <details className="space-y-2">
+          <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">raw</summary>
+          <div className="mt-1 space-y-2">
+            <ToolOutput item={item} />
+            <ToolInput item={item} />
+          </div>
         </details>
       </div>
     </details>
@@ -119,6 +205,7 @@ const ItemView = memo(function ItemView({
   last,
   now,
   toolTime,
+  awaiting,
 }: {
   item: Item;
   last: boolean;
@@ -126,6 +213,8 @@ const ItemView = memo(function ItemView({
   now: number;
   /** A tool row shows its time (the minute differs from the item above). */
   toolTime: boolean;
+  /** A tool row whose ask is pending. */
+  awaiting: boolean;
 }) {
   switch (item.kind) {
     case "user": {
@@ -133,7 +222,7 @@ const ItemView = memo(function ItemView({
       return (
         <div className="space-y-1">
           <UserBubble>
-            {item.text}
+            <Markdown text={item.text} />
             <BubbleTime time={item.time} now={now} />
           </UserBubble>
           {label !== null && (
@@ -151,8 +240,7 @@ const ItemView = memo(function ItemView({
         <div
           className={`bg-bubble-claude border-ring voice-prose mr-10 border-l-2 ${BUBBLE} rounded-l-none`}
         >
-          {item.text}
-          {item.streaming && <span className="text-primary animate-pulse"> _</span>}
+          <Markdown text={item.text} streaming={item.streaming} />
           <BubbleTime time={item.time} now={now} />
         </div>
       );
@@ -170,6 +258,7 @@ const ItemView = memo(function ItemView({
         <ToolRow
           item={item}
           stamp={toolTime && item.time !== null ? formatStamp(item.time, now) : null}
+          awaiting={awaiting}
         />
       );
     case "notice": {
@@ -199,7 +288,9 @@ function PendingView({
 }) {
   return (
     <div className="space-y-1">
-      <UserBubble dim>{pending.text}</UserBubble>
+      <UserBubble dim>
+        <Markdown text={pending.text} />
+      </UserBubble>
       <div className="voice-ui flex justify-end gap-3 text-xs">
         {pending.status === "failed" ? (
           <>
@@ -234,6 +325,7 @@ export function TranscriptView({
   pending,
   onRetry,
   onDismiss,
+  awaiting,
   overlay,
   tabs,
 }: {
@@ -241,6 +333,8 @@ export function TranscriptView({
   pending: readonly PendingSend[];
   onRetry: (pending: PendingSend) => void;
   onDismiss: (pending: PendingSend) => void;
+  /** Tool use ids with an ask pending: their diff shows in the ask card, not here. */
+  awaiting: ReadonlySet<string>;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
   /** Tabs resting on the bottom edge, over the discussion; the content keeps room for them. */
@@ -321,6 +415,7 @@ export function TranscriptView({
               last={index === lastUser && pending.length === 0}
               now={now}
               toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
+              awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
             />
           ))}
           {pending.map((send) => (
