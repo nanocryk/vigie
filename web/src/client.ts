@@ -1,4 +1,18 @@
 import { ackError } from "@/cold";
+import {
+  type Beginning,
+  HISTORY_EXCHANGES,
+  type Loaded,
+  type Request,
+  appendEvents,
+  dropRequest,
+  fold,
+  nextRequest,
+  openWindow,
+  prependPage,
+  requested,
+  wholeHistory,
+} from "@/history";
 import { type TranscriptState, applyEvents, emptyTranscript } from "@/transcript";
 import {
   type ClientMessage,
@@ -27,8 +41,15 @@ export interface Snapshot {
   /** Null until loaded; a failed load keeps the previous one. */
   catalog: SharedCatalog | null;
   transcripts: ReadonlyMap<string, TranscriptState>;
+  /** How much of each transcript's history is loaded. */
+  histories: ReadonlyMap<string, HistoryStatus>;
   /** Last `error` the server reported for a session. */
   sessionErrors: ReadonlyMap<string, string>;
+}
+
+export interface HistoryStatus {
+  beginning: Beginning;
+  request: Request;
 }
 
 export type CreateResult = { ok: true; session: SessionView } | { ok: false; error: string };
@@ -91,6 +112,7 @@ export class Client {
     usageError: null,
     catalog: null,
     transcripts: new Map(),
+    histories: new Map(),
     sessionErrors: new Map(),
   };
   private listeners = new Set<() => void>();
@@ -109,6 +131,8 @@ export class Client {
    * `synced`, so the view opens on its end instead of growing page by page.
    */
   private held = new Set<string>();
+  /** The events behind each transcript, refolded when an earlier page arrives. */
+  private loaded = new Map<string, Loaded>();
   private frame: number | null = null;
   private acks = new Map<string, PendingAck>();
   private nextId = 0;
@@ -143,12 +167,48 @@ export class Client {
   openSession(id: string): void {
     this.subscribed.add(id);
     if (!this.snapshot.transcripts.has(id)) this.held.add(id);
-    this.send({ type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 });
+    this.send(this.subscription(id));
   }
 
   closeSession(id: string): void {
     this.subscribed.delete(id);
     this.send({ type: "unsubscribe", session: id });
+  }
+
+  /** Asks for the exchanges before the loaded ones, unless a request is in flight or none precede. */
+  loadEarlier(id: string): void {
+    const loaded = this.loaded.get(id);
+    if (loaded === undefined || this.held.has(id)) return;
+    const before = nextRequest(loaded);
+    const socket = this.socket;
+    if (before === null || socket === null || socket.readyState !== WebSocket.OPEN) return;
+    this.setLoaded(id, requested(loaded));
+    this.send({ type: "history", session: id, before_seq: before, exchanges: HISTORY_EXCHANGES });
+    this.update({});
+  }
+
+  /**
+   * A session without a transcript yet starts over on its last exchanges; one
+   * with a transcript asks for what came after it.
+   */
+  private subscription(id: string): ClientMessage {
+    if (!this.held.has(id)) {
+      return { type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 };
+    }
+    this.received.delete(id);
+    this.queued.delete(id);
+    this.loaded.delete(id);
+    return { type: "subscribe", session: id, after_seq: 0, exchanges: HISTORY_EXCHANGES };
+  }
+
+  /** Records `loaded` and publishes its status in the next snapshot update. */
+  private setLoaded(id: string, loaded: Loaded): void {
+    this.loaded.set(id, loaded);
+    const current = this.snapshot.histories.get(id);
+    if (current?.beginning === loaded.beginning && current.request === loaded.request) return;
+    const histories = new Map(this.snapshot.histories);
+    histories.set(id, { beginning: loaded.beginning, request: loaded.request });
+    this.snapshot = { ...this.snapshot, histories };
   }
 
   /** Resolves on a positive ack; rejects with the server's error or a lost connection. */
@@ -258,9 +318,7 @@ export class Client {
       if (this.socket !== socket) return;
       this.attempt = 0;
       this.update({ status: "open" });
-      for (const id of this.subscribed) {
-        this.send({ type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 });
-      }
+      for (const id of this.subscribed) this.send(this.subscription(id));
       void this.refreshSessions();
       void this.refreshUsage();
       void this.refreshCatalog();
@@ -287,6 +345,7 @@ export class Client {
     for (const ack of lost) {
       ack.reject(new Error("Connection lost before the server confirmed; check the transcript"));
     }
+    for (const [id, loaded] of this.loaded) this.setLoaded(id, dropRequest(loaded));
     this.update({ status: "closed" });
     const delay = Math.min(RETRY_BASE_MS * 2 ** this.attempt, RETRY_MAX_MS);
     this.attempt += 1;
@@ -325,6 +384,26 @@ export class Client {
       case "synced":
         if (this.held.delete(message.session)) this.flush(message.session);
         return;
+      case "window":
+        // A fresh stream: anything left from an earlier subscription goes.
+        this.received.delete(message.session);
+        this.queued.delete(message.session);
+        this.setLoaded(message.session, openWindow(message.first_seq, message.start_reached));
+        return;
+      case "page": {
+        const loaded = this.loaded.get(message.session);
+        if (loaded === undefined) return;
+        const next = prependPage(loaded, {
+          firstSeq: message.first_seq,
+          startReached: message.start_reached,
+          events: message.events,
+        });
+        this.setLoaded(message.session, next);
+        const transcripts = new Map(this.snapshot.transcripts);
+        if (next.firstSeq !== loaded.firstSeq) transcripts.set(message.session, fold(next));
+        this.update({ transcripts });
+        return;
+      }
       case "ack": {
         const ack = this.acks.get(message.client_id);
         if (ack === undefined) return;
@@ -369,10 +448,17 @@ export class Client {
     if (ready.length === 0 && !created) return;
     const transcripts = new Map(this.snapshot.transcripts);
     for (const [session, events] of ready) {
-      transcripts.set(session, applyEvents(transcripts.get(session) ?? emptyTranscript, events));
+      const loaded = this.loaded.get(session) ?? wholeHistory;
+      const base = transcripts.get(session) ?? { ...emptyTranscript, firstSeq: loaded.firstSeq };
+      transcripts.set(session, applyEvents(base, events));
+      this.setLoaded(session, appendEvents(loaded, events));
       this.queued.delete(session);
     }
-    if (created && !transcripts.has(synced)) transcripts.set(synced, emptyTranscript);
+    if (created && !transcripts.has(synced)) {
+      const loaded = this.loaded.get(synced) ?? wholeHistory;
+      transcripts.set(synced, { ...emptyTranscript, firstSeq: loaded.firstSeq });
+      this.setLoaded(synced, loaded);
+    }
     this.update({ transcripts });
   }
 }

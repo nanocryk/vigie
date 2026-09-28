@@ -21,11 +21,11 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vigie2::auth::{self, Auth, Device, Registry};
-use vigie2::child::Program;
+use vigie2::child::{Launch, Program};
 use vigie2::manager::SessionManager;
 use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::server::{AppState, build_app};
-use vigie2::session::{Answer, Event, EventBody, Line, RestartMode, StopReason};
+use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
 use vigie2::store::{EventKind, SessionState, Store};
 use vigie2::wire::{
     CACHE_COLD, ClientMessage, SESSION_LIVE, ServerMessage, SessionList, SessionView, WireEvent,
@@ -199,6 +199,8 @@ impl Server {
             usage_changed: 0,
             catalog_changed: 0,
             synced: Vec::new(),
+            windows: Vec::new(),
+            pages: Vec::new(),
         })
     }
 }
@@ -233,6 +235,16 @@ struct Client {
     catalog_changed: usize,
     /// Seqs of the `synced` messages, in order.
     synced: Vec<u64>,
+    /// `first_seq` and `start_reached` of the `window` messages.
+    windows: Vec<(u64, bool)>,
+    pages: Vec<Page>,
+}
+
+#[derive(Debug)]
+struct Page {
+    first_seq: u64,
+    start_reached: bool,
+    events: Vec<WireEvent>,
 }
 
 impl Client {
@@ -269,11 +281,36 @@ impl Client {
         };
         match serde_json::from_str::<ServerMessage>(text.as_str()).expect("server message") {
             ServerMessage::Event(event) => {
+                // A window's prelude skips ahead; its events then follow without a gap.
+                let window = self.windows.last().map_or(0, |window| window.0);
                 if let Some(last) = self.events.last() {
-                    assert_eq!(event.seq, last.seq + 1, "gap or duplicate");
+                    if last.seq >= window || event.seq < window {
+                        assert!(event.seq > last.seq, "duplicate or out of order");
+                    }
+                    if last.seq >= window {
+                        assert_eq!(event.seq, last.seq + 1, "gap or duplicate");
+                    }
+                    if last.seq < window && event.seq >= window {
+                        assert_eq!(event.seq, window, "window starts late");
+                    }
                 }
                 self.events.push(event);
             }
+            ServerMessage::Window {
+                first_seq,
+                start_reached,
+                ..
+            } => self.windows.push((first_seq, start_reached)),
+            ServerMessage::Page {
+                first_seq,
+                start_reached,
+                events,
+                ..
+            } => self.pages.push(Page {
+                first_seq,
+                start_reached,
+                events,
+            }),
             ServerMessage::Ack {
                 client_id,
                 ok,
@@ -329,7 +366,11 @@ fn result_line(event: &WireEvent, subtype: &str) -> bool {
 }
 
 fn subscribe(session: Uuid, after_seq: u64) -> ClientMessage {
-    ClientMessage::Subscribe { session, after_seq }
+    ClientMessage::Subscribe {
+        session,
+        after_seq,
+        exchanges: None,
+    }
 }
 
 fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
@@ -1384,4 +1425,203 @@ async fn the_shared_catalog_is_served_and_announced() {
         body["defaults"],
         json!({"model": CANNED_DEFAULT_MODEL, "effort": CANNED_DEFAULT_EFFORT})
     );
+}
+
+/// A stopped discussion of six exchanges, with a mode change and a restart in
+/// between; returns its id and the stored events as sent.
+async fn long_discussion(server: &Server) -> (Uuid, Vec<Event>) {
+    let id = server.seed_session(Utc::now(), None).await;
+    let started = HostEvent::Started {
+        launch: Launch::New(id),
+        cwd: server.cwd.clone(),
+    };
+    let mut bodies = vec![
+        EventBody::Host(started.clone()),
+        EventBody::Host(HostEvent::Catalog {
+            models: Vec::new(),
+            commands: Vec::new(),
+        }),
+        EventBody::Host(HostEvent::PermissionMode {
+            mode: "default".into(),
+        }),
+    ];
+    for exchange in 0..6 {
+        bodies.push(EventBody::Host(HostEvent::UserSent {
+            text: format!("message {exchange}"),
+            client_id: None,
+            mid_turn: false,
+        }));
+        for raw in [
+            json!({"type": "assistant", "n": exchange}),
+            json!({"type": "result", "subtype": "success", "n": exchange}),
+        ] {
+            bodies.push(EventBody::Line(Box::new(Line {
+                raw: raw.to_string(),
+                parsed: None,
+            })));
+        }
+        if exchange == 1 {
+            bodies.push(EventBody::Host(HostEvent::PermissionMode {
+                mode: "plan".into(),
+            }));
+        }
+        if exchange == 3 {
+            bodies.push(EventBody::Host(HostEvent::Restarted {
+                mode: RestartMode::Blank,
+                exchanges: 0,
+                total_exchanges: 4,
+                seed: None,
+            }));
+            bodies.push(EventBody::Host(started.clone()));
+        }
+    }
+    let store = server.manager.store();
+    let events: Vec<Event> = bodies
+        .into_iter()
+        .zip(1..)
+        .map(|(body, seq)| Event {
+            seq,
+            time: Utc::now(),
+            body,
+        })
+        .collect();
+    for event in &events {
+        store.record_event(id, event);
+    }
+    store.flush().await.unwrap();
+    (id, events)
+}
+
+fn host_name(event: &Event) -> Option<String> {
+    match &event.body {
+        EventBody::Host(host) => serde_json::to_value(host).unwrap()["event"]
+            .as_str()
+            .map(str::to_string),
+        EventBody::Line(_) => None,
+    }
+}
+
+/// Seq of the `exchanges`-th latest `user_sent` below `before`, or 1.
+fn expected_start(events: &[Event], before: u64, exchanges: usize) -> u64 {
+    events
+        .iter()
+        .filter(|event| event.seq < before && host_name(event).as_deref() == Some("user_sent"))
+        .rev()
+        .nth(exchanges - 1)
+        .map_or(1, |event| event.seq)
+}
+
+fn expected_prelude(events: &[Event], start: u64) -> Vec<u64> {
+    let mut seqs: Vec<u64> = ["started", "permission_mode", "catalog", "restarted"]
+        .into_iter()
+        .filter_map(|name| {
+            events
+                .iter()
+                .filter(|event| event.seq < start && host_name(event).as_deref() == Some(name))
+                .map(|event| event.seq)
+                .max()
+        })
+        .collect();
+    seqs.sort_unstable();
+    seqs
+}
+
+fn seqs(events: &[WireEvent]) -> Vec<u64> {
+    events.iter().map(|event| event.seq).collect()
+}
+
+#[tokio::test]
+async fn a_windowed_subscribe_sends_the_prelude_then_the_last_exchanges() {
+    let server = Server::start(SCRIPT).await;
+    let (id, events) = long_discussion(&server).await;
+    let last = events.last().unwrap().seq;
+    let mut client = server.client().await;
+    client
+        .send(&ClientMessage::Subscribe {
+            session: id,
+            after_seq: 0,
+            exchanges: Some(2),
+        })
+        .await;
+    while client.synced.is_empty() {
+        client.pump().await;
+    }
+    let first = expected_start(&events, u64::MAX, 2);
+    assert!(first > 1);
+    assert_eq!(client.windows, [(first, false)]);
+    let prelude = expected_prelude(&events, first);
+    // The mode change and the restart both precede the last two exchanges.
+    assert_eq!(prelude.len(), 4, "{prelude:?}");
+    let mut expected = prelude;
+    expected.extend(first..=last);
+    assert_eq!(seqs(&client.events), expected);
+    assert_eq!(client.synced, [last]);
+    let sent = client.events.iter().find(|event| event.seq == first);
+    assert!(sent.is_some_and(|event| host_event(event, "user_sent")));
+}
+
+#[tokio::test]
+async fn history_pages_reach_the_start_of_the_discussion() {
+    let server = Server::start(SCRIPT).await;
+    let (id, events) = long_discussion(&server).await;
+    let mut client = server.client().await;
+    let mut before = expected_start(&events, u64::MAX, 2);
+    let mut loaded = Vec::new();
+    loop {
+        client
+            .send(&ClientMessage::History {
+                session: id,
+                before_seq: before,
+                exchanges: 2,
+            })
+            .await;
+        let count = client.pages.len();
+        while client.pages.len() == count {
+            client.pump().await;
+        }
+        let page = client.pages.last().unwrap();
+        assert_eq!(page.first_seq, expected_start(&events, before, 2));
+        let mut expected = expected_prelude(&events, page.first_seq);
+        expected.extend(page.first_seq..before);
+        assert_eq!(seqs(&page.events), expected);
+        assert!(page.events.iter().all(|event| event.session == id));
+        loaded.splice(
+            0..0,
+            page.events
+                .iter()
+                .filter(|event| event.seq >= page.first_seq)
+                .cloned(),
+        );
+        before = page.first_seq;
+        if page.start_reached {
+            break;
+        }
+    }
+    assert_eq!(client.pages.len(), 3);
+    assert_eq!(before, 1);
+    assert_eq!(
+        seqs(&loaded),
+        (1..expected_start(&events, u64::MAX, 2)).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn a_resubscribe_after_a_reconnect_sends_only_what_came_after() {
+    let server = Server::start(SCRIPT).await;
+    let (id, events) = long_discussion(&server).await;
+    let last = events.last().unwrap().seq;
+    let mut client = server.client().await;
+    client
+        .send(&ClientMessage::Subscribe {
+            session: id,
+            after_seq: 5,
+            exchanges: Some(1),
+        })
+        .await;
+    while client.synced.is_empty() {
+        client.pump().await;
+    }
+    assert!(client.windows.is_empty());
+    assert_eq!(seqs(&client.events), (6..=last).collect::<Vec<_>>());
+    assert_eq!(client.synced, [last]);
 }

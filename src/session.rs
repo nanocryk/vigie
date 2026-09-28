@@ -93,6 +93,9 @@ pub enum HostEvent {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
+        /// Sent while a turn ran, so it starts no exchange of its own.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mid_turn: bool,
     },
     AskQueued {
         request_id: String,
@@ -921,6 +924,7 @@ impl Actor {
             self.emit_host(HostEvent::UserSent {
                 text: text.clone(),
                 client_id,
+                mid_turn: self.tracker.turn(),
             });
         }
         let written = match &seed {

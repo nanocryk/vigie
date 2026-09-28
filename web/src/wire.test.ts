@@ -89,6 +89,43 @@ describe("parseServerMessage", () => {
     });
   });
 
+  it("reads a window and a page of earlier history", () => {
+    expect(
+      parseServerMessage(
+        { type: "window", session: "s", first_seq: 7, start_reached: false },
+        "msg",
+      ),
+    ).toEqual({ type: "window", session: "s", first_seq: 7, start_reached: false });
+    const page = parseServerMessage(
+      {
+        type: "page",
+        session: "s",
+        first_seq: 1,
+        start_reached: true,
+        events: [
+          { session: "s", seq: 1, time: "t", kind: "host", payload: { event: "started", cwd: "/p" } },
+          { session: "s", seq: 2, time: "t", kind: "line", payload: "raw" },
+        ],
+      },
+      "msg",
+    );
+    expect(page).toMatchObject({
+      type: "page",
+      first_seq: 1,
+      start_reached: true,
+      events: [
+        { seq: 1, kind: "host", payload: { event: "started", cwd: "/p" } },
+        { seq: 2, kind: "line", payload: "raw" },
+      ],
+    });
+    expect(() =>
+      parseServerMessage(
+        { type: "page", session: "s", first_seq: 1, start_reached: true, events: [{ seq: 1 }] },
+        "msg",
+      ),
+    ).toThrow(/msg\.events\[0\]\.session: expected a string/);
+  });
+
   it("names the field and value on a bad envelope", () => {
     expect(() => parseServerMessage({ type: "event", session: "s", seq: "3" }, "msg")).toThrow(
       /msg\.seq: expected a number: "3"/,

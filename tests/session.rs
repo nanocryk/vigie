@@ -218,8 +218,13 @@ async fn basic_turns_and_usage() {
     let mut sent_seq = None;
     let echo_seq = harness
         .until(|event| match &event.body {
-            EventBody::Host(HostEvent::UserSent { text, client_id }) => {
+            EventBody::Host(HostEvent::UserSent {
+                text,
+                client_id,
+                mid_turn,
+            }) => {
                 assert!(sent_seq.is_none(), "user_sent emitted twice");
+                assert!(!mid_turn, "no turn ran before the first message");
                 assert_eq!(text, "Reply with exactly: ok");
                 assert_eq!(client_id.as_deref(), Some("c1"));
                 sent_seq = Some(event.seq);
@@ -760,6 +765,7 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
 const NOTE_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "system", "subtype": "status", "status": "requesting", "uuid": "u1", "session_id": "s"}}
 {"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "git reset --hard"}, "tool_use_id": "t1"}}}
 {"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"command": "git reset --hard"}}}}}
 {"t": 0, "dir": "in", "msg": {"type": "user", "message": {"role": "user", "content": "(Note attached to my approval of your Bash call) Then run the tests."}, "parent_tool_use_id": null, "session_id": "s", "priority": "next"}}
@@ -811,6 +817,7 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         HostEvent::UserSent {
             text: "(Note attached to my approval of your Bash call) Then run the tests.".into(),
             client_id: None,
+            mid_turn: true,
         }
     );
 

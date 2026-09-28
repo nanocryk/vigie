@@ -165,16 +165,43 @@ impl Connection {
             }
         };
         match message {
-            ClientMessage::Subscribe { session, after_seq } => {
+            ClientMessage::Subscribe {
+                session,
+                after_seq,
+                exchanges,
+            } => {
+                // The old stream stops first, so its last messages precede the new one's.
+                if let Some(previous) = self.subscriptions.remove(&session) {
+                    previous.abort();
+                }
                 let task = tokio::spawn(stream_session(
                     self.manager.clone(),
                     session,
                     after_seq,
+                    exchanges.filter(|_| after_seq == 0),
                     self.out.clone(),
                 ));
-                if let Some(previous) = self.subscriptions.insert(session, task) {
-                    previous.abort();
-                }
+                self.subscriptions.insert(session, task);
+            }
+            ClientMessage::History {
+                session,
+                before_seq,
+                exchanges,
+            } => {
+                let manager = self.manager.clone();
+                let out = self.out.clone();
+                tokio::spawn(async move {
+                    let message = page(&manager, session, before_seq, exchanges)
+                        .await
+                        .unwrap_or_else(|err| {
+                            warn!(%session, "read history page: {err:#}");
+                            ServerMessage::Error {
+                                message: format!("read history: {err:#}"),
+                                session: Some(session),
+                            }
+                        });
+                    let _ = out.send(message).await;
+                });
             }
             ClientMessage::Unsubscribe { session } => {
                 if let Some(task) = self.subscriptions.remove(&session) {
@@ -294,10 +321,35 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
         ClientMessage::Restore { session, client_id } => {
             (client_id, manager.restore(session).await)
         }
-        ClientMessage::Subscribe { .. } | ClientMessage::Unsubscribe { .. } => {
-            (String::new(), Err(anyhow!("not a command")))
-        }
+        ClientMessage::Subscribe { .. }
+        | ClientMessage::Unsubscribe { .. }
+        | ClientMessage::History { .. } => (String::new(), Err(anyhow!("not a command"))),
     }
+}
+
+/// The `page` answering a `history` command.
+async fn page(
+    manager: &SessionManager,
+    id: Uuid,
+    before_seq: u64,
+    exchanges: u32,
+) -> Result<ServerMessage> {
+    let store = manager.store();
+    let start = store.page_start(id, Some(before_seq), exchanges).await?;
+    let events = store
+        .events_between(id, start.first_seq, before_seq)
+        .await?;
+    Ok(ServerMessage::Page {
+        session: id,
+        first_seq: start.first_seq,
+        start_reached: start.start_reached,
+        events: start
+            .prelude
+            .into_iter()
+            .chain(events)
+            .map(|event| WireEvent::stored(id, event))
+            .collect(),
+    })
 }
 
 async fn running(manager: &SessionManager, id: Uuid) -> Result<Session> {
@@ -310,12 +362,14 @@ async fn running(manager: &SessionManager, id: Uuid) -> Result<Session> {
 /// The receiving socket is gone.
 struct Gone;
 
-/// Forwards the events of one session after `after_seq`, following it across
-/// child restarts, until the socket goes away or the task is aborted.
+/// Forwards the events of one session after `after_seq`, or of its last
+/// `exchanges` exchanges, following it across child restarts, until the socket
+/// goes away or the task is aborted.
 async fn stream_session(
     manager: SessionManager,
     id: Uuid,
     after_seq: u64,
+    exchanges: Option<u32>,
     out: mpsc::Sender<ServerMessage>,
 ) {
     let mut changes = manager.subscribe_changes();
@@ -339,6 +393,11 @@ async fn stream_session(
         sent: after_seq,
         out,
     };
+    if let Some(exchanges) = exchanges
+        && forwarder.open_window(exchanges).await.is_err()
+    {
+        return;
+    }
     // Viewing a session never spawns its child; only `send` does.
     let mut session = match manager.live(id).await {
         Some(session) => session,
@@ -420,6 +479,40 @@ impl Forwarder {
                 Err(RecvError::Closed) => return Ok(()),
             }
         }
+    }
+
+    /// Sends `window` and the prelude of the last `exchanges` exchanges, and moves
+    /// `sent` to just before them. A failed read leaves `sent`: the whole history follows.
+    async fn open_window(&mut self, exchanges: u32) -> Result<(), Gone> {
+        let start = match self
+            .manager
+            .store()
+            .page_start(self.id, None, exchanges)
+            .await
+        {
+            Ok(start) => start,
+            Err(err) => {
+                warn!(session = %self.id, "read history window: {err:#}");
+                return self
+                    .send(ServerMessage::Error {
+                        message: format!("read history: {err:#}"),
+                        session: Some(self.id),
+                    })
+                    .await;
+            }
+        };
+        self.send(ServerMessage::Window {
+            session: self.id,
+            first_seq: start.first_seq,
+            start_reached: start.start_reached,
+        })
+        .await?;
+        for event in start.prelude {
+            self.send(ServerMessage::Event(WireEvent::stored(self.id, event)))
+                .await?;
+        }
+        self.sent = start.first_seq.saturating_sub(1);
+        Ok(())
     }
 
     async fn send_live(&mut self, event: &Event) -> Result<(), Gone> {

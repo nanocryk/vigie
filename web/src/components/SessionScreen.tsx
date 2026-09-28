@@ -1,4 +1,11 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { Client } from "@/client";
 import {
@@ -211,6 +218,8 @@ export function SessionScreen({
 }) {
   const snapshot = useSnapshot(client);
   const transcript = snapshot.transcripts.get(id) ?? emptyTranscript;
+  const history = snapshot.histories.get(id);
+  const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
   const serverError = snapshot.sessionErrors.get(id) ?? null;
   const [pending, setPending] = useState<PendingSend[]>([]);
@@ -640,6 +649,10 @@ export function SessionScreen({
 
       <TranscriptView
         loading={!snapshot.transcripts.has(id)}
+        firstSeq={transcript.firstSeq}
+        beginning={history?.beginning ?? "loaded"}
+        request={history?.request ?? "idle"}
+        onNearTop={loadEarlier}
         items={transcript.items}
         pending={visiblePending}
         onRetry={retry}

@@ -26,7 +26,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 10] = [
+const MIGRATIONS: [&str; 11] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -103,7 +103,42 @@ CREATE TABLE cli_catalog (
     value TEXT NOT NULL
 ) STRICT;
 "#,
+    // Host events by name, newest first from any seq: where a page of history
+    // starts and what precedes it. Queries repeat the expression and
+    // `kind = 'host'` verbatim, or SQLite does not use it.
+    "CREATE INDEX events_host ON events (session_id, json_extract(payload, '$.event'), seq)
+         WHERE kind = 'host';",
 ];
+
+/// The seq of the `?3`-th latest (0 for the latest) `user_sent` of `?1` below `?2`
+/// that started a turn: one sent mid-turn would split its turn at a page edge.
+const NTH_USER_SENT: &str = "SELECT seq FROM events
+    WHERE session_id = ?1 AND kind = 'host' AND json_extract(payload, '$.event') = 'user_sent'
+        AND json_extract(payload, '$.mid_turn') IS NULL AND seq < ?2
+    ORDER BY seq DESC LIMIT 1 OFFSET ?3";
+
+/// The latest host event of `?1` named `?2` below `?3`.
+const LATEST_HOST_EVENT: &str = "SELECT seq, time, kind, payload FROM events
+    WHERE session_id = ?1 AND kind = 'host' AND json_extract(payload, '$.event') = ?2
+        AND seq < ?3
+    ORDER BY seq DESC LIMIT 1";
+
+/// A `seq` bound above every stored one; SQLite integers are signed.
+const NO_SEQ_LIMIT: u64 = i64::MAX as u64;
+
+/// Host events whose latest one before a page sets fold state the page needs.
+const PRELUDE_EVENTS: [&str; 4] = ["started", "permission_mode", "catalog", "restarted"];
+
+/// Where a page of history starts, and what comes before it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageStart {
+    /// A `user_sent` event, or 1 when fewer exchanges precede the bound.
+    pub first_seq: u64,
+    /// No event precedes `first_seq`.
+    pub start_reached: bool,
+    /// The latest event of each `PRELUDE_EVENTS` kind before `first_seq`, in seq order.
+    pub prelude: Vec<StoredEvent>,
+}
 
 /// Jobs the writer thread folds into one transaction at most.
 const MAX_BATCH: usize = 256;
@@ -681,24 +716,73 @@ impl Store {
                 "SELECT seq, time, kind, payload FROM events
                  WHERE session_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
             )?;
-            let rows = statement.query_map(params![session.to_string(), after, limit], |row| {
-                Ok((
-                    row.get::<_, u64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })?;
-            rows.map(|row| {
-                let (seq, time, kind, payload) = row?;
-                Ok(StoredEvent {
-                    seq,
-                    time: parse_time(&time)?,
-                    kind: EventKind::parse(&kind)?,
-                    payload,
-                })
+            let rows =
+                statement.query_map(params![session.to_string(), after, limit], RawEvent::read)?;
+            rows.map(|row| row?.parse()).collect()
+        })
+        .await
+    }
+
+    /// Every event with a seq from `first` to below `before`, in seq order.
+    pub async fn events_between(
+        &self,
+        session: Uuid,
+        first: u64,
+        before: u64,
+    ) -> Result<Vec<StoredEvent>> {
+        self.call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT seq, time, kind, payload FROM events
+                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3 ORDER BY seq",
+            )?;
+            let rows = statement.query_map(
+                params![
+                    session.to_string(),
+                    first.min(NO_SEQ_LIMIT),
+                    before.min(NO_SEQ_LIMIT)
+                ],
+                RawEvent::read,
+            )?;
+            rows.map(|row| row?.parse()).collect()
+        })
+        .await
+    }
+
+    /// Start of the page holding the last `exchanges` exchanges below `before`
+    /// (`None`: the latest ones). An exchange starts at a `user_sent` event.
+    pub async fn page_start(
+        &self,
+        session: Uuid,
+        before: Option<u64>,
+        exchanges: u32,
+    ) -> Result<PageStart> {
+        let before = before.unwrap_or(NO_SEQ_LIMIT).min(NO_SEQ_LIMIT);
+        self.call(move |connection| {
+            let session = session.to_string();
+            let first_seq: u64 = connection
+                .query_row(
+                    NTH_USER_SENT,
+                    params![session, before, exchanges.max(1) - 1],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or(1);
+            let mut latest = connection.prepare(LATEST_HOST_EVENT)?;
+            let mut prelude = Vec::new();
+            for name in PRELUDE_EVENTS {
+                if let Some(raw) = latest
+                    .query_row(params![session, name, first_seq], RawEvent::read)
+                    .optional()?
+                {
+                    prelude.push(raw.parse()?);
+                }
+            }
+            prelude.sort_by_key(|event| event.seq);
+            Ok(PageStart {
+                first_seq,
+                start_reached: first_seq <= 1,
+                prelude,
             })
-            .collect()
         })
         .await
     }
@@ -839,6 +923,34 @@ pub fn migrate(connection: &Connection) -> Result<()> {
         transaction.commit()?;
     }
     Ok(())
+}
+
+/// An `events` row as read by `SELECT seq, time, kind, payload`.
+struct RawEvent {
+    seq: u64,
+    time: String,
+    kind: String,
+    payload: String,
+}
+
+impl RawEvent {
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            seq: row.get(0)?,
+            time: row.get(1)?,
+            kind: row.get(2)?,
+            payload: row.get(3)?,
+        })
+    }
+
+    fn parse(self) -> Result<StoredEvent> {
+        Ok(StoredEvent {
+            seq: self.seq,
+            time: parse_time(&self.time)?,
+            kind: EventKind::parse(&self.kind)?,
+            payload: self.payload,
+        })
+    }
 }
 
 const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at, applied_model, applied_effort FROM sessions";
@@ -1019,7 +1131,7 @@ fn json_error(err: serde_json::Error) -> rusqlite::Error {
 mod tests {
     use super::*;
     use crate::child::Launch;
-    use crate::session::{HostEvent, Line};
+    use crate::session::{HostEvent, Line, RestartMode};
 
     fn event(seq: u64, body: EventBody) -> Event {
         Event {
@@ -1607,5 +1719,133 @@ mod tests {
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    fn host(seq: u64, host: HostEvent) -> Event {
+        event(seq, EventBody::Host(host))
+    }
+
+    fn user_sent(seq: u64, text: &str) -> Event {
+        host(
+            seq,
+            HostEvent::UserSent {
+                text: text.into(),
+                client_id: None,
+                mid_turn: false,
+            },
+        )
+    }
+
+    fn mode(seq: u64, mode: &str) -> Event {
+        host(seq, HostEvent::PermissionMode { mode: mode.into() })
+    }
+
+    #[tokio::test]
+    async fn a_page_starts_at_a_user_message_after_the_latest_state_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        let cwd = dir.path().join("project");
+        store.session_started(id, &cwd, Utc::now(), None);
+        let started = |seq| {
+            host(
+                seq,
+                HostEvent::Started {
+                    launch: Launch::New(id),
+                    cwd: cwd.clone(),
+                },
+            )
+        };
+        let events = [
+            started(1),
+            host(
+                2,
+                HostEvent::Catalog {
+                    models: Vec::new(),
+                    commands: Vec::new(),
+                },
+            ),
+            mode(3, "default"),
+            user_sent(4, "a"),
+            event(5, line("not json")),
+            mode(6, "plan"),
+            user_sent(7, "b"),
+            event(8, line(r#"{"type":"result"}"#)),
+            host(
+                9,
+                HostEvent::Restarted {
+                    mode: RestartMode::Blank,
+                    exchanges: 0,
+                    total_exchanges: 2,
+                    seed: None,
+                },
+            ),
+            started(10),
+            user_sent(11, "c"),
+            event(12, line(r#"{"type":"result"}"#)),
+        ];
+        for event in &events {
+            store.record_event(id, event);
+        }
+        let seqs =
+            |events: &[StoredEvent]| events.iter().map(|event| event.seq).collect::<Vec<_>>();
+
+        let last = store.page_start(id, None, 1).await.unwrap();
+        assert_eq!((last.first_seq, last.start_reached), (11, false));
+        assert_eq!(seqs(&last.prelude), [2, 6, 9, 10]);
+
+        let two = store.page_start(id, None, 2).await.unwrap();
+        assert_eq!((two.first_seq, two.start_reached), (7, false));
+        assert_eq!(seqs(&two.prelude), [1, 2, 6]);
+
+        let before = store.page_start(id, Some(7), 5).await.unwrap();
+        assert_eq!((before.first_seq, before.start_reached), (1, true));
+        assert!(before.prelude.is_empty());
+        let page = store.events_between(id, 1, 7).await.unwrap();
+        assert_eq!(seqs(&page), [1, 2, 3, 4, 5, 6]);
+
+        let exact = store.page_start(id, Some(7), 1).await.unwrap();
+        assert_eq!((exact.first_seq, exact.start_reached), (4, false));
+        assert_eq!(seqs(&exact.prelude), [1, 2, 3]);
+        assert_eq!(
+            store.page_start(Uuid::new_v4(), None, 20).await.unwrap(),
+            PageStart {
+                first_seq: 1,
+                start_reached: true,
+                prelude: Vec::new()
+            }
+        );
+
+        // A message sent mid-turn starts no exchange: the page still starts at 11.
+        store.record_event(
+            id,
+            &host(
+                13,
+                HostEvent::UserSent {
+                    text: "also".into(),
+                    client_id: None,
+                    mid_turn: true,
+                },
+            ),
+        );
+        let queued = store.page_start(id, None, 1).await.unwrap();
+        assert_eq!(queued.first_seq, 11);
+
+        store.flush().await.unwrap();
+        let connection = Connection::open(&path).unwrap();
+        for sql in [NTH_USER_SENT, LATEST_HOST_EVENT] {
+            let plan: Vec<String> = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_map(params![id.to_string(), "user_sent", 7], |row| row.get(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert!(
+                plan.iter().any(|step| step.contains("INDEX events_host")),
+                "{sql}: {plan:?}"
+            );
+        }
     }
 }

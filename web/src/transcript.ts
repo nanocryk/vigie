@@ -87,6 +87,11 @@ export interface PendingAsk {
 
 export interface TranscriptState {
   lastSeq: number;
+  /**
+   * Seq of the first event shown. Events below it, the prelude of a page of
+   * history, only set state: they add no item.
+   */
+  firstSeq: number;
   items: readonly Item[];
   /** In arrival order; the first one is the card on display. */
   asks: readonly PendingAsk[];
@@ -133,6 +138,7 @@ interface Outgoing {
 
 export const emptyTranscript: TranscriptState = {
   lastSeq: 0,
+  firstSeq: 0,
   items: [],
   asks: [],
   tools: new Map(),
@@ -290,6 +296,7 @@ export function gateFailureText(reason: GateFailure): string {
 
 class Draft {
   lastSeq: number;
+  firstSeq: number;
   items: Item[];
   asks: PendingAsk[];
   tools: Map<string, number>;
@@ -309,6 +316,7 @@ class Draft {
 
   constructor(state: TranscriptState) {
     this.lastSeq = state.lastSeq;
+    this.firstSeq = state.firstSeq;
     this.items = [...state.items];
     this.asks = [...state.asks];
     this.tools = new Map(state.tools);
@@ -330,6 +338,7 @@ class Draft {
   finish(): TranscriptState {
     return {
       lastSeq: this.lastSeq,
+      firstSeq: this.firstSeq,
       items: this.items,
       asks: this.asks,
       tools: this.tools,
@@ -351,8 +360,11 @@ class Draft {
 
   /** Time of the event being applied. */
   private time: number | null = null;
+  /** The event being applied is in a prelude. Preludes hold host events only, none indexing an item. */
+  private prelude = false;
 
   private add(body: ItemBody): void {
+    if (this.prelude) return;
     this.items.push({ ...body, time: this.time });
   }
 
@@ -360,6 +372,7 @@ class Draft {
     if (event.seq <= this.lastSeq) return;
     this.lastSeq = event.seq;
     this.time = parseTime(event.time);
+    this.prelude = event.seq < this.firstSeq;
     const key = String(event.seq);
     if (event.kind === "host") this.host(event.payload, key);
     else this.line(parseCliLine(event.payload), key);

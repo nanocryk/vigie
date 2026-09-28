@@ -5,9 +5,19 @@
 //! WebSocket frames are JSON text tagged by `type`.
 //!
 //! Client to server:
-//! - `subscribe {session, after_seq}`: opens the session, sends its stored events
-//!   with a seq above `after_seq`, then its live events, each once and in order.
-//!   Subscribing again to the same session restarts from the new `after_seq`.
+//! - `subscribe {session, after_seq, exchanges?}`: opens the session, sends its
+//!   stored events with a seq above `after_seq`, then its live events, each once
+//!   and in order. Subscribing again to the same session restarts from the new
+//!   `after_seq`. With `exchanges` and an `after_seq` of 0, the stored events sent
+//!   are only the last `exchanges` exchanges: first `window`, then the prelude,
+//!   then the events from the window's `first_seq`, then `synced`.
+//! - An exchange starts at a `user_sent` host event; a window or a page starts at
+//!   one, or at the discussion's first event when fewer exchanges precede it.
+//!   Its prelude is the latest `started`, `permission_mode`, `catalog` and
+//!   `restarted` host events stored before it, those that exist, in seq order:
+//!   the state folding the events from its start needs.
+//! - `history {session, before_seq, exchanges}`: answered by `page` with the
+//!   last `exchanges` exchanges stored below `before_seq` (at least one).
 //! - `unsubscribe {session}`
 //! - `send {session, text, rewarm?, client_id}`: spawns the child again if it
 //!   ended. The session emits a `user_sent {text, client_id}` host event before
@@ -77,6 +87,12 @@
 //! - `synced {session, seq}`: the stored events of a subscribed session were
 //!   all sent, up to `seq`; follows the history sent on `subscribe`, and each
 //!   later catch-up from the store.
+//! - `window {session, first_seq, start_reached}`: a windowed `subscribe` sends
+//!   the events from `first_seq`, after the prelude; `start_reached` when no
+//!   event precedes `first_seq`.
+//! - `page {session, first_seq, start_reached, events}`: answers `history`;
+//!   `events` holds the prelude then the events from `first_seq` to below
+//!   `before_seq`, in seq order, shaped as `event` without its `type`.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
 //! - `sessions_changed`: a session was created, changed activity or its count
 //!   of pending asks, ended, had
@@ -88,7 +104,8 @@
 //!   `GET /api/usage` has the new snapshot.
 //! - `catalog_changed`: the shared catalog or default settings changed;
 //!   `GET /api/catalog` has the new ones.
-//! - `error {message, session?}`: a malformed frame, or a `subscribe` that failed.
+//! - `error {message, session?}`: a malformed frame, or a `subscribe` or a
+//!   `history` that failed.
 //!
 //! `GET /api/catalog` is what all discussions share, persisted: `models` and
 //! `commands` (shaped as in `catalog`) from the latest `initialize` of any
@@ -141,6 +158,15 @@ pub enum ClientMessage {
         session: Uuid,
         #[serde(default)]
         after_seq: u64,
+        /// With `after_seq` 0: send only the last exchanges, preceded by `window`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exchanges: Option<u32>,
+    },
+    /// Answered by `page`.
+    History {
+        session: Uuid,
+        before_seq: u64,
+        exchanges: u32,
     },
     Unsubscribe {
         session: Uuid,
@@ -234,6 +260,19 @@ pub enum ServerMessage {
     Synced {
         session: Uuid,
         seq: u64,
+    },
+    /// Opens a windowed `subscribe`: its prelude events, then the events from `first_seq`.
+    Window {
+        session: Uuid,
+        first_seq: u64,
+        start_reached: bool,
+    },
+    /// Answers `history`: the prelude, then the events from `first_seq` to below `before_seq`.
+    Page {
+        session: Uuid,
+        first_seq: u64,
+        start_reached: bool,
+        events: Vec<WireEvent>,
     },
     SessionsChanged,
     UsageChanged,

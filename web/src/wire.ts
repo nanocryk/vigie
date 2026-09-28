@@ -133,7 +133,10 @@ export type Answer =
   | { kind: "questions"; answers: Record<string, string> };
 
 export type ClientMessage =
-  | { type: "subscribe"; session: string; after_seq: number }
+  /** With `exchanges` and `after_seq` 0: only the last exchanges, after `window`. */
+  | { type: "subscribe"; session: string; after_seq: number; exchanges?: number }
+  /** Answered by `page`. */
+  | { type: "history"; session: string; before_seq: number; exchanges: number }
   | { type: "unsubscribe"; session: string }
   | { type: "send"; session: string; text: string; rewarm?: true; client_id: string }
   | { type: "interrupt"; session: string; client_id: string }
@@ -239,6 +242,16 @@ export type ServerMessage =
   | { type: "ack"; client_id: string; ok: boolean; error: string | null }
   /** Every stored event of `session` up to `seq` was sent. */
   | { type: "synced"; session: string; seq: number }
+  /** Opens a windowed `subscribe`: its prelude events, then the events from `first_seq`. */
+  | { type: "window"; session: string; first_seq: number; start_reached: boolean }
+  /** Answers `history`: the prelude, then the events from `first_seq` on, in seq order. */
+  | {
+      type: "page";
+      session: string;
+      first_seq: number;
+      start_reached: boolean;
+      events: WireEvent[];
+    }
   | { type: "sessions_changed" }
   | { type: "usage_changed" }
   | { type: "catalog_changed" }
@@ -623,22 +636,44 @@ function parseCommandInfo(raw: unknown): CommandInfo | null {
   };
 }
 
+export function parseWireEvent(raw: unknown, label: string): WireEvent {
+  const value = record(raw, label);
+  const base = {
+    session: str(value, "session", label),
+    seq: num(value, "seq", label),
+    time: str(value, "time", label),
+  };
+  const kind = value["kind"];
+  if (kind === "line") return { ...base, kind, payload: value["payload"] };
+  if (kind === "host") return { ...base, kind, payload: parseHostEvent(value["payload"]) };
+  return fail(`${label}.kind`, "unknown event kind", kind);
+}
+
 export function parseServerMessage(raw: unknown, label: string): ServerMessage {
   const value = record(raw, label);
   const type = value["type"];
   switch (type) {
-    case "event": {
-      const base = {
+    case "event":
+      return { type, event: parseWireEvent(value, label) };
+    case "window":
+      return {
+        type,
         session: str(value, "session", label),
-        seq: num(value, "seq", label),
-        time: str(value, "time", label),
+        first_seq: num(value, "first_seq", label),
+        start_reached: bool(value, "start_reached", label),
       };
-      const kind = value["kind"];
-      if (kind === "line") return { type, event: { ...base, kind, payload: value["payload"] } };
-      if (kind === "host") {
-        return { type, event: { ...base, kind, payload: parseHostEvent(value["payload"]) } };
-      }
-      return fail(`${label}.kind`, "unknown event kind", kind);
+    case "page": {
+      const events = value["events"];
+      if (!Array.isArray(events)) fail(`${label}.events`, "expected an array", events);
+      return {
+        type,
+        session: str(value, "session", label),
+        first_seq: num(value, "first_seq", label),
+        start_reached: bool(value, "start_reached", label),
+        events: events.map((event: unknown, index: number) =>
+          parseWireEvent(event, `${label}.events[${index}]`),
+        ),
+      };
     }
     case "ack":
       return {

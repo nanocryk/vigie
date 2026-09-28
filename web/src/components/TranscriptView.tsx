@@ -15,6 +15,7 @@ import { Markdown } from "@/components/Markdown";
 import { useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
+import type { Beginning, Request } from "@/history";
 import {
   type Delivery,
   type Item,
@@ -25,6 +26,8 @@ import {
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
+/** Earlier history is asked for once the view is within this many screen heights of the top. */
+const NEAR_TOP_SCREENS = 1;
 
 export interface PendingSend {
   id: string;
@@ -364,10 +367,15 @@ function PendingView({
 
 /**
  * The scroller follows new content only while it sits at the bottom; once
- * scrolled up, nothing moves it until "latest" is tapped.
+ * scrolled up, nothing moves it until "latest" is tapped. Earlier history
+ * prepended above keeps the view's distance from the bottom.
  */
 export function TranscriptView({
   loading,
+  firstSeq,
+  beginning,
+  request,
+  onNearTop,
   items,
   pending,
   onRetry,
@@ -379,6 +387,12 @@ export function TranscriptView({
 }: {
   /** The history is still arriving; it shows at once when complete. */
   loading: boolean;
+  /** Seq of the first event shown; a change means earlier history was prepended. */
+  firstSeq: number;
+  beginning: Beginning;
+  request: Request;
+  /** The view nears the top of what is loaded. */
+  onNearTop: () => void;
   items: readonly Item[];
   pending: readonly PendingSend[];
   onRetry: (pending: PendingSend) => void;
@@ -395,12 +409,29 @@ export function TranscriptView({
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  /** `scrollHeight - scrollTop` as last laid out or scrolled. */
+  const fromBottom = useRef(0);
+  const shownFirstSeq = useRef(firstSeq);
+  const nearTop = useRef(onNearTop);
   const [showJump, setShowJump] = useState(false);
   const now = useNow();
 
+  useLayoutEffect(() => {
+    nearTop.current = onNearTop;
+  }, [onNearTop]);
+
   const stick = useCallback(() => {
     const element = scroller.current;
-    if (element !== null && atBottom.current) element.scrollTop = element.scrollHeight;
+    if (element === null) return;
+    if (atBottom.current) element.scrollTop = element.scrollHeight;
+    fromBottom.current = element.scrollHeight - element.scrollTop;
+  }, []);
+
+  const checkTop = useCallback(() => {
+    const element = scroller.current;
+    if (element !== null && element.scrollTop < element.clientHeight * NEAR_TOP_SCREENS) {
+      nearTop.current();
+    }
   }, []);
 
   const onScroll = useCallback(() => {
@@ -409,8 +440,10 @@ export function TranscriptView({
     const bottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_SLACK;
     atBottom.current = bottom;
+    fromBottom.current = element.scrollHeight - element.scrollTop;
     setShowJump(!bottom);
-  }, []);
+    checkTop();
+  }, [checkTop]);
 
   // Opening or closing a panel never moves the view, even at the bottom: the
   // following content is pushed down instead. Position is re-read once it settles.
@@ -427,7 +460,18 @@ export function TranscriptView({
     return () => element.removeEventListener("toggle", onScroll, true);
   }, [onScroll]);
 
-  useLayoutEffect(stick, [items, pending, stick]);
+  // A prepend grows the content above the view: keep its distance from the bottom.
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (element !== null && shownFirstSeq.current !== firstSeq && !atBottom.current) {
+      element.scrollTop = element.scrollHeight - fromBottom.current;
+    }
+    shownFirstSeq.current = firstSeq;
+    stick();
+  }, [items, pending, firstSeq, stick]);
+
+  // A short window, or a page leaving the view near the top, asks for more.
+  useEffect(checkTop, [items, request, checkTop]);
 
   let lastUser = items.length - 1;
   while (lastUser >= 0 && items[lastUser]?.kind !== "user") lastUser -= 1;
@@ -461,6 +505,16 @@ export function TranscriptView({
             <p className="text-muted-foreground voice-ui text-center text-sm">
               {loading ? "Loading..." : "No messages yet."}
             </p>
+          )}
+          {items.length > 0 && (
+            // One fixed height whatever it says, so it never shifts the view.
+            <div className="text-muted-foreground voice-ui flex h-6 items-center justify-center text-xs">
+              {beginning === "loaded"
+                ? "Beginning of discussion"
+                : request === "in_flight"
+                  ? "Loading earlier..."
+                  : null}
+            </div>
           )}
           {items.map((item, index) => (
             <ItemView

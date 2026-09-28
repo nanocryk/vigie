@@ -74,6 +74,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Tool rows show theirs right-aligned at the row's end, only when the minute differs from the item above. Expanding a row shows the exact time with seconds and the call's duration.
 - A thin border in the focus-ring color marks each side: on the left of Claude's bubbles and tool rows (aligned), on the right of the user's bubbles.
 - Scroll never yanked: new content arriving while the view is scrolled up does not move the view.
+- A discussion opens at its bottom, on its last 20 exchanges, shown at once. Scrolling near the top of what is loaded fetches the 20 exchanges before, without moving what is on screen. The start shows "Beginning of discussion". Discussions can span weeks, so the whole history is never sent at once.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
 - Approvals by swipe: right accepts, left rejects, with a way to add notes.
   - Tool-use asks and plan approval are swiped, notes included.

@@ -5,7 +5,19 @@ import { describe, expect, it } from "vitest";
 
 import { toolDiff } from "@/diff";
 import {
+  type Loaded,
+  appendEvents,
+  dropRequest,
+  fold,
+  nextRequest,
+  openWindow,
+  prependPage,
+  requested,
+  wholeHistory,
+} from "@/history";
+import {
   type Item,
+  type TranscriptState,
   applyEvents,
   emptyTranscript,
   restartLabel,
@@ -630,6 +642,133 @@ describe("streaming", () => {
   it("skips events it already holds", () => {
     const state = applyEvents(emptyTranscript, events);
     expect(applyEvents(state, events.slice(0, 20)).items).toBe(state.items);
+  });
+});
+
+describe("paged history", () => {
+  const SEED = "Continuing an earlier vigie2 session in /p.";
+  const host = (payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq: 0,
+    time: "t",
+    kind: "host",
+    payload: parseHostEvent(payload),
+  });
+  const started = host({ event: "started", cwd: "C:\\Users\\user\\AppData\\Local\\Temp" });
+
+  /** Recordings played one after the other, with the state events a discussion collects. */
+  function discussion(): WireEvent[] {
+    const events = [
+      started,
+      host({ event: "catalog", models: [], commands: [{ name: "one" }] }),
+      host({ event: "permission_mode", mode: "default" }),
+      ...recordingEvents("basic"),
+      host({ event: "permission_mode", mode: "plan" }),
+      ...recordingEvents("permissions"),
+      host({ event: "restarted", mode: "continue", exchanges: 1, total_exchanges: 3, seed: SEED }),
+      started,
+      host({ event: "catalog", models: [], commands: [{ name: "two" }] }),
+      host({ event: "user_sent", text: "go on", client_id: "g" }),
+      {
+        session: SESSION,
+        seq: 0,
+        time: "t",
+        kind: "line",
+        payload: { type: "user", message: { role: "user", content: `${SEED}\n\ngo on` } },
+      } satisfies WireEvent,
+      ...recordingEvents("interrupt"),
+      ...recordingEvents("cd"),
+    ];
+    return events.map((event, index) => ({ ...event, seq: index + 1 }));
+  }
+
+  const isHost = (event: WireEvent, name: string): boolean =>
+    event.kind === "host" && event.payload.event === name;
+
+  /** What the server sends for the last `exchanges` exchanges below `before`. */
+  function serverPage(all: readonly WireEvent[], before: number, exchanges: number) {
+    const sent = all.filter((event) => event.seq < before && isHost(event, "user_sent"));
+    const firstSeq = sent.at(-exchanges)?.seq ?? 1;
+    const prelude = ["started", "permission_mode", "catalog", "restarted"]
+      .map((name) => all.filter((event) => event.seq < firstSeq && isHost(event, name)).at(-1))
+      .filter((event) => event !== undefined)
+      .sort((left, right) => left.seq - right.seq);
+    const events = all.filter((event) => event.seq >= firstSeq && event.seq < before);
+    return { firstSeq, startReached: firstSeq <= 1, events: [...prelude, ...events] };
+  }
+
+  const shownFrom = (state: TranscriptState, firstSeq: number): Item[] =>
+    state.items.filter((item) => Number.parseInt(item.key, 10) >= firstSeq);
+
+  it("a window and every page before it fold as the whole history does", () => {
+    const all = discussion();
+    const full = applyEvents(emptyTranscript, all);
+    const end = (all.at(-1)?.seq ?? 0) + 1;
+    const window = serverPage(all, end, 2);
+    let loaded = appendEvents(openWindow(window.firstSeq, window.startReached), window.events);
+    const opened = fold(loaded);
+    expect(opened.items).toEqual(shownFrom(full, window.firstSeq));
+    for (const key of [
+      "asks",
+      "outbox",
+      "turnOpen",
+      "interrupted",
+      "stopping",
+      "cwd",
+      "permissionMode",
+      "pendingSeed",
+      "catalog",
+      "terminalCommands",
+      "lastSeq",
+    ] as const) {
+      expect(opened[key], key).toEqual(full[key]);
+    }
+
+    let pages = 0;
+    for (let before = nextRequest(loaded); before !== null; before = nextRequest(loaded)) {
+      loaded = requested(loaded);
+      expect(nextRequest(loaded)).toBeNull();
+      const page = serverPage(all, before, 2);
+      loaded = prependPage(loaded, page);
+      pages += 1;
+      expect(fold(loaded).items).toEqual(shownFrom(full, page.firstSeq));
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(loaded.beginning).toBe("loaded");
+    expect({ ...fold(loaded), firstSeq: 0 }).toEqual(full);
+  });
+
+  it("the prelude sets state without showing its restart divider", () => {
+    const all = discussion();
+    const sent = all.find(
+      (event) =>
+        event.kind === "host" && event.payload.event === "user_sent" && event.payload.text === "go on",
+    );
+    const firstSeq = sent?.seq ?? 0;
+    // The message and its echo, carrying the seed of the restart before them.
+    const page = serverPage(all, firstSeq + 2, 1);
+    expect(page.firstSeq).toBe(firstSeq);
+    const state = fold(appendEvents(openWindow(page.firstSeq, false), page.events));
+    expect(state.items.map(shape)[0]).toEqual(["user", "go on"]);
+    expect(state.items.some((item) => item.kind === "restart")).toBe(false);
+    expect(deliveries(state.items)).toEqual(["received"]);
+    expect(state.catalog?.commands.map((command) => command.name)).toEqual(["two"]);
+  });
+
+  it("asks one page at a time, and a stale page only ends the request", () => {
+    let loaded: Loaded = openWindow(40, false);
+    expect(nextRequest(loaded)).toBe(40);
+    loaded = requested(loaded);
+    expect(nextRequest(loaded)).toBeNull();
+    expect(prependPage(loaded, { firstSeq: 40, startReached: false, events: [] })).toEqual({
+      ...loaded,
+      request: "idle",
+    });
+    expect(dropRequest(loaded).request).toBe("idle");
+    const reached = prependPage(loaded, { firstSeq: 1, startReached: true, events: [] });
+    expect(reached).toMatchObject({ firstSeq: 1, beginning: "loaded", request: "idle" });
+    expect(nextRequest(reached)).toBeNull();
+    expect(nextRequest(wholeHistory)).toBeNull();
   });
 });
 

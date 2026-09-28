@@ -702,6 +702,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         [HostEvent::UserSent {
             text: "next step".into(),
             client_id: Some("c1".into()),
+            mid_turn: false,
         }]
     );
     assert!(
