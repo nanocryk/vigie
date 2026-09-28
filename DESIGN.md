@@ -183,7 +183,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - React, TypeScript and Vite: a single-page app served by the host server.
 - Tailwind and shadcn/ui, restyled with vigie2's own theme rather than the shadcn defaults.
 - Motion for gestures and animation (swipe cards).
-- Recursive Mono for all text, prose included, so code-related text never misaligns. Its settings vary by role to keep the UI "varied while consistent". Message prose is fully casual and code (spans and blocks) fully linear, so the two read apart while staying monospaced.
+- Recursive for all text, its settings varying by role to keep the UI "varied while consistent". Code (spans and blocks) is monospaced and fully linear; everything else (message prose, UI, headings) is proportional, prose and headings half casual. Text needing alignment comes in code blocks, so it keeps it.
 
 ## Development
 
