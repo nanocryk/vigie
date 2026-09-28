@@ -146,6 +146,21 @@ pub fn env(
     vars
 }
 
+/// Keeps a Ctrl+C in the server's console from reaching the child, which would
+/// exit before the server's shutdown could stop it with a reason.
+#[cfg(windows)]
+fn own_process_group(command: &mut Command) {
+    // Win32 process creation flag from `winbase.h`, see
+    // https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(unix)]
+fn own_process_group(command: &mut Command) {
+    command.process_group(0);
+}
+
 fn is_stripped(name: &OsStr) -> bool {
     let upper = name.to_string_lossy().to_ascii_uppercase();
     upper.starts_with(STRIPPED_ENV_PREFIX)
@@ -176,7 +191,8 @@ impl Child {
         settings: &ModelSettings,
         host_session: Uuid,
     ) -> Result<Self> {
-        let mut process = Command::new(&program.path)
+        let mut command = Command::new(&program.path);
+        command
             .args(&program.leading_args)
             .args(args(launch, permission_mode, settings))
             .current_dir(cwd)
@@ -185,7 +201,9 @@ impl Child {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        own_process_group(&mut command);
+        let mut process = command
             .spawn()
             .with_context(|| format!("spawn {}", program.path.display()))?;
         let stdin = process.stdin.take().context("child stdin")?;

@@ -475,7 +475,12 @@ impl SessionManager {
             .drain()
             .map(|(_, session)| session)
             .collect();
-        futures_util::future::join_all(sessions.iter().map(Session::stop)).await;
+        futures_util::future::join_all(
+            sessions
+                .iter()
+                .map(|session| session.stop_for(StopReason::Shutdown)),
+        )
+        .await;
         self.inner.store.flush().await
     }
 

@@ -162,8 +162,12 @@ export type ClientMessage =
 
 export type RestartMode = "continue" | "blank" | "clear";
 
-/** Why a client stopped a live child: from Home, or to drop the granted folders. */
-export type StopReason = "kill" | "revoke";
+/** Why a live child was stopped: from Home, to drop the granted folders, or the server stopping. */
+export type StopReason = "kill" | "revoke" | "shutdown";
+
+function stopReason(raw: unknown): StopReason | null {
+  return raw === "kill" || raw === "revoke" || raw === "shutdown" ? raw : null;
+}
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
 
@@ -206,6 +210,8 @@ export type HostEvent =
   | { event: "ask_resolved"; request_id: string }
   | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
+  /** A stop for `reason` began; a CLI interrupt that follows comes from it. */
+  | { event: "stopping"; reason: StopReason }
   | {
       event: "child_exited";
       code: number | null;
@@ -531,6 +537,10 @@ export function parseHostEvent(raw: unknown): HostEvent {
     }
     case "auth_gate_failed":
       return { event: "auth_gate_failed", reason: parseGateFailure(raw["reason"]) };
+    case "stopping": {
+      const reason = stopReason(raw["reason"]);
+      return reason === null ? { event: "unknown", raw } : { event: "stopping", reason };
+    }
     case "child_exited": {
       const code = raw["code"];
       const tail = raw["stderr_tail"];
@@ -540,7 +550,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         stderr_tail: Array.isArray(tail)
           ? tail.filter((line): line is string => typeof line === "string")
           : [],
-        reason: raw["reason"] === "kill" || raw["reason"] === "revoke" ? raw["reason"] : null,
+        reason: stopReason(raw["reason"]),
       };
     }
     case "restarted": {

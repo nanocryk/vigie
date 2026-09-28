@@ -99,6 +99,8 @@ export interface TranscriptState {
   requests: ReadonlyMap<string, { toolName: string; input: unknown }>;
   /** An interrupt notice was added since the last `result`. */
   interrupted: boolean;
+  /** A stop for a reason began and the child has not exited yet. */
+  stopping: StopReason | null;
   /** A turn has started and its `result` has not arrived. */
   turnOpen: boolean;
   /** User messages not echoed yet, oldest first. */
@@ -139,6 +141,7 @@ export const emptyTranscript: TranscriptState = {
   streamMessage: null,
   requests: new Map(),
   interrupted: false,
+  stopping: null,
   turnOpen: false,
   outbox: [],
   cwd: null,
@@ -154,6 +157,7 @@ const SKILL_TOOL = "Skill";
 const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
   revoke: "Folders revoked",
+  shutdown: "Server stopped",
 };
 const SUMMARY_LIMIT = 300;
 const UNKNOWN_MESSAGE = "?";
@@ -294,6 +298,7 @@ class Draft {
   streamMessage: string | null;
   requests: Map<string, { toolName: string; input: unknown }>;
   interrupted: boolean;
+  stopping: StopReason | null;
   turnOpen: boolean;
   outbox: Outgoing[];
   cwd: string | null;
@@ -312,6 +317,7 @@ class Draft {
     this.streamMessage = state.streamMessage;
     this.requests = new Map(state.requests);
     this.interrupted = state.interrupted;
+    this.stopping = state.stopping;
     this.turnOpen = state.turnOpen;
     this.outbox = state.outbox.map((entry) => ({ ...entry }));
     this.cwd = state.cwd;
@@ -332,6 +338,7 @@ class Draft {
       streamMessage: this.streamMessage,
       requests: this.requests,
       interrupted: this.interrupted,
+      stopping: this.stopping,
       turnOpen: this.turnOpen,
       outbox: this.outbox,
       cwd: this.cwd,
@@ -406,7 +413,11 @@ class Draft {
           detail: null,
         });
         return;
+      case "stopping":
+        this.stopping = event.reason;
+        return;
       case "child_exited": {
+        this.stopping = null;
         this.asks = [];
         this.requests.clear();
         this.outbox = [];
@@ -534,6 +545,8 @@ class Draft {
     }
     if (text.startsWith(INTERRUPT_PREFIX)) {
       this.interrupted = true;
+      // A requested stop interrupts the turn itself; its exit line says why.
+      if (this.stopping !== null) return;
       this.add({
         kind: "notice",
         key,

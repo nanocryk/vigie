@@ -523,6 +523,17 @@ describe("restarts", () => {
       ["notice", "Stopped from Home"],
       ["notice", "Claude process ended (code 0)"],
     ]);
+
+    const shutdown = applyEvents(emptyTranscript, [
+      event(1, "host", { event: "stopping", reason: "shutdown" }),
+      echo(2, "[Request interrupted by user for tool use]"),
+      exited(3, "shutdown"),
+      echo(4, "[Request interrupted by user]"),
+    ]);
+    expect(shutdown.items.map(shape)).toEqual([
+      ["notice", "Server stopped"],
+      ["notice", "Request interrupted by user"],
+    ]);
   });
 
   it("a clear shows a Cleared divider", () => {

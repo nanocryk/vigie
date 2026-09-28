@@ -120,10 +120,15 @@ pub enum HostEvent {
     AuthGateFailed {
         reason: GateFailure,
     },
+    /// A requested stop began: the CLI's interrupt of a running tool that may
+    /// follow comes from it, not from the user.
+    Stopping {
+        reason: StopReason,
+    },
     ChildExited {
         code: Option<i32>,
         stderr_tail: Vec<String>,
-        /// Why a client stopped the child; absent for any other exit.
+        /// Why the child was stopped; absent for any other exit.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<StopReason>,
     },
@@ -322,7 +327,7 @@ impl ActivityTracker {
     }
 }
 
-/// Why a client stopped a live child.
+/// Why a live child was stopped.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
@@ -331,6 +336,8 @@ pub enum StopReason {
     Kill,
     /// Stopped to drop the folders granted from asks.
     Revoke,
+    /// The server is shutting down.
+    Shutdown,
 }
 
 enum Command {
@@ -553,7 +560,7 @@ impl Session {
         self.stop_with(None).await;
     }
 
-    /// `stop` on a client's request; `ChildExited` carries `reason`.
+    /// `stop` for `reason`, which `Stopping` and `ChildExited` carry.
     pub async fn stop_for(&self, reason: StopReason) {
         self.stop_with(Some(reason)).await;
     }
@@ -622,7 +629,7 @@ struct Actor {
     history: Option<Store>,
     /// How the session ends, once decided; an unrequested exit leaves it `None`.
     end: Option<SessionState>,
-    /// Set when a client asked for the stop.
+    /// Set when the stop was requested for a reason.
     stop_reason: Option<StopReason>,
     seq: u64,
     status: watch::Sender<LiveStatus>,
@@ -969,6 +976,9 @@ impl Actor {
         }
         self.state = State::Stopping;
         self.stop_reason = reason;
+        if let Some(reason) = reason {
+            self.emit_host(HostEvent::Stopping { reason });
+        }
         self.end = Some(SessionState::Stopped);
         self.child.close_stdin();
         self.kill_at = Some(Instant::now() + STOP_GRACE);

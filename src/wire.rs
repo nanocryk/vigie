@@ -52,7 +52,9 @@
 //! - `kill {session, reason?, client_id}`: stops the live child the graceful way;
 //!   the discussion stays listed and the next `send` resumes it. Acked without
 //!   effect when not live. `reason` is `kill` (the default, from Home) or `revoke`
-//!   (dropping the granted folders); the `child_exited` event carries it.
+//!   (dropping the granted folders). A stop for a reason (these two, or
+//!   `shutdown` when the server stops) emits `stopping {reason}` as it begins,
+//!   and `child_exited` carries the reason too.
 //! - `archive {session, client_id}`: refused with the ack error `session_live`
 //!   while the child runs. `restore {session, client_id}` unarchives.
 //! - A `send`, `answer` or `restart` on an archived discussion unarchives it
