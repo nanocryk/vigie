@@ -43,7 +43,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has three slots: a fixed-width left slot (the back button in a session, the vigie2 mark on Home), the gauges in the middle, and a fixed-width right slot with the connection status. The account column sits at exactly the same place on Home and in a session.
+- The top bar has three slots: a fixed-width left slot (the back button in a session, the vigie2 mark on Home), the gauges in the middle, and a fixed-width right slot with the connection status and the device settings cogwheel. The account column sits at exactly the same place on Home and in a session.
 - The gauges have two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below.
 - On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
 - A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and the device label and the reload button on the right.
@@ -51,7 +51,14 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote. A discussion with no recorded request but idle for longer than the longest TTL (1 hour) counts as cold.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
-- Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued, or the main agent finished answering with no tool use and no background task pending.
+- Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued (main agent or subagent), the main agent finished answering with no tool use and no background task pending, or the child stopped unexpectedly.
+
+## Notifications
+
+- Web Push (VAPID), keys generated on first start in the state directory. Subscription endpoints must be public HTTPS hostnames, checked at subscribe and at send; the sender does not follow redirects.
+- Opt-in per device, in the device settings screen, opened from a large cogwheel button at the far right of the top bar, on every screen. The screen holds only notifications for now.
+- No push for a discussion an active client has on screen (see Seen, under Projects and Home).
+- One notification per discussion: each push replaces the previous one of that discussion, and a device clears its own when it shows the discussion. Tapping one opens the discussion.
 - Cold cache: sending and approving are blocked until the user picks one of:
   - rewarm: send on the cold cache, in the same Claude session;
   - continue: a fresh Claude session seeded with past context from vigie2's history;

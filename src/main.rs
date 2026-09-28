@@ -15,6 +15,7 @@ use vigie2::auth::{Auth, Registry, state_dir};
 use vigie2::child::Program;
 use vigie2::manager::{Probe, SessionManager};
 use vigie2::net;
+use vigie2::push::{self, Pusher};
 use vigie2::server::{AppState, build_app};
 use vigie2::store::Store;
 
@@ -214,7 +215,16 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
         }
     });
 
+    let vapid = push::Vapid::load_or_generate(&dir)?;
+    let pusher = Arc::new(Pusher::new(
+        vapid,
+        manager.store().clone(),
+        Arc::clone(&auth),
+    )?);
+    push::spawn_dispatcher(&manager, Arc::clone(&pusher));
+
     let state = AppState {
+        pusher,
         auth: Arc::clone(&auth),
         pair_scheme: Arc::new(scheme.to_string()),
         pair_port: bind.port(),

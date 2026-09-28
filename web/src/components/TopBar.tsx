@@ -17,6 +17,7 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
+import { navigate } from "@/route";
 import type {
   CacheView,
   Confidence,
@@ -336,8 +337,17 @@ export function Header({
           <AccountColumn usage={usage} now={now} />
           {column}
         </div>
-        <div className="flex w-6 shrink-0 items-center justify-end gap-1.5 self-center">
+        <div className="flex w-14 shrink-0 items-center justify-end gap-1.5 self-center">
           {right}
+          <button
+            type="button"
+            aria-label="Device settings"
+            title="Device settings"
+            onClick={() => navigate({ kind: "settings" })}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-10 shrink-0 items-center justify-center rounded-[5px] text-3xl leading-none"
+          >
+            ⚙
+          </button>
         </div>
       </div>
       <div className="voice-ui flex h-7 items-center gap-2 border-b pr-1 pl-3 text-xs">

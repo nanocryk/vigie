@@ -1,11 +1,13 @@
 import { type ReactNode, use, useEffect, useState } from "react";
 
 import { getClient } from "@/client";
+import { DeviceSettings } from "@/components/DeviceSettings";
 import { NewVersionBanner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
 import type { BootResult } from "@/pairing";
 import { watchActivity } from "@/presence";
+import { clearNotification } from "@/push";
 import { useRoute } from "@/route";
 import { trackVisualViewport } from "@/viewport";
 
@@ -30,12 +32,17 @@ function Shell({ label }: { label: string | null }) {
   const [active, setActive] = useState(false);
   useEffect(() => watchActivity(setActive), []);
   const viewing = route.kind === "session" ? route.id : null;
-  useEffect(() => client.setPresence(viewing, active), [client, viewing, active]);
+  useEffect(() => {
+    client.setPresence(viewing, active);
+    if (viewing !== null && active) void clearNotification(viewing);
+  }, [client, viewing, active]);
   return (
     <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
       <NewVersionBanner />
       {route.kind === "session" ? (
         <SessionScreen key={route.id} client={client} id={route.id} label={label} />
+      ) : route.kind === "settings" ? (
+        <DeviceSettings client={client} label={label} />
       ) : (
         <SessionList client={client} label={label} />
       )}

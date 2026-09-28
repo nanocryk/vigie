@@ -10,7 +10,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
 use vigie2::child::{Launch, Program};
 use vigie2::gauges::ContextSource;
-use vigie2::manager::{Probe, SessionManager};
+use vigie2::manager::{Notice, NoticeKind, Probe, SessionManager};
 use vigie2::protocol::{AppliedSettings, Inbound};
 use vigie2::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
@@ -575,9 +575,21 @@ async fn pending_asks_are_counted_and_announced() {
     let script = env.script("asks.ndjson", ASKS_SCRIPT);
     let manager = env.manager(&script).await;
     let mut changes = manager.subscribe_changes();
+    let mut notices = manager.subscribe_notices();
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let id = session.id();
     until_asks(&manager, &mut changes, id, 2).await;
+    let notice = tokio::time::timeout(TIMEOUT, notices.recv())
+        .await
+        .expect("no notice")
+        .unwrap();
+    assert_eq!(
+        notice,
+        Notice {
+            session: id,
+            kind: NoticeKind::Ask
+        }
+    );
     session
         .answer(
             "cli-1",
@@ -616,10 +628,22 @@ async fn until_unread(manager: &SessionManager, id: Uuid, want: Option<Unread>) 
 async fn a_finished_turn_is_unread_until_an_active_viewer_sees_it() {
     let env = Env::new();
     let manager = env.manager(&recording("basic")).await;
+    let mut notices = manager.subscribe_notices();
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let id = session.id();
     session.send("Reply with exactly: ok", None).await.unwrap();
     until_unread(&manager, id, Some(Unread::Finished)).await;
+    let notice = tokio::time::timeout(TIMEOUT, notices.recv())
+        .await
+        .expect("no notice")
+        .unwrap();
+    assert_eq!(
+        notice,
+        Notice {
+            session: id,
+            kind: NoticeKind::Finished
+        }
+    );
 
     let viewer = Uuid::new_v4();
     manager.set_presence(viewer, Some(id), false);

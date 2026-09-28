@@ -23,6 +23,7 @@ use uuid::Uuid;
 use vigie2::auth::{self, Auth, Device, Registry};
 use vigie2::child::{Launch, Program};
 use vigie2::manager::SessionManager;
+use vigie2::push::{Pusher, Vapid};
 use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::server::{AppState, build_app};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
@@ -84,6 +85,8 @@ impl Server {
             .unwrap();
         let auth = Arc::new(Auth::new(registry, false));
         let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let vapid = Vapid::load_or_generate(dir.path()).unwrap();
+        let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth)).unwrap());
         let manager = SessionManager::start(store, fake(&script_path))
             .await
             .unwrap();
@@ -91,6 +94,7 @@ impl Server {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let state = AppState {
+            pusher,
             auth: Arc::clone(&auth),
             pair_scheme: Arc::new("http".into()),
             pair_port: addr.port(),

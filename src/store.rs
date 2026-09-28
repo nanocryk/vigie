@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::child::{Launch, ModelSettings};
 use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
 use crate::protocol::{AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound};
+use crate::push::{PushKeys, PushSubscription};
 use crate::session::{CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice};
 use crate::usage::db::{MessageTokens, UsageDb};
 use crate::usage::inputs::{self, Reading};
@@ -26,7 +27,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 12] = [
+const MIGRATIONS: [&str; 13] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -110,6 +111,15 @@ CREATE TABLE cli_catalog (
          WHERE kind = 'host';",
     // What the user has not seen yet; NULL once seen.
     "ALTER TABLE sessions ADD COLUMN unread TEXT CHECK (unread IN ('finished', 'stopped'));",
+    // One Web Push subscription per paired device that turned notifications on.
+    r#"
+CREATE TABLE push_subscriptions (
+    device_id TEXT PRIMARY KEY,
+    endpoint TEXT NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL
+) STRICT;
+"#,
 ];
 
 /// The seq of the `?3`-th latest (0 for the latest) `user_sent` of `?1` below `?2`
@@ -439,6 +449,71 @@ impl Store {
                 params![session.to_string(), unread.as_str()],
             )?;
             Ok(changed > 0)
+        })
+        .await
+    }
+
+    /// Every stored subscription, by device id.
+    pub async fn push_subscriptions(&self) -> Result<Vec<(String, PushSubscription)>> {
+        self.call(|connection| {
+            let mut statement = connection
+                .prepare("SELECT device_id, endpoint, p256dh, auth FROM push_subscriptions")?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, read_subscription(row)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    pub async fn push_subscription(&self, device: &str) -> Result<Option<PushSubscription>> {
+        let device = device.to_string();
+        self.call(move |connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT device_id, endpoint, p256dh, auth FROM push_subscriptions
+                     WHERE device_id = ?1",
+                    [device],
+                    read_subscription,
+                )
+                .optional()?)
+        })
+        .await
+    }
+
+    /// Replaces the device's subscription.
+    pub async fn set_push_subscription(
+        &self,
+        device: &str,
+        subscription: &PushSubscription,
+    ) -> Result<()> {
+        let (device, subscription) = (device.to_string(), subscription.clone());
+        self.call(move |connection| {
+            connection.execute(
+                "INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (device_id) DO UPDATE
+                     SET endpoint = ?2, p256dh = ?3, auth = ?4",
+                params![
+                    device,
+                    subscription.endpoint,
+                    subscription.keys.p256dh,
+                    subscription.keys.auth
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn remove_push_subscription(&self, device: &str) -> Result<()> {
+        let device = device.to_string();
+        self.call(move |connection| {
+            connection.execute(
+                "DELETE FROM push_subscriptions WHERE device_id = ?1",
+                [device],
+            )?;
+            Ok(())
         })
         .await
     }
@@ -1009,6 +1084,17 @@ impl RawEvent {
     }
 }
 
+/// A `push_subscriptions` row from its `endpoint, p256dh, auth` columns at 1 to 3.
+fn read_subscription(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushSubscription> {
+    Ok(PushSubscription {
+        endpoint: row.get(1)?,
+        keys: PushKeys {
+            p256dh: row.get(2)?,
+            auth: row.get(3)?,
+        },
+    })
+}
+
 const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at, applied_model, applied_effort, unread FROM sessions";
 
 struct RawSession {
@@ -1231,6 +1317,7 @@ mod tests {
             [
                 "cli_catalog",
                 "events",
+                "push_subscriptions",
                 "sessions",
                 "usage_closed_hours",
                 "usage_messages",

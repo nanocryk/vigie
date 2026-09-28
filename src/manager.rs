@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, TimeDelta, Utc};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::{Mutex, watch};
 use tokio::task::AbortHandle;
@@ -51,9 +51,34 @@ struct Inner {
     usage_changes: broadcast::Sender<()>,
     catalog_changes: broadcast::Sender<()>,
     sampler: AbortHandle,
+    cache_watch: AbortHandle,
     /// What each client connection shows, by connection.
     presence: parking_lot::Mutex<HashMap<Uuid, Presence>>,
+    notices: broadcast::Sender<Notice>,
 }
+
+/// Something a discussion wants the user for, raised while no active client has it on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Notice {
+    pub session: Uuid,
+    pub kind: NoticeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeKind {
+    /// An ask was queued, main or subagent.
+    Ask,
+    /// A turn ended and nothing runs.
+    Finished,
+    /// The child stopped without being asked to.
+    Stopped,
+    /// The 1 hour cache goes cold in `CACHE_WARNING_BEFORE`.
+    CacheSoonCold,
+}
+
+/// How long before a 1 hour cache goes cold its warning comes.
+pub const CACHE_WARNING_BEFORE: TimeDelta = TimeDelta::minutes(10);
+const CACHE_WATCH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct Presence {
@@ -83,6 +108,7 @@ pub enum Probe {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.sampler.abort();
+        self.cache_watch.abort();
     }
 }
 
@@ -99,9 +125,15 @@ impl SessionManager {
             usage_changes: broadcast::channel(CHANGES_CAPACITY).0,
             catalog_changes: broadcast::channel(CHANGES_CAPACITY).0,
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
+            cache_watch: tokio::spawn(warn_cold_caches(inner.clone())).abort_handle(),
             presence: parking_lot::Mutex::new(HashMap::new()),
+            notices: broadcast::channel(CHANGES_CAPACITY).0,
         });
         Ok(Self { inner })
+    }
+
+    pub fn subscribe_notices(&self) -> broadcast::Receiver<Notice> {
+        self.inner.notices.subscribe()
     }
 
     pub fn store(&self) -> &Store {
@@ -569,7 +601,7 @@ impl SessionManager {
             session.agents(),
             self.inner.changes.clone(),
         ));
-        tokio::spawn(track_unread(
+        tokio::spawn(track_attention(
             id,
             session.status(),
             Arc::downgrade(&self.inner),
@@ -609,13 +641,13 @@ async fn announce_changes(
     let _ = changes.send(id);
 }
 
-/// Marks the discussion unread when it goes idle after running, or when its child
-/// exits unasked, unless an active client has it on screen.
-async fn track_unread(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: Weak<Inner>) {
-    let mut busy = status.borrow().activity == Activity::Busy;
+/// Raises a notice when an ask is queued, when the discussion goes idle after
+/// running, or when its child exits unasked. The last two also mark it unread.
+async fn track_attention(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: Weak<Inner>) {
+    let mut last = *status.borrow();
     loop {
         let ended = status.changed().await.is_err();
-        let unread = if ended {
+        let kind = if ended {
             // The final state is queued to the store before the channel closes.
             let Some(store) = inner.upgrade().map(|inner| inner.store.clone()) else {
                 return;
@@ -625,7 +657,7 @@ async fn track_unread(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: 
                     row.state,
                     SessionState::Exited { .. } | SessionState::GateFailed { .. }
                 )
-                .then_some(Unread::Stopped),
+                .then_some(NoticeKind::Stopped),
                 Ok(None) => None,
                 Err(err) => {
                     tracing::warn!("read session {id}: {err:#}");
@@ -633,13 +665,19 @@ async fn track_unread(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: 
                 }
             }
         } else {
-            let now_busy = status.borrow_and_update().activity == Activity::Busy;
-            let finished = busy && !now_busy;
-            busy = now_busy;
-            finished.then_some(Unread::Finished)
+            let now = *status.borrow_and_update();
+            let kind = if now.asks > last.asks {
+                Some(NoticeKind::Ask)
+            } else if last.activity == Activity::Busy && now.activity == Activity::Idle {
+                Some(NoticeKind::Finished)
+            } else {
+                None
+            };
+            last = now;
+            kind
         };
-        if let Some(unread) = unread {
-            mark_unread(&inner, id, unread).await;
+        if let Some(kind) = kind {
+            raise(&inner, id, kind).await;
         }
         if ended {
             return;
@@ -647,18 +685,69 @@ async fn track_unread(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: 
     }
 }
 
-async fn mark_unread(inner: &Weak<Inner>, id: Uuid, unread: Unread) {
+/// Raises notice `kind` for discussion `id` unless an active client has it on screen.
+async fn raise(inner: &Weak<Inner>, id: Uuid, kind: NoticeKind) {
     let Some(inner) = inner.upgrade().filter(|inner| !inner.watched(id)) else {
         return;
     };
-    let (store, changes) = (inner.store.clone(), inner.changes.clone());
+    let (store, changes, notices) = (
+        inner.store.clone(),
+        inner.changes.clone(),
+        inner.notices.clone(),
+    );
     drop(inner);
-    match store.mark_unread(id, unread).await {
-        Ok(true) => {
-            let _ = changes.send(id);
+    let unread = match kind {
+        NoticeKind::Finished => Some(Unread::Finished),
+        NoticeKind::Stopped => Some(Unread::Stopped),
+        NoticeKind::Ask | NoticeKind::CacheSoonCold => None,
+    };
+    if let Some(unread) = unread {
+        match store.mark_unread(id, unread).await {
+            Ok(true) => {
+                let _ = changes.send(id);
+            }
+            Ok(false) => {}
+            Err(err) => tracing::warn!("mark session {id} unread: {err:#}"),
         }
-        Ok(false) => {}
-        Err(err) => tracing::warn!("mark session {id} unread: {err:#}"),
+    }
+    let _ = notices.send(Notice { session: id, kind });
+}
+
+/// Every minute, raises `CacheSoonCold` once per request for each discussion
+/// whose 1 hour cache goes cold within `CACHE_WARNING_BEFORE`.
+async fn warn_cold_caches(inner: Weak<Inner>) {
+    let mut warned: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
+    let mut ticks = tokio::time::interval(CACHE_WATCH_INTERVAL);
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticks.tick().await;
+        let Some(store) = inner.upgrade().map(|inner| inner.store.clone()) else {
+            return;
+        };
+        let rows = match store.sessions().await {
+            Ok(rows) => rows,
+            Err(err) => {
+                tracing::warn!("list sessions for the cache warning: {err:#}");
+                continue;
+            }
+        };
+        let now = Utc::now();
+        for row in rows {
+            let Some(cache) = row
+                .cache
+                .filter(|cache| cache.ttl_secs == gauges::ONE_HOUR_TTL_SECS)
+                .filter(|_| row.archived_at.is_none())
+            else {
+                continue;
+            };
+            let cold_at = cache.last_request_at + TimeDelta::seconds(cache.ttl_secs.into());
+            let due = now >= cold_at - CACHE_WARNING_BEFORE && now < cold_at;
+            if !due || warned.get(&row.id) == Some(&cache.last_request_at) {
+                continue;
+            }
+            warned.insert(row.id, cache.last_request_at);
+            raise(&inner, row.id, NoticeKind::CacheSoonCold).await;
+        }
     }
 }
 

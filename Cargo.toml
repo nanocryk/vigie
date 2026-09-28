@@ -23,6 +23,8 @@ notify = "8"
 parking_lot = "0.12"
 rand = "0.10"
 rcgen = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+ring = "0.17"
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }

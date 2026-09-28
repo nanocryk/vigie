@@ -16,6 +16,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::auth::{self, Auth};
 use crate::manager::SessionManager;
+use crate::push::{self, Pusher};
 use crate::{api, ws};
 
 /// Path prefix everything is served under. Android builds a WebAPK's intent
@@ -36,6 +37,7 @@ pub struct AppState {
     pub manager: SessionManager,
     /// Origins, without trailing slash, a WebSocket upgrade may come from.
     pub allowed_origins: Arc<BTreeSet<String>>,
+    pub pusher: Arc<Pusher>,
 }
 
 /// Build the full HTTP router. Extracted from `serve` so tests can drive the
@@ -57,6 +59,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/catalog", get(api::catalog))
         .route("/api/ws", get(ws::handler))
         .route("/api/version", get(api::version))
+        .route("/api/push/config", get(push::config))
+        .route("/api/push/subscribe", post(push::subscribe))
+        .route("/api/push/unsubscribe", post(push::unsubscribe))
+        .route("/api/push/test", post(push::test))
         .layer(from_fn_with_state(state.clone(), auth::require_auth));
 
     let public = Router::new()
@@ -129,6 +135,10 @@ mod auth_gate_tests {
             (Method::GET, "/api/catalog"),
             (Method::GET, "/api/ws"),
             (Method::GET, "/api/version"),
+            (Method::GET, "/api/push/config"),
+            (Method::POST, "/api/push/subscribe"),
+            (Method::POST, "/api/push/unsubscribe"),
+            (Method::POST, "/api/push/test"),
         ]
     }
 
@@ -169,10 +179,14 @@ mod auth_gate_tests {
         let auth = Arc::new(Auth::new(registry, false));
         let startup_token = auth.startup_token.clone();
         let store = Store::open(&dir.join("history.db")).expect("open store");
+        let vapid = push::Vapid::load_or_generate(&dir).expect("vapid keys");
+        let pusher =
+            Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth)).expect("pusher"));
         let manager = SessionManager::start(store, Program::claude())
             .await
             .expect("start manager");
         let state = AppState {
+            pusher,
             auth,
             pair_scheme: Arc::new("http".into()),
             pair_port: 0,
