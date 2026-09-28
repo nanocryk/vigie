@@ -747,7 +747,9 @@ export function SessionScreen({
         column={
           <SessionColumn
             session={view}
-            {...(viewing === null ? {} : { agent: { cache: agent?.cache ?? null } })}
+            {...(viewing === null ? {} : {
+                  agent: { cache: agent?.cache ?? null, promptTokens: agent?.promptTokens ?? 0 },
+                })}
           />
         }
         info={

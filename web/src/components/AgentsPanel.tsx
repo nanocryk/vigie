@@ -2,6 +2,7 @@ import { type MouseEvent, type PointerEvent, useRef, useState } from "react";
 
 import { type AgentEntry, agentStateLabel, agentTree } from "@/agents";
 import { useSwipe } from "@/components/Swipe";
+import { formatTokens } from "@/gauges";
 import { type Side, TAP_SLOP_PX } from "@/swipe";
 
 const SPRING_BACK = "transform 200ms ease-out";
@@ -131,7 +132,9 @@ function SwipeRow({
   const coarse = coarsePointer();
   const armedLeft = view.armed?.side === "left";
   const tap = useSwitchOnTap(view.armed !== null, onSwitch);
-  const status = stopping ? "stopping..." : agentStateLabel(entry);
+  const state = stopping ? "stopping..." : agentStateLabel(entry);
+  const status =
+    entry.promptTokens > 0 ? `${state} · ${formatTokens(entry.promptTokens)}` : state;
   return (
     <div className="flex items-stretch gap-2">
       <div className="relative min-w-0 flex-1 overflow-hidden rounded-[5px]">

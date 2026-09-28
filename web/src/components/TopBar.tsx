@@ -216,6 +216,16 @@ function ContextRow({ context }: { context: ContextView | null }) {
   );
 }
 
+/** A subagent's context: its token count only, its window being unknown. */
+function AgentContextRow({ promptTokens }: { promptTokens: number }) {
+  return (
+    <Row label="ctx">
+      <div className={EMPTY_TRACK} />
+      <Figures main={promptTokens > 0 ? formatTokens(promptTokens) : "--"} side="" />
+    </Row>
+  );
+}
+
 function CacheRow({ gauge }: { gauge: CacheGauge }) {
   switch (gauge.kind) {
     case "unknown":
@@ -246,13 +256,13 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
   }
 }
 
-/** `agent` set: the cache bar is that agent's, from its own last request. */
+/** `agent` set: the context and cache bars are that agent's, from its own last request. */
 export function SessionColumn({
   session,
   agent,
 }: {
   session: SessionView | null;
-  agent?: { cache: CacheView | null };
+  agent?: { cache: CacheView | null; promptTokens: number };
 }) {
   const now = useClock(1000);
   const gauge =
@@ -261,7 +271,11 @@ export function SessionColumn({
       : cacheGauge(agent.cache, now);
   return (
     <div className="min-w-0">
-      <ContextRow context={session?.context ?? null} />
+      {agent === undefined ? (
+        <ContextRow context={session?.context ?? null} />
+      ) : (
+        <AgentContextRow promptTokens={agent.promptTokens} />
+      )}
       <CacheRow gauge={gauge} />
     </div>
   );
