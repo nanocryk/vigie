@@ -74,6 +74,9 @@
 //!   (`resolved_model` the model id `value` stands for, `effort_levels` empty
 //!   for a model without effort) and `commands [{name, description,
 //!   argument_hint}]`, the CLI's slash commands and skills.
+//! - `synced {session, seq}`: the stored events of a subscribed session were
+//!   all sent, up to `seq`; follows the history sent on `subscribe`, and each
+//!   later catch-up from the store.
 //! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
 //! - `sessions_changed`: a session was created, changed activity or its count
 //!   of pending asks, ended, had
@@ -226,6 +229,11 @@ pub enum ServerMessage {
         ok: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+    },
+    /// Every stored event of `session` up to `seq` was sent.
+    Synced {
+        session: Uuid,
+        seq: u64,
     },
     SessionsChanged,
     UsageChanged,

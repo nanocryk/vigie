@@ -104,6 +104,11 @@ export class Client {
   /** Highest seq received per session, applied or still queued. */
   private received = new Map<string, number>();
   private queued = new Map<string, WireEvent[]>();
+  /**
+   * Sessions opened without a transcript: their history is applied at once on
+   * `synced`, so the view opens on its end instead of growing page by page.
+   */
+  private held = new Set<string>();
   private frame: number | null = null;
   private acks = new Map<string, PendingAck>();
   private nextId = 0;
@@ -137,6 +142,7 @@ export class Client {
 
   openSession(id: string): void {
     this.subscribed.add(id);
+    if (!this.snapshot.transcripts.has(id)) this.held.add(id);
     this.send({ type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 });
   }
 
@@ -313,9 +319,12 @@ export class Client {
         const queue = this.queued.get(event.session);
         if (queue === undefined) this.queued.set(event.session, [event]);
         else queue.push(event);
-        this.scheduleFlush();
+        if (!this.held.has(event.session)) this.scheduleFlush();
         return;
       }
+      case "synced":
+        if (this.held.delete(message.session)) this.flush(message.session);
+        return;
       case "ack": {
         const ack = this.acks.get(message.client_id);
         if (ack === undefined) return;
@@ -353,13 +362,17 @@ export class Client {
     });
   }
 
-  private flush(): void {
-    if (this.queued.size === 0) return;
+  /** Applies the queued events of sessions not held; `synced` also creates its transcript. */
+  private flush(synced?: string): void {
+    const ready = [...this.queued].filter(([session]) => !this.held.has(session));
+    const created = synced !== undefined && !this.snapshot.transcripts.has(synced);
+    if (ready.length === 0 && !created) return;
     const transcripts = new Map(this.snapshot.transcripts);
-    for (const [session, events] of this.queued) {
+    for (const [session, events] of ready) {
       transcripts.set(session, applyEvents(transcripts.get(session) ?? emptyTranscript, events));
+      this.queued.delete(session);
     }
-    this.queued.clear();
+    if (created && !transcripts.has(synced)) transcripts.set(synced, emptyTranscript);
     this.update({ transcripts });
   }
 }

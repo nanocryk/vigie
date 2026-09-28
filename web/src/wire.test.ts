@@ -81,6 +81,14 @@ describe("parseServerMessage", () => {
     });
   });
 
+  it("reads the end of a history catch-up", () => {
+    expect(parseServerMessage({ type: "synced", session: "s", seq: 42 }, "msg")).toEqual({
+      type: "synced",
+      session: "s",
+      seq: 42,
+    });
+  });
+
   it("names the field and value on a bad envelope", () => {
     expect(() => parseServerMessage({ type: "event", session: "s", seq: "3" }, "msg")).toThrow(
       /msg\.seq: expected a number: "3"/,

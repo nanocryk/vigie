@@ -198,6 +198,7 @@ impl Server {
             sessions_changed: 0,
             usage_changed: 0,
             catalog_changed: 0,
+            synced: Vec::new(),
         })
     }
 }
@@ -230,6 +231,8 @@ struct Client {
     sessions_changed: usize,
     usage_changed: usize,
     catalog_changed: usize,
+    /// Seqs of the `synced` messages, in order.
+    synced: Vec<u64>,
 }
 
 impl Client {
@@ -281,6 +284,7 @@ impl Client {
             ServerMessage::SessionsChanged => self.sessions_changed += 1,
             ServerMessage::UsageChanged => self.usage_changed += 1,
             ServerMessage::CatalogChanged => self.catalog_changed += 1,
+            ServerMessage::Synced { seq, .. } => self.synced.push(seq),
             ServerMessage::Error { message, session } => self.errors.push((message, session)),
         }
     }
@@ -691,6 +695,12 @@ async fn subscribing_to_a_stopped_session_replays_without_spawning() {
         .until(|event| host_event(event, "child_exited"))
         .await;
     assert_eq!(client.events[0].seq, 1);
+    // The whole history comes before `synced`, which names its last seq.
+    while client.synced.is_empty() {
+        client.pump().await;
+    }
+    let last = client.events.last().unwrap().seq;
+    assert_eq!(client.synced, vec![last]);
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(server.manager.live(id).await.is_none());
 }

@@ -639,6 +639,7 @@ export function SessionScreen({
       )}
 
       <TranscriptView
+        loading={!snapshot.transcripts.has(id)}
         items={transcript.items}
         pending={visiblePending}
         onRetry={retry}

@@ -367,6 +367,7 @@ function PendingView({
  * scrolled up, nothing moves it until "latest" is tapped.
  */
 export function TranscriptView({
+  loading,
   items,
   pending,
   onRetry,
@@ -376,6 +377,8 @@ export function TranscriptView({
   overlay,
   panel,
 }: {
+  /** The history is still arriving; it shows at once when complete. */
+  loading: boolean;
   items: readonly Item[];
   pending: readonly PendingSend[];
   onRetry: (pending: PendingSend) => void;
@@ -455,7 +458,9 @@ export function TranscriptView({
           className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4"
         >
           {items.length === 0 && pending.length === 0 && (
-            <p className="text-muted-foreground voice-ui text-center text-sm">No messages yet.</p>
+            <p className="text-muted-foreground voice-ui text-center text-sm">
+              {loading ? "Loading..." : "No messages yet."}
+            </p>
           )}
           {items.map((item, index) => (
             <ItemView

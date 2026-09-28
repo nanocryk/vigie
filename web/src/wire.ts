@@ -237,6 +237,8 @@ export type WireEvent =
 export type ServerMessage =
   | { type: "event"; event: WireEvent }
   | { type: "ack"; client_id: string; ok: boolean; error: string | null }
+  /** Every stored event of `session` up to `seq` was sent. */
+  | { type: "synced"; session: string; seq: number }
   | { type: "sessions_changed" }
   | { type: "usage_changed" }
   | { type: "catalog_changed" }
@@ -644,6 +646,12 @@ export function parseServerMessage(raw: unknown, label: string): ServerMessage {
         client_id: str(value, "client_id", label),
         ok: bool(value, "ok", label),
         error: optStr(value, "error", label),
+      };
+    case "synced":
+      return {
+        type,
+        session: str(value, "session", label),
+        seq: num(value, "seq", label),
       };
     case "sessions_changed":
     case "usage_changed":

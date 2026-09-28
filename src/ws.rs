@@ -428,7 +428,7 @@ impl Forwarder {
             .await
     }
 
-    /// Sends every stored event after `sent`.
+    /// Sends every stored event after `sent`, then `synced`.
     async fn catch_up(&mut self) -> Result<(), Gone> {
         loop {
             let page = match self.manager.events_after(self.id, self.sent, PAGE).await {
@@ -450,7 +450,12 @@ impl Forwarder {
                     .await?;
             }
             if !full {
-                return Ok(());
+                return self
+                    .send(ServerMessage::Synced {
+                        session: self.id,
+                        seq: self.sent,
+                    })
+                    .await;
             }
         }
     }
