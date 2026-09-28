@@ -6,7 +6,7 @@
 # confirm: true
 # args:
 #   scenario:
-#     choices: [basic, permissions, plan, interrupt, background, cd]
+#     choices: [basic, permissions, plan, interrupt, background, cd, context, grants]
 #     many: true
 # ---
 set -euo pipefail

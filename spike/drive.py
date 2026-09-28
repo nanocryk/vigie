@@ -289,8 +289,65 @@ def context(s, cwd):
     s.control("get_context_usage")
 
 
+def grants(s, cwd):
+    outside = Path(cwd).parent / "outside"
+    for rel in ("a/b/one.txt", "a/c/two.txt", "other.txt"):
+        (outside / rel).parent.mkdir(parents=True, exist_ok=True)
+        (outside / rel).write_text(rel, encoding="utf-8")
+    for name in ("edit1.txt", "edit2.txt"):
+        (Path(cwd) / name).unlink(missing_ok=True)
+
+    def asks_logged(policy):
+        def logged(req):
+            s.note("ask", tool=req["tool_name"], input=req["input"],
+                   suggestions=req.get("permission_suggestions"))
+            return policy(req)
+        return logged
+
+    def allow_parent(req):
+        suggestion = req["permission_suggestions"][0]
+        rule = suggestion["rules"][0]
+        folder = rule["ruleContent"].removesuffix("/**").rsplit("/", 1)[0]
+        parent = {**suggestion, "rules": [{**rule, "ruleContent": folder + "/**"}]}
+        return {"behavior": "allow", "updatedInput": req["input"],
+                "updatedPermissions": [parent]}
+
+    def allow_with_suggestions(req):
+        return {"behavior": "allow", "updatedInput": req["input"],
+                "updatedPermissions": req.get("permission_suggestions") or []}
+
+    def read(rel):
+        return (f"Use the Read tool on exactly {outside / rel}. Reply with its content, "
+                "or refused if refused, and do not retry.")
+
+    s.control("initialize")
+    s.note("read under the suggested folder, granting its parent")
+    s.turn(read("a/b/one.txt"), asks_logged(allow_parent))
+    s.note("read a sibling under the granted parent, expecting no ask")
+    s.turn(read("a/c/two.txt"), asks_logged(deny_with("Asked again.")))
+    s.note("read outside the grant, expecting an ask")
+    s.turn(read("other.txt"), asks_logged(deny_with("Refused by the spike driver.")))
+    s.note("write, allowing with the accept-edits suggestion")
+    s.turn("Use the Write tool to create edit1.txt containing x. Then reply done.",
+           asks_logged(allow_with_suggestions))
+    s.note("second write, expecting no ask")
+    s.turn("Use the Write tool to create edit2.txt containing y. If refused, reply "
+           "refused and do not retry.", asks_logged(deny_with("Asked again.")))
+    refused = asks_logged(deny_with("Refused by the spike driver."))
+    probes = {
+        "Write": f"create {outside / 'w' / 'new.txt'} containing z",
+        "Glob": f"find *.txt files under {outside}",
+        "Grep": f"search for the word other under {outside}",
+        "Bash": f"run exactly: cat \"{outside / 'other.txt'}\"",
+    }
+    for tool, action in probes.items():
+        s.note(f"{tool} outside the folder, recording its suggestions")
+        s.turn(f"Use the {tool} tool to {action}. Reply with the result, or refused if "
+               "refused, and do not retry or use another tool.", refused)
+
+
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context)}
+                                     context, grants)}
 
 
 def main():

@@ -61,6 +61,12 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - Deny with `message`: the model sees the message and follows it.
 - `AskUserQuestion`: allow with `updatedInput: {questions, answers: {"<question text>": "<option label>"}}`; the model receives the answer.
 - `set_permission_mode` answers `{mode}`. In plan mode the model writes the plan file without asking, into the user's `~/.claude/plans/`. `ExitPlanMode` input: `plan`, `planFilePath`. After allow, the same turn goes on to implement, and edits ask again.
+- Suggestions for access outside the working folder, `<folder>` being the file's folder or the searched path:
+  - Read, Glob, Grep: `{type: "addRules", rules: [{toolName: "Read", ruleContent: "//c/<folder>/**"}], behavior: "allow", destination: "session"}`. Glob and Grep also get a Read rule.
+  - Write: `{type: "addDirectories", directories: ["<folder>"], destination: "session"}`, with a Windows path.
+  - Bash (`cat` of an outside file): the same Read rule as above, preceded by `{type: "addRules", rules: [{toolName: "Bash", ruleContent: "<exact command>"}], behavior: "allow", destination: "localSettings"}`, a persisted rule for the exact command.
+- The allow result can grant an ancestor of the suggested folder, as a Read rule (`//c/<parent>/**`) or as `addDirectories: ["<parent>"]`: a later Read in a sibling folder under `<parent>` does not ask, and a Read outside `<parent>` still asks.
+- Allowing a Write with its `setMode acceptEdits` suggestion switches the mode: the next Write does not ask.
 
 ### Interrupt
 
