@@ -845,6 +845,163 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
     harness.finish().await;
 }
 
+/// An agent starts and asks through the parent's channel; a relay to it is
+/// forwarded verbatim and acknowledged; then the agent is stopped.
+fn relay_script(wrapped: &str) -> String {
+    let steps = [
+        serde_json::json!({"dir": "in", "msg": {"type": "control_request", "request_id": "init",
+            "request": {"subtype": "initialize"}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "control_response", "response": {
+            "subtype": "success", "request_id": "init",
+            "response": {"account": {"apiProvider": "firstParty"}}}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "system", "subtype": "task_started",
+            "task_id": "a1", "tool_use_id": "t1", "task_type": "local_agent",
+            "description": "sleeper", "is_backgrounded": true, "session_id": "s", "uuid": "u1"}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "control_request", "request_id": "cli-1",
+            "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                "input": {"command": "ls"}, "tool_use_id": "t5", "agent_id": "a1"}}}),
+        serde_json::json!({"dir": "in", "msg": {"type": "control_response", "response": {
+            "subtype": "success", "request_id": "cli-1",
+            "response": {"behavior": "allow", "updatedInput": {"command": "ls"}}}}}),
+        serde_json::json!({"dir": "in", "msg": {"type": "user",
+            "message": {"role": "user", "content": wrapped}, "parent_tool_use_id": null,
+            "session_id": "s"}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "isReplay": true,
+            "message": {"role": "user", "content": wrapped}, "parent_tool_use_id": null,
+            "session_id": "s", "uuid": "u2"}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null,
+            "session_id": "s", "uuid": "u3", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "s1", "name": "SendMessage",
+                 "input": {"to": "a1", "message": "Say PINEAPPLE.", "summary": "relay"}}]}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null,
+            "session_id": "s", "uuid": "u4", "message": {"id": "m2", "content": [
+                {"type": "text", "text": "[Relay acknowledged]"}]}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype": "success",
+            "is_error": false, "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1,
+            "stop_reason": null, "total_cost_usd": 0, "usage": {}, "session_id": "s",
+            "uuid": "u5"}}),
+        serde_json::json!({"dir": "in", "msg": {"type": "control_request", "request_id": "stop-1",
+            "request": {"subtype": "stop_task", "task_id": "a1"}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "control_response", "response": {
+            "subtype": "success", "request_id": "stop-1", "response": {}}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "system", "subtype": "task_notification",
+            "task_id": "a1", "tool_use_id": "t1", "status": "stopped", "summary": "sleeper",
+            "session_id": "s", "uuid": "u6"}}),
+    ];
+    steps
+        .iter()
+        .map(|step| step.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn a_subagent_asks_through_the_parent_and_takes_a_faithful_relay() {
+    use vigie2::agents::{self, AgentState, RelayOutcome};
+
+    let text = "Say PINEAPPLE.";
+    let wrapped = agents::wrap("sleeper", "a1", text);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("relay.ndjson");
+    std::fs::write(&path, relay_script(&wrapped)).unwrap();
+    let mut harness = Harness::start(&path);
+
+    let HostEvent::AskQueued {
+        request_id,
+        agent_id,
+        ..
+    } = harness
+        .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(agent_id.as_deref(), Some("a1"));
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: false,
+    };
+    harness.session.answer(request_id, allow).await.unwrap();
+    let mut agents_view = harness.session.agents();
+    tokio::time::timeout(
+        TIMEOUT,
+        agents_view.wait_for(|agents| agents.iter().any(|agent| agent.task_id == "a1")),
+    )
+    .await
+    .expect("agent listed")
+    .unwrap();
+
+    assert!(
+        harness.session.relay("a9", text, None).await.is_err(),
+        "an agent the child did not start"
+    );
+    harness
+        .session
+        .relay("a1", text, Some("c1".into()))
+        .await
+        .unwrap();
+    let sent_seq = harness
+        .until(|event| match &event.body {
+            EventBody::Host(HostEvent::RelaySent {
+                text: sent,
+                client_id,
+                task_id,
+                agent_tool_use_id,
+                name,
+                wrapped: written,
+                ..
+            }) => {
+                assert_eq!(
+                    (sent.as_str(), client_id.as_deref(), task_id.as_str()),
+                    (text, Some("c1"), "a1")
+                );
+                assert_eq!(
+                    (agent_tool_use_id.as_str(), name.as_str()),
+                    ("t1", "sleeper")
+                );
+                assert_eq!(written, &wrapped);
+                Some(event.seq)
+            }
+            _ => None,
+        })
+        .await;
+    let checked = harness
+        .until_host(|host| matches!(host, HostEvent::RelayChecked { .. }))
+        .await;
+    assert_eq!(
+        checked,
+        HostEvent::RelayChecked {
+            relay_seq: sent_seq,
+            task_id: "a1".into(),
+            agent_tool_use_id: "t1".into(),
+            outcome: RelayOutcome::Faithful {
+                send_message: "s1".into()
+            },
+        }
+    );
+
+    harness.session.stop_task("a1").await.unwrap();
+    tokio::time::timeout(
+        TIMEOUT,
+        agents_view.wait_for(|agents| {
+            agents
+                .iter()
+                .any(|agent| agent.task_id == "a1" && agent.state == AgentState::Stopped)
+        }),
+    )
+    .await
+    .expect("agent stopped")
+    .unwrap();
+    harness.finish().await;
+    assert!(
+        agents_view.borrow().is_empty(),
+        "the agents end with their process"
+    );
+}
+
 /// A safety-check edit allowed for good: its allow carries no rule, and the next
 /// edit of the file, spelled in another case, is allowed by the host. A read of
 /// the same file is another kind: it asks, and its grant does send a Read rule.

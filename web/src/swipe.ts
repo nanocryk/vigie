@@ -45,13 +45,19 @@ export interface SwipeContext {
   dangerous: boolean;
   /** Sides a swipe can choose; a swipe toward another only cancels an arming. */
   sides: readonly Side[];
-  /** 2: the first swipe arms, the second fires. 1: a swipe fires at once. */
-  swipes: 1 | 2;
+  /** 2: the first swipe arms, the second fires. 1: a swipe fires at once. Can differ per side. */
+  swipes: SwipeCount | Readonly<Record<Side, SwipeCount>>;
   /** 2: the first press arms, the second fires. A dangerous choice always takes 2. */
   presses: 1 | 2;
 }
 
+export type SwipeCount = 1 | 2;
+
 export type SwipeRules = Omit<SwipeContext, "width">;
+
+function swipesFor(context: SwipeContext, side: Side): SwipeCount {
+  return typeof context.swipes === "number" ? context.swipes : context.swipes[side];
+}
 
 export const BOTH_SIDES: readonly Side[] = ["left", "right"];
 
@@ -101,7 +107,9 @@ function release(
   const armed = drag.armed;
   if (armed === null) {
     if (side === null || !context.sides.includes(side)) return idle;
-    return context.swipes === 1 ? { kind: "fired", side } : { kind: "armed", side, at: t };
+    return swipesFor(context, side) === 1
+      ? { kind: "fired", side }
+      : { kind: "armed", side, at: t };
   }
   if (side !== null) return confirm(armed, side, t, context);
   if (isTap(drag.dx, drag.dy)) return idle;

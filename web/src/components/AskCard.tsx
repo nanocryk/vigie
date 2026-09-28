@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, createContext, useContext, useMemo, useState } from "react";
 
 import { DiffBlock } from "@/components/Diff";
 import { Swipe } from "@/components/Swipe";
@@ -161,9 +161,19 @@ function CardFrame({
   queued: number;
   children: ReactNode;
 }) {
+  const goTo = useContext(GoToAgent);
   return (
     <section className="bg-card border-primary/40 max-h-[50%] shrink-0 overflow-y-auto border-t-2 px-3 py-3">
       <div className="mx-auto max-w-5xl space-y-3">
+        {goTo !== null && (
+          <button
+            type="button"
+            onClick={goTo.onGo}
+            className="border-primary text-primary voice-ui hover:bg-muted rounded-[5px] border px-2 py-1 text-xs"
+          >
+            Go to agent: {goTo.name}
+          </button>
+        )}
         {title !== null && (
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="voice-heading text-sm">{title}</h2>
@@ -453,11 +463,20 @@ function ApprovalCard({
   );
 }
 
+/** Switches to the discussion of the agent an ask belongs to, when another one is on screen. */
+export interface GoTo {
+  name: string;
+  onGo: () => void;
+}
+
+const GoToAgent = createContext<GoTo | null>(null);
+
 export function AskCard({
   submit,
   ask,
   queued,
   cwd,
+  goTo,
 }: {
   submit: SubmitAnswer;
   ask: PendingAsk;
@@ -465,11 +484,18 @@ export function AskCard({
   queued: number;
   /** The session folder; paths inside it show relative. */
   cwd: string | null;
+  /** Null when the ask belongs to the discussion on screen. */
+  goTo: GoTo | null;
 }) {
-  if (ask.toolName !== "AskUserQuestion") {
-    return <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} />;
-  }
-  return <DecisionCard submit={submit} ask={ask} queued={queued} />;
+  return (
+    <GoToAgent.Provider value={goTo}>
+      {ask.toolName !== "AskUserQuestion" ? (
+        <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} />
+      ) : (
+        <DecisionCard submit={submit} ask={ask} queued={queued} />
+      )}
+    </GoToAgent.Provider>
+  );
 }
 
 /** Questions. */

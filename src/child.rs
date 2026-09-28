@@ -38,7 +38,7 @@ const CARGO_RUN_ENV_PREFIX: &str = "CARGO_PKG_";
 /// Set to false so claude.ai connectors are not loaded; an unauthorized one otherwise gets reported by the model.
 const CONNECTORS_ENV: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
-const FLAGS: [&str; 10] = [
+const FLAGS: [&str; 11] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -49,6 +49,7 @@ const FLAGS: [&str; 10] = [
     "--permission-prompt-tool",
     "stdio",
     "--replay-user-messages",
+    "--forward-subagent-text",
 ];
 
 const LINE_BUFFER: usize = 1024;
@@ -340,6 +341,7 @@ mod tests {
         let new = args(Launch::New(id), None, &ModelSettings::default());
         assert_eq!(new[0], "-p");
         assert!(new.contains(&OsString::from("--replay-user-messages")));
+        assert!(new.contains(&OsString::from("--forward-subagent-text")));
         for absent in ["--permission-mode", "--model", "--effort"] {
             assert!(!new.contains(&OsString::from(absent)), "{absent}");
         }

@@ -259,6 +259,37 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             };
             (client_id, result.await)
         }
+        ClientMessage::Relay {
+            session,
+            task_id,
+            text,
+            rewarm,
+            client_id,
+        } => {
+            let tag = Some(client_id.clone());
+            let result = async {
+                if !rewarm {
+                    manager.ensure_warm(session).await?;
+                }
+                running(manager, session)
+                    .await?
+                    .relay(task_id, text, tag)
+                    .await
+            };
+            (client_id, result.await)
+        }
+        ClientMessage::StopTask {
+            session,
+            task_id,
+            client_id,
+        } => {
+            let result = async { running(manager, session).await?.stop_task(task_id).await };
+            (client_id, result.await)
+        }
+        ClientMessage::StopAgents { session, client_id } => {
+            let result = async { running(manager, session).await?.stop_agents().await };
+            (client_id, result.await)
+        }
         ClientMessage::Answer {
             session,
             request_id,

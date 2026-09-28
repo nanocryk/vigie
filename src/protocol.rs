@@ -47,6 +47,7 @@ pub enum System {
     HookStarted(HookStarted),
     HookResponse(HookResponse),
     TaskStarted(TaskStarted),
+    TaskProgress(TaskProgress),
     TaskUpdated(TaskUpdated),
     TaskNotification(TaskNotification),
     BackgroundTasksChanged(BackgroundTasksChanged),
@@ -131,6 +132,28 @@ pub struct TaskStarted {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_backgrounded: Option<bool>,
+    /// Set on a subagent (`task_type` `local_agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+    /// A subagent's brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    pub session_id: String,
+    pub uuid: String,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// A running task's progress, such as a subagent's latest tool call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskProgress {
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_name: Option<String>,
     pub session_id: String,
     pub uuid: String,
     #[serde(flatten)]
@@ -649,6 +672,12 @@ pub enum HostRequest {
         #[serde(flatten)]
         extra: Extra,
     },
+    /// Stops one task, such as a subagent.
+    StopTask {
+        task_id: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
     #[serde(untagged)]
     Other(Extra),
 }
@@ -1134,6 +1163,7 @@ mod tests {
         Interrupt,
         SetPermissionMode,
         GetUsage,
+        StopTask,
         Permission,
     }
 
@@ -1160,6 +1190,9 @@ mod tests {
             Answers::GetUsage => {
                 let typed: GetUsageResponse = assert_round_trip(payload, context);
                 assert!(typed.rate_limits.is_some(), "{context}: no rate_limits");
+            }
+            Answers::StopTask => {
+                assert_eq!(payload, &serde_json::json!({}), "{context}");
             }
             Answers::Permission => {
                 assert_round_trip::<PermissionResult>(payload, context);
@@ -1209,6 +1242,7 @@ mod tests {
                                         Answers::SetPermissionMode
                                     }
                                     HostRequest::GetUsage { .. } => Answers::GetUsage,
+                                    HostRequest::StopTask { .. } => Answers::StopTask,
                                     HostRequest::GetContextUsage { .. }
                                     | HostRequest::GetSettings { .. }
                                     | HostRequest::SetModel { .. }
@@ -1381,6 +1415,18 @@ mod tests {
             serde_json::to_value(&effort).unwrap(),
             serde_json::json!({"type": "control_request", "request_id": "r3",
                 "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": "high"}}}),
+        );
+        let stop = Outbound::ControlRequest(ControlRequest::new(
+            "r4",
+            HostRequest::StopTask {
+                task_id: "a1".into(),
+                extra: Extra::new(),
+            },
+        ));
+        assert_eq!(
+            serde_json::to_value(&stop).unwrap(),
+            serde_json::json!({"type": "control_request", "request_id": "r4",
+                "request": {"subtype": "stop_task", "task_id": "a1"}}),
         );
     }
 

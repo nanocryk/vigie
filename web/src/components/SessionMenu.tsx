@@ -124,6 +124,7 @@ export function SessionMenu({
   commandsEnabled,
   revoke,
   restartEnabled,
+  agents,
   onEntry,
   onCommands,
   onRestart,
@@ -140,6 +141,12 @@ export function SessionMenu({
   commandsEnabled: boolean;
   revoke: { enabled: boolean; busy: boolean; error: string | null; onRevoke: () => void };
   restartEnabled: boolean;
+  /** `summary` sits beside the entry; Stop all acts on every running agent at once. */
+  agents: {
+    summary: string;
+    onOpen: () => void;
+    stopAll: { enabled: boolean; busy: boolean; error: string | null; onStop: () => void };
+  };
   onEntry: (entry: MenuEntry | null) => void;
   onCommands: () => void;
   /** Opens the restart choices: resume, continue or blank. */
@@ -234,6 +241,28 @@ export function SessionMenu({
               </button>
             </Entry>
             <Entry>
+              <button type="button" onClick={agents.onOpen} className={`${ENTRY} hover:bg-muted`}>
+                <span>Agents</span>
+                <span className="text-muted-foreground truncate text-sm">{agents.summary}</span>
+              </button>
+            </Entry>
+            <Entry>
+              <button
+                type="button"
+                disabled={!agents.stopAll.enabled || agents.stopAll.busy}
+                onClick={agents.stopAll.onStop}
+                className={`${ENTRY} hover:bg-muted text-destructive flex-col items-start gap-0.5`}
+              >
+                <span>{agents.stopAll.busy ? "Stopping agents..." : "Stop all agents"}</span>
+                <span className="text-muted-foreground text-xs">
+                  Stops every running agent at once; the main agent goes on.
+                </span>
+              </button>
+              {agents.stopAll.error !== null && (
+                <p className="text-destructive voice-ui px-4 pb-2 text-xs">{agents.stopAll.error}</p>
+              )}
+            </Entry>
+            <Entry>
               <button
                 type="button"
                 disabled={!restartEnabled}
@@ -271,17 +300,22 @@ export function SessionMenu({
 
 const PILL = "voice-ui shrink-0 rounded-[5px] border px-2 leading-5 whitespace-nowrap disabled:opacity-60";
 
-/** The thin bar's mode and model pills; each opens the menu on its entry. */
+/** The thin bar's mode and model pills, each opening the menu on its entry, and the agents glance. */
 export function MenuPills({
   mode,
   modelLabel,
   enabled,
   onOpen,
+  agents,
+  onAgents,
 }: {
   mode: string | null;
   modelLabel: string;
   enabled: boolean;
   onOpen: (entry: MenuEntry) => void;
+  /** `2 agents working`; null hides the pill. */
+  agents: string | null;
+  onAgents: () => void;
 }) {
   return (
     <>
@@ -303,6 +337,15 @@ export function MenuPills({
       >
         {modelLabel}
       </button>
+      {agents !== null && (
+        <button
+          type="button"
+          onClick={onAgents}
+          className={`${PILL} bg-card border-primary text-primary`}
+        >
+          {agents}
+        </button>
+      )}
     </>
   );
 }

@@ -103,6 +103,64 @@ function RewarmWarning({
 }
 
 /**
+ * Replaces the composer when a message for an agent whose own cache went cold
+ * waits: relaying it makes the agent write its whole context to the cache again.
+ */
+export function AgentColdPanel({
+  name,
+  promptTokens,
+  text,
+  busy,
+  onRelay,
+  onCancel,
+}: {
+  name: string;
+  /** The agent's last prompt: what it caches again; 0 when unknown. */
+  promptTokens: number;
+  /** The message waiting. */
+  text: string;
+  busy: boolean;
+  onRelay: () => void;
+  onCancel: () => void;
+}) {
+  const size = promptTokens > 0 ? `about ${formatTokens(promptTokens)} tokens` : "its whole context";
+  return (
+    <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="mx-auto max-w-5xl space-y-3">
+        <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
+          <p className="voice-heading text-destructive text-base">
+            The cache of agent {name} is cold
+          </p>
+          <p className="voice-ui text-sm">
+            An agent's cache lasts 5 minutes after its last request. Relaying this message makes
+            it read {size} again at full price, charged against your 5h and 7d windows.
+          </p>
+          <p className="text-muted-foreground voice-ui truncate text-xs">Your message: {text}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRelay}
+              className="bg-destructive voice-ui rounded-[5px] px-4 py-2 text-sm text-black disabled:opacity-50"
+            >
+              Relay anyway
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+              className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
  * Replaces the composer and the ask card while the cache is cold, until a choice
  * is made, and the composer of an archived discussion, which any choice restores.
  * During a model or effort change (`settings`), its first choice resumes for free

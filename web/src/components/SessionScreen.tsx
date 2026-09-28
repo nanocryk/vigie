@@ -7,6 +7,14 @@ import {
   useState,
 } from "react";
 
+import {
+  type AgentEntry,
+  agentCold,
+  agentEntries,
+  goToAgent,
+  recentAgents,
+  workingLabel,
+} from "@/agents";
 import type { Client } from "@/client";
 import {
   CacheColdError,
@@ -31,8 +39,9 @@ import {
   panelStep,
   slashOpens,
 } from "@/commands";
+import { AgentsPanel } from "@/components/AgentsPanel";
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
-import { ColdPanel, useCacheGauge } from "@/components/ColdPanel";
+import { AgentColdPanel, ColdPanel, useCacheGauge } from "@/components/ColdPanel";
 import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
 import { DesktopSend, TouchSend } from "@/components/SendControls";
@@ -68,17 +77,30 @@ import {
   settingsPlan,
   shownEffort,
 } from "@/settings";
-import { type Item, emptyTranscript, parseTime } from "@/transcript";
+import { type TranscriptState, emptyTranscript, parseTime } from "@/transcript";
 
-/** Unsent composer text per session, kept while the app stays open. */
+/** Unsent composer text per discussion (`draftKey`), kept while the app stays open. */
 const drafts = new Map<string, string>();
 /** Per session, the last cold-cache choice and the spell it was made for. */
 const coldChoices = new Map<string, ColdChoiceMade>();
+/** Per session, the agent whose discussion is on screen; absent for the main one. */
+const viewed = new Map<string, string>();
 
-function sentClientIds(items: readonly Item[]): Set<string> {
+/** The draft slot of a session's main discussion, or of one of its agents. */
+function draftKey(session: string, agent: string | null): string {
+  return agent === null ? session : `${session}:${agent}`;
+}
+
+/** A send waiting for its `user_sent` or `relay_sent`, in the discussion it was typed in. */
+type ScopedSend = PendingSend & { scope: string | null };
+
+/** Client ids of the messages the server announced, in every discussion of the session. */
+function sentClientIds(transcript: TranscriptState): Set<string> {
   const ids = new Set<string>();
-  for (const item of items) {
-    if (item.kind === "user" && item.clientId !== null) ids.add(item.clientId);
+  for (const state of [transcript, ...transcript.scopes.values()]) {
+    for (const item of state.items) {
+      if (item.kind === "user" && item.clientId !== null) ids.add(item.clientId);
+    }
   }
   return ids;
 }
@@ -93,6 +115,7 @@ function errorMessage(err: unknown): string {
 
 function Composer({
   session,
+  placeholder,
   turnOpen,
   stopping,
   menuOpen,
@@ -102,7 +125,9 @@ function Composer({
   onMenu,
   onMenuToggle,
 }: {
+  /** The draft slot of the discussion on screen. */
   session: string;
+  placeholder: string;
   turnOpen: boolean;
   /** A stop was sent and awaits the server. */
   stopping: boolean;
@@ -182,7 +207,7 @@ function Composer({
         onChange={(event) => change(event.target.value)}
         onKeyDown={onKeyDown}
         enterKeyHint={coarse ? "enter" : "send"}
-        placeholder="Message Claude"
+        placeholder={placeholder}
         className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-14 min-w-0 flex-1 resize-none rounded-[5px] border px-3 py-4 text-sm outline-none focus:ring-2"
       />
       {coarse ? (
@@ -222,7 +247,7 @@ export function SessionScreen({
   const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
   const serverError = snapshot.sessionErrors.get(id) ?? null;
-  const [pending, setPending] = useState<PendingSend[]>([]);
+  const [pending, setPending] = useState<ScopedSend[]>([]);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const nextPending = useRef(0);
@@ -232,12 +257,35 @@ export function SessionScreen({
     return () => client.closeSession(id);
   }, [client, id]);
 
-  // A pending message leaves once the server's `user_sent` for one of its attempts is in.
-  const sent = sentClientIds(transcript.items);
-  const visiblePending = pending.filter((send) => !send.clientIds.some((cid) => sent.has(cid)));
+  // The agent whose discussion is on screen; null for the main one.
+  const [viewing, setViewing] = useState<string | null>(() => viewed.get(id) ?? null);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const switchTo = useCallback(
+    (agent: string | null) => {
+      if (agent === null) viewed.delete(id);
+      else viewed.set(id, agent);
+      setViewing(agent);
+      setAgentsOpen(false);
+    },
+    [id],
+  );
+  const entries: AgentEntry[] = agentEntries(view?.agents ?? [], transcript.agents);
+  const agent = viewing === null ? null : (entries.find((entry) => entry.toolUseId === viewing) ?? null);
+  const shown = viewing === null ? transcript : (transcript.scopes.get(viewing) ?? emptyTranscript);
+  const draftSlot = draftKey(id, viewing);
+  /** A relay to an agent whose cache went cold, waiting for its confirmation. */
+  const [agentColdSend, setAgentColdSend] = useState<{ text: string; rewarm: boolean } | null>(
+    null,
+  );
+  useEffect(() => setAgentColdSend(null), [viewing]);
+
+  // A pending message leaves once the server's `user_sent` or `relay_sent` for one of its attempts is in.
+  const sent = sentClientIds(transcript);
+  const unsent = pending.filter((send) => !send.clientIds.some((cid) => sent.has(cid)));
   useEffect(() => {
-    if (visiblePending.length !== pending.length) setPending(visiblePending);
-  }, [visiblePending, pending.length]);
+    if (unsent.length !== pending.length) setPending(unsent);
+  }, [unsent, pending.length]);
+  const visiblePending = unsent.filter((send) => send.scope === viewing);
 
   const patch = (sendId: string, change: Partial<PendingSend>) =>
     setPending((list) => list.map((send) => (send.id === sendId ? { ...send, ...change } : send)));
@@ -259,13 +307,33 @@ export function SessionScreen({
     if (err instanceof CacheColdError) setRefusedAt(Date.now());
   };
 
+  /** A send to the main agent, or a relay to the agent of `scope`. */
   const deliver = (
     sendId: string,
+    scope: string | null,
     text: string,
     clientId: string,
     fields: { rewarm?: true },
   ) => {
-    client.command({ type: "send", session: id, text, ...fields, client_id: clientId }).then(
+    const target = scope === null ? null : entries.find((entry) => entry.toolUseId === scope);
+    let command: Promise<void>;
+    if (scope === null) {
+      command = client.command({ type: "send", session: id, text, ...fields, client_id: clientId });
+    } else if (target?.live !== true || target.taskId === null) {
+      command = Promise.reject(
+        new Error("This agent is not in the running Claude process: nothing can reach it"),
+      );
+    } else {
+      command = client.command({
+        type: "relay",
+        session: id,
+        task_id: target.taskId,
+        text,
+        ...fields,
+        client_id: clientId,
+      });
+    }
+    command.then(
       () => patch(sendId, { status: "sent" }),
       (err: unknown) => {
         noteRefusal(err);
@@ -289,24 +357,36 @@ export function SessionScreen({
         throw err;
       });
 
-  const send = (text: string, fields: { rewarm?: true } = rewarm) => {
+  /** Sends to the discussion `scope` (null: the main one); `send` sends to the one on screen. */
+  const sendTo = (scope: string | null, text: string, fields: { rewarm?: true }) => {
     nextPending.current += 1;
     const clientId = client.newClientId();
-    const entry: PendingSend = {
+    const entry: ScopedSend = {
       id: String(nextPending.current),
       text,
       clientIds: [clientId],
       status: "sending",
       error: null,
+      scope,
     };
     setPending((list) => [...list, entry]);
-    deliver(entry.id, text, clientId, fields);
+    deliver(entry.id, scope, text, clientId, fields);
+  };
+
+  /** In an agent's view, a relay; one to an agent whose cache went cold waits for a confirmation. */
+  const send = (text: string, fields: { rewarm?: true } = rewarm) => {
+    if (agent !== null && agent.live && agentCold(agent, Date.now())) {
+      setAgentColdSend({ text, rewarm: fields.rewarm === true });
+      return;
+    }
+    sendTo(viewing, text, fields);
   };
 
   const retry = (entry: PendingSend) => {
     const clientId = client.newClientId();
+    const scope = pending.find((send) => send.id === entry.id)?.scope ?? null;
     patch(entry.id, { status: "sending", error: null, clientIds: [...entry.clientIds, clientId] });
-    deliver(entry.id, entry.text, clientId, rewarm);
+    deliver(entry.id, scope, entry.text, clientId, rewarm);
   };
 
   const dismiss = (entry: PendingSend) =>
@@ -429,7 +509,7 @@ export function SessionScreen({
         if (then.kind === "rewarm") {
           if (then.text !== null) {
             drafts.delete(id);
-            send(then.text, { rewarm: true });
+            sendTo(null, then.text, { rewarm: true });
           }
           return;
         }
@@ -474,15 +554,15 @@ export function SessionScreen({
       case "none":
         return;
       case "draft":
-        if (effect.text === "") drafts.delete(id);
-        else drafts.set(id, effect.text);
+        if (effect.text === "") drafts.delete(draftSlot);
+        else drafts.set(draftSlot, effect.text);
         return;
       case "send":
-        if (effect.consumeDraft) drafts.delete(id);
-        send(effect.text);
+        if (effect.consumeDraft) drafts.delete(draftSlot);
+        sendTo(null, effect.text, rewarm);
         return;
       case "own":
-        if (effect.consumeDraft) drafts.delete(id);
+        if (effect.consumeDraft) drafts.delete(draftSlot);
         runOwn(effect.command);
         return;
     }
@@ -541,12 +621,45 @@ export function SessionScreen({
       .finally(() => setRevoking(false));
   };
 
-  // Escape closes the menu, else the commands panel, else stops a running turn.
+  const liveAgents = view?.agents ?? [];
+  const [stoppingAgents, setStoppingAgents] = useState(false);
+  const [stopAgentsError, setStopAgentsError] = useState<string | null>(null);
+  const stopAllAgents = () => {
+    setStoppingAgents(true);
+    setStopAgentsError(null);
+    client
+      .command({ type: "stop_agents", session: id, client_id: client.newClientId() })
+      .then(
+        () => setMenu(closedMenu),
+        (err: unknown) => setStopAgentsError(errorMessage(err)),
+      )
+      .finally(() => setStoppingAgents(false));
+  };
+  const stopAgent = (taskId: string) =>
+    client.command({ type: "stop_task", session: id, task_id: taskId, client_id: client.newClientId() });
+  const openAgents = () => {
+    setMenu(closedMenu);
+    setPanel(closedPanel);
+    setAgentsOpen(true);
+  };
+  const cancelAgentCold = () => {
+    if (agentColdSend !== null) drafts.set(draftSlot, agentColdSend.text);
+    setAgentColdSend(null);
+  };
+  const confirmAgentCold = () => {
+    if (agentColdSend === null) return;
+    sendTo(viewing, agentColdSend.text, agentColdSend.rewarm ? { rewarm: true } : {});
+    setAgentColdSend(null);
+  };
+  const askGoTo = ask === undefined ? null : goToAgent(ask, viewing, entries);
+
+  // Escape closes the menu, else the commands panel, else the agents panel, else stops a running turn.
   const escape = useRef(() => {});
   useLayoutEffect(() => {
     escape.current = () => {
       if (menu.kind === "open") setMenu(closedMenu);
       else if (panel.kind !== "closed") setPanel(closedPanel);
+      else if (agentsOpen) setAgentsOpen(false);
       else if (transcript.turnOpen && !stopping) stop();
     };
   });
@@ -568,8 +681,11 @@ export function SessionScreen({
       coldChoices.set(id, made);
       setChosen(made);
     };
-    const draft = drafts.get(id) ?? "";
+    // A draft typed for an agent goes with a rewarm, as a relay; a restart ends
+    // the agents, so the new session starts without it.
+    const draft = drafts.get(draftSlot) ?? "";
     const action = archived ? archivedAction(choice, draft) : coldAction(choice, draft);
+    const restartText = action.kind === "restart" && viewing === null ? action.text : null;
     setColdError(null);
     switch (action.kind) {
       case "unblock":
@@ -583,7 +699,7 @@ export function SessionScreen({
           .finally(() => setChoosing(false));
         return;
       case "send":
-        drafts.delete(id);
+        drafts.delete(draftSlot);
         settle();
         send(action.text, { rewarm: true });
         return;
@@ -594,12 +710,12 @@ export function SessionScreen({
             type: "restart",
             session: id,
             mode: action.mode,
-            ...(action.text === null ? {} : { text: action.text }),
+            ...(restartText === null ? {} : { text: restartText }),
             client_id: client.newClientId(),
           })
           .then(
             () => {
-              drafts.delete(id);
+              if (restartText !== null) drafts.delete(draftSlot);
               settle();
             },
             (err: unknown) => setColdError(errorMessage(err)),
@@ -628,11 +744,31 @@ export function SessionScreen({
           </>
         }
         usage={snapshot.usage}
-        column={<SessionColumn session={view} />}
+        column={
+          <SessionColumn
+            session={view}
+            {...(viewing === null ? {} : { agent: { cache: agent?.cache ?? null } })}
+          />
+        }
         info={
           <>
+            {viewing !== null && (
+              <button
+                type="button"
+                onClick={() => switchTo(null)}
+                className="text-primary hover:bg-muted mr-1 rounded-[5px] px-1"
+              >
+                &lsaquo; main
+              </button>
+            )}
             <span>{view === null ? "..." : folderName(view.cwd)}</span>
-            {view !== null && (
+            {viewing !== null && (
+              <span>
+                {" "}
+                &rsaquo; {agent?.name ?? transcript.agents.get(viewing)?.name ?? "agent"}
+              </span>
+            )}
+            {view !== null && viewing === null && (
               <span className="text-muted-foreground">
                 {" "}
                 {busy ? "working" : archived ? "archived" : stateLabel(view.state)}
@@ -646,6 +782,8 @@ export function SessionScreen({
             modelLabel={modelPillLabel(modelLabel, effort)}
             enabled={controlsEnabled}
             onOpen={toggleMenu}
+            agents={workingLabel(liveAgents)}
+            onAgents={() => (agentsOpen ? setAgentsOpen(false) : openAgents())}
           />
         }
         label={label}
@@ -656,17 +794,19 @@ export function SessionScreen({
       )}
 
       <TranscriptView
+        key={viewing ?? "main"}
         loading={!snapshot.transcripts.has(id)}
         firstSeq={transcript.firstSeq}
         beginning={history?.beginning ?? "loaded"}
         request={history?.request ?? "idle"}
         onNearTop={loadEarlier}
-        items={transcript.items}
+        items={shown.items}
         pending={visiblePending}
         onRetry={retry}
         onDismiss={dismiss}
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
-        turnOpen={transcript.turnOpen}
+        turnOpen={shown.turnOpen}
+        onOpen={switchTo}
         panel={
           panel.kind !== "closed" ? (
             <CommandsPanel
@@ -719,12 +859,30 @@ export function SessionScreen({
               }}
               restartEnabled={controlsEnabled && !choosingSettings}
               onRestart={startRestart}
+              agents={{
+                summary: workingLabel(liveAgents) ?? `${entries.length} known`,
+                onOpen: openAgents,
+                stopAll: {
+                  enabled: liveAgents.some((running) => running.state === "running"),
+                  busy: stoppingAgents,
+                  error: stopAgentsError,
+                  onStop: stopAllAgents,
+                },
+              }}
               onEntry={(entry) => setMenu({ kind: "open", entry })}
               onCommands={() => {
                 setMenu(closedMenu);
                 panelEvent({ type: "open_tab" });
               }}
               onClose={() => setMenu(closedMenu)}
+            />
+          ) : agentsOpen ? (
+            <AgentsPanel
+              entries={recentAgents(entries, viewing, Date.now())}
+              viewing={viewing}
+              onSwitch={switchTo}
+              onStop={stopAgent}
+              onClose={() => setAgentsOpen(false)}
             />
           ) : undefined
         }
@@ -734,7 +892,7 @@ export function SessionScreen({
         <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
           <CommandField
             state={panel}
-            draftKept={panel.source === "tab" && (drafts.get(id) ?? "").trim() !== ""}
+            draftKept={panel.source === "tab" && (drafts.get(draftSlot) ?? "").trim() !== ""}
             onFilter={(text) => panelEvent({ type: "filter", text })}
             onArgument={(text) => panelEvent({ type: "argument", text })}
             onSend={() => panelEvent({ type: "send" })}
@@ -746,7 +904,7 @@ export function SessionScreen({
           key={flow.kind === "closed" ? "cold" : "settings"}
           archived={archived}
           context={view?.context ?? null}
-          draft={drafts.get(id) ?? ""}
+          draft={drafts.get(draftSlot) ?? ""}
           askWaiting={ask !== undefined}
           busy={choosing || flow.kind === "applying"}
           error={coldError}
@@ -773,9 +931,24 @@ export function SessionScreen({
               ask={ask}
               queued={asks.length - 1}
               cwd={view?.cwd ?? null}
+              goTo={
+                askGoTo === null
+                  ? null
+                  : { name: askGoTo.name, onGo: () => switchTo(askGoTo.toolUseId) }
+              }
             />
           )}
 
+          {agentColdSend !== null && agent !== null ? (
+            <AgentColdPanel
+              name={agent.name}
+              promptTokens={agent.promptTokens}
+              text={agentColdSend.text}
+              busy={false}
+              onRelay={confirmAgentCold}
+              onCancel={cancelAgentCold}
+            />
+          ) : (
           <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
             {commandError !== null && (
               <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">{commandError}</p>
@@ -786,7 +959,13 @@ export function SessionScreen({
               </p>
             )}
             <Composer
-              session={id}
+              key={draftSlot}
+              session={draftSlot}
+              placeholder={
+                viewing === null
+                  ? "Message Claude"
+                  : `Message ${agent?.name ?? "the agent"}, relayed by the main agent`
+              }
               turnOpen={transcript.turnOpen}
               stopping={stopping}
               menuOpen={menu.kind === "open"}
@@ -804,6 +983,7 @@ export function SessionScreen({
               }
             />
           </footer>
+          )}
         </>
       )}
     </>

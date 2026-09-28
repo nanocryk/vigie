@@ -20,6 +20,7 @@ import {
   type Delivery,
   type Item,
   type ToolStatus,
+  relayFailureText,
   restartLabel,
   toolTimeVisible,
 } from "@/transcript";
@@ -252,8 +253,11 @@ const ItemView = memo(function ItemView({
   toolTime,
   awaiting,
   thinkingNow,
+  onOpen,
 }: {
   item: Item;
+  /** Switches to an agent's discussion, or to the main one with null. */
+  onOpen: (toolUseId: string | null) => void;
   last: boolean;
   /** A thinking item that is the latest of a running turn: animated; an empty one is hidden otherwise. */
   thinkingNow: boolean;
@@ -273,6 +277,11 @@ const ItemView = memo(function ItemView({
           <UserBubble>
             <BubbleBody text={item.text} time={item.time} now={now} />
           </UserBubble>
+          {item.relayed === true && (
+            <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
+              via main agent
+            </div>
+          )}
           {label !== null && (
             <div
               className={`text-muted-foreground voice-ui px-1 text-xs ${item.delivery === "handled" ? "text-left" : "text-right"}`}
@@ -334,6 +343,44 @@ const ItemView = memo(function ItemView({
         </details>
       );
     }
+    case "agent":
+      return (
+        <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>
+          <span className="voice-code text-primary w-7 shrink-0 text-xs">&#x2192;</span>
+          <span className="voice-ui min-w-0 truncate">Agent created: {item.name}</span>
+          <button
+            type="button"
+            onClick={() => onOpen(item.toolUseId)}
+            className="text-primary voice-ui ml-auto shrink-0 rounded-[5px] border px-2 text-xs"
+          >
+            Open
+          </button>
+        </div>
+      );
+    case "brief":
+      return (
+        <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
+          <summary className={TOOL_SUMMARY}>
+            <span className="voice-code text-muted-foreground w-7 shrink-0 text-xs">&#x2190;</span>
+            <span className="voice-ui shrink-0">Brief</span>
+            <span className="voice-code text-muted-foreground min-w-0 truncate">{item.text}</span>
+          </summary>
+          <pre className={`${PANEL} mt-1 mr-2 ml-9`}>{item.text}</pre>
+        </details>
+      );
+    case "relay_failed":
+      return (
+        <div className="text-destructive voice-ui flex flex-wrap items-baseline justify-center gap-2 px-1 text-xs">
+          <span>{relayFailureText(item.reason)}</span>
+          <button
+            type="button"
+            onClick={() => onOpen(null)}
+            className="border-destructive rounded-[5px] border px-2"
+          >
+            Go to main discussion
+          </button>
+        </div>
+      );
     case "restart": {
       const bar = "bg-muted text-foreground voice-ui block px-3 py-1.5 text-center text-xs";
       return (
@@ -402,12 +449,13 @@ export function TranscriptView({
   beginning,
   request,
   onNearTop,
-  items,
+  items: allItems,
   pending,
   onRetry,
   onDismiss,
   awaiting,
   turnOpen,
+  onOpen,
   overlay,
   panel,
 }: {
@@ -427,6 +475,8 @@ export function TranscriptView({
   awaiting: ReadonlySet<string>;
   /** A turn is running. */
   turnOpen: boolean;
+  /** Switches to an agent's discussion, or to the main one with null; kept stable. */
+  onOpen: (toolUseId: string | null) => void;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
   /** In front of the discussion, positioned by itself. */
@@ -441,6 +491,7 @@ export function TranscriptView({
   const nearTop = useRef(onNearTop);
   const [showJump, setShowJump] = useState(false);
   const now = useNow();
+  const items = useMemo(() => allItems.filter((item) => item.hidden !== true), [allItems]);
 
   useLayoutEffect(() => {
     nearTop.current = onNearTop;
@@ -587,6 +638,7 @@ export function TranscriptView({
             <ItemView
               key={item.key}
               item={item}
+              onOpen={onOpen}
               last={index === lastUser && pending.length === 0}
               now={now}
               toolTime={item.kind === "tool" && toolTimeVisible(items, index)}

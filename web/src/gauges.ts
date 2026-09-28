@@ -9,7 +9,7 @@ import type {
 
 /** Past this age the account readings no longer describe the present. */
 export const STALE_AFTER_MS = 10 * 60_000;
-/** Under this much TTL left, the cache bar warns. */
+/** Under this much TTL left, or a sixth of a shorter TTL, the cache bar warns. */
 export const CACHE_LOW_MS = 10 * 60_000;
 const PROJECTION_OPACITY: Record<Confidence, number> = { low: 0.45, medium: 0.65, high: 0.85 };
 export type Tone = "ok" | "warning" | "critical";
@@ -108,7 +108,7 @@ export function cacheGauge(
     remainingMs,
     coldAt,
     ttlMs,
-    low: remainingMs < CACHE_LOW_MS,
+    low: remainingMs < Math.min(CACHE_LOW_MS, ttlMs / 6),
   };
 }
 

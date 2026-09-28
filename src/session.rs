@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::agents::{self, AgentState, AgentTracker, AgentView, RelayFilter, RelayOutcome};
 use crate::child::{Child, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
 use crate::grant::{self, FileOffer, FolderOffer};
@@ -108,10 +109,13 @@ pub enum HostEvent {
         accept_edits: bool,
         /// The folder the CLI suggests granting for the session.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        folder: Option<FolderOffer>,
+        folder: Option<Box<FolderOffer>>,
         /// The file of a Read or edit-tool ask, which the allow can grant.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<FileOffer>,
+        /// Task id of the subagent asking; `None` for the main agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
     },
     /// An ask on a granted file, allowed by the host without queueing it.
     AutoAllowed {
@@ -119,6 +123,28 @@ pub enum HostEvent {
         tool_name: String,
         tool_use_id: String,
         file: FileOffer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
+    /// A message for a subagent, about to be written to the main agent as `wrapped`.
+    RelaySent {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        task_id: String,
+        /// The Agent call that started the agent.
+        agent_tool_use_id: String,
+        name: String,
+        wrapped: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mid_turn: bool,
+    },
+    /// How the main agent handled the relay whose `RelaySent` has seq `relay_seq`.
+    RelayChecked {
+        relay_seq: u64,
+        task_id: String,
+        agent_tool_use_id: String,
+        outcome: RelayOutcome,
     },
     AskResolved {
         request_id: String,
@@ -372,6 +398,12 @@ enum Command {
         answer: Answer,
         reply: oneshot::Sender<Result<()>>,
     },
+    Relay {
+        task_id: String,
+        text: String,
+        client_id: Option<String>,
+        reply: oneshot::Sender<Result<()>>,
+    },
     Stop(Option<StopReason>),
 }
 
@@ -382,6 +414,7 @@ pub struct Session {
     commands: mpsc::Sender<Command>,
     events: broadcast::Sender<Arc<Event>>,
     status: watch::Receiver<LiveStatus>,
+    agents: watch::Receiver<Vec<AgentView>>,
     launch_settings: ModelSettings,
     /// Set once a model or effort change was sent to the child.
     retuned: Arc<AtomicBool>,
@@ -405,6 +438,7 @@ impl Session {
         let launch_settings = config.settings.clone();
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
         let (status_sender, status) = watch::channel(LiveStatus::default());
+        let (agents_sender, agents) = watch::channel(Vec::new());
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let actor = Actor {
             id: config.id,
@@ -418,6 +452,9 @@ impl Session {
             seq: config.last_seq,
             status: status_sender,
             tracker: ActivityTracker::default(),
+            agents: AgentTracker::default(),
+            agents_view: agents_sender,
+            relays: RelayFilter::default(),
             asks: Vec::new(),
             file_grants: Vec::new(),
             requests: HashMap::new(),
@@ -435,6 +472,7 @@ impl Session {
             commands,
             events,
             status,
+            agents,
             launch_settings,
             retuned: Arc::new(AtomicBool::new(false)),
         };
@@ -457,6 +495,57 @@ impl Session {
 
     pub fn status(&self) -> watch::Receiver<LiveStatus> {
         self.status.clone()
+    }
+
+    /// The subagents the child started, oldest first; republished on every change.
+    pub fn agents(&self) -> watch::Receiver<Vec<AgentView>> {
+        self.agents.clone()
+    }
+
+    /// Writes `agents::wrap` of `text` to the main agent for agent `task_id`,
+    /// after a `RelaySent` event; fails for an agent the child did not start.
+    pub async fn relay(
+        &self,
+        task_id: impl Into<String>,
+        text: impl Into<String>,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let (task_id, text) = (task_id.into(), text.into());
+        self.call(|reply| Command::Relay {
+            task_id,
+            text,
+            client_id,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn stop_task(&self, task_id: impl Into<String>) -> Result<()> {
+        self.control::<Value>(HostRequest::StopTask {
+            task_id: task_id.into(),
+            extra: Extra::new(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Stops every running agent; the first failure is returned after trying them all.
+    pub async fn stop_agents(&self) -> Result<()> {
+        let running: Vec<String> = self
+            .agents
+            .borrow()
+            .iter()
+            .filter(|agent| agent.state == AgentState::Running)
+            .map(|agent| agent.task_id.clone())
+            .collect();
+        let mut first_error = None;
+        for task_id in running {
+            if let Err(err) = self.stop_task(&task_id).await {
+                tracing::warn!("stop agent {task_id}: {err:#}");
+                first_error.get_or_insert(err);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Resolves once the message is written to the child. `client_id` is echoed in
@@ -651,6 +740,9 @@ struct Actor {
     seq: u64,
     status: watch::Sender<LiveStatus>,
     tracker: ActivityTracker,
+    agents: AgentTracker,
+    agents_view: watch::Sender<Vec<AgentView>>,
+    relays: RelayFilter,
     /// In arrival order.
     asks: Vec<PendingAsk>,
     /// Files allowed with `always_for_file`; their later asks are answered here.
@@ -731,8 +823,32 @@ impl Actor {
         if let EventBody::Line(line) = &event.body
             && let Some(parsed) = &line.parsed
         {
+            if self.agents.on_line(parsed, event.time) {
+                self.publish_agents();
+            }
+            for verdict in self.relays.on_line(parsed) {
+                self.emit_verdict(verdict);
+            }
             self.handle_line(parsed).await;
         }
+    }
+
+    fn publish_agents(&mut self) {
+        let agents = self.agents.agents().to_vec();
+        self.agents_view.send_if_modified(|current| {
+            let changed = *current != agents;
+            *current = agents;
+            changed
+        });
+    }
+
+    fn emit_verdict(&mut self, verdict: agents::RelayVerdict) {
+        self.emit_host(HostEvent::RelayChecked {
+            relay_seq: verdict.relay_seq,
+            task_id: verdict.task_id,
+            agent_tool_use_id: verdict.agent_tool_use_id,
+            outcome: verdict.outcome,
+        });
     }
 
     async fn handle_line(&mut self, line: &Inbound) {
@@ -772,11 +888,16 @@ impl Actor {
         match &request.request {
             CliRequest::CanUseTool(ask) => {
                 let file = FileOffer::of(ask, &self.cwd);
+                let agent_id = ask
+                    .agent_id
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 if let Some(granted) = file
                     .as_ref()
                     .filter(|file| self.file_grants.iter().any(|grant| grant.same(file)))
                 {
-                    self.auto_allow(&request.request_id, ask, granted.clone())
+                    self.auto_allow(&request.request_id, ask, granted.clone(), agent_id)
                         .await;
                     return;
                 }
@@ -790,8 +911,9 @@ impl Actor {
                     tool_use_id: ask.tool_use_id.clone(),
                     danger: danger::classify(ask, &self.cwd),
                     accept_edits: grant::offers_accept_edits(ask),
-                    folder: grant::folder_offer(ask, dirs::home_dir().as_deref()),
+                    folder: grant::folder_offer(ask, dirs::home_dir().as_deref()).map(Box::new),
                     file,
+                    agent_id,
                 });
                 self.publish_status();
             }
@@ -934,6 +1056,14 @@ impl Actor {
             } => {
                 let _ = reply.send(self.answer(request_id, answer).await);
             }
+            Command::Relay {
+                task_id,
+                text,
+                client_id,
+                reply,
+            } => {
+                let _ = reply.send(self.relay(task_id, text, client_id).await);
+            }
             Command::Stop(reason) => self.begin_stop(reason),
         }
     }
@@ -963,6 +1093,38 @@ impl Actor {
             message = message.with_priority(priority);
         }
         self.write(Outbound::User(message)).await?;
+        self.tracker.on_send();
+        self.publish_status();
+        Ok(())
+    }
+
+    async fn relay(
+        &mut self,
+        task_id: String,
+        text: String,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let agent = self
+            .agents
+            .find(&task_id)
+            .ok_or_else(|| anyhow!("no agent {task_id} in this Claude process"))?;
+        let (name, agent_tool_use_id) = (agent.name.clone(), agent.tool_use_id.clone());
+        let wrapped = agents::wrap(&name, &task_id, &text);
+        // Emitted before the write, so it precedes the CLI's echo in seq order.
+        let sent = self.emit(EventBody::Host(HostEvent::RelaySent {
+            text: text.clone(),
+            client_id,
+            task_id: task_id.clone(),
+            agent_tool_use_id: agent_tool_use_id.clone(),
+            name,
+            wrapped: wrapped.clone(),
+            mid_turn: self.tracker.turn(),
+        }));
+        self.relays
+            .sent(sent.seq, task_id, agent_tool_use_id, text, wrapped.clone());
+        let session_id = self.launch.claude_session_id().to_string();
+        self.write(Outbound::User(UserMessage::text(session_id, wrapped)))
+            .await?;
         self.tracker.on_send();
         self.publish_status();
         Ok(())
@@ -1003,7 +1165,13 @@ impl Actor {
         Ok(())
     }
 
-    async fn auto_allow(&mut self, request_id: &str, ask: &CanUseTool, file: FileOffer) {
+    async fn auto_allow(
+        &mut self,
+        request_id: &str,
+        ask: &CanUseTool,
+        file: FileOffer,
+        agent_id: Option<String>,
+    ) {
         let result = PermissionResult::allow(ask.input.clone());
         let response = ControlResponse::permission(request_id.to_string(), &result);
         if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
@@ -1015,6 +1183,7 @@ impl Actor {
             tool_name: ask.tool_name.clone(),
             tool_use_id: ask.tool_use_id.clone(),
             file,
+            agent_id,
         });
     }
 
@@ -1075,6 +1244,11 @@ impl Actor {
         self.tracker = ActivityTracker::default();
         self.asks.clear();
         self.publish_status();
+        for verdict in self.relays.end() {
+            self.emit_verdict(verdict);
+        }
+        self.agents = AgentTracker::default();
+        self.publish_agents();
         self.requests.clear();
         self.mode_requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();
@@ -1292,6 +1466,7 @@ mod tests {
             accept_edits: false,
             folder: None,
             file: None,
+            agent_id: None,
         };
         assert_eq!(
             serde_json::to_value(&queued).unwrap(),
@@ -1303,7 +1478,7 @@ mod tests {
             "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
         .unwrap();
         assert!(matches!(stored, HostEvent::AskQueued {
-            danger, accept_edits: false, folder: None, file: None, ..
+            danger, accept_edits: false, folder: None, file: None, agent_id: None, ..
         } if danger == Danger::default()));
     }
 

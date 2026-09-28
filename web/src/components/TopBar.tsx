@@ -17,7 +17,14 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
-import type { Confidence, ContextView, SessionView, UsageSnapshot, WindowReport } from "@/wire";
+import type {
+  CacheView,
+  Confidence,
+  ContextView,
+  SessionView,
+  UsageSnapshot,
+  WindowReport,
+} from "@/wire";
 
 const TWEEN_MS = 700;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
@@ -239,9 +246,19 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
   }
 }
 
-export function SessionColumn({ session }: { session: SessionView | null }) {
+/** `agent` set: the cache bar is that agent's, from its own last request. */
+export function SessionColumn({
+  session,
+  agent,
+}: {
+  session: SessionView | null;
+  agent?: { cache: CacheView | null };
+}) {
   const now = useClock(1000);
-  const gauge = cacheGauge(session?.cache ?? null, now, session?.updated_at ?? null);
+  const gauge =
+    agent === undefined
+      ? cacheGauge(session?.cache ?? null, now, session?.updated_at ?? null)
+      : cacheGauge(agent.cache, now);
   return (
     <div className="min-w-0">
       <ContextRow context={session?.context ?? null} />

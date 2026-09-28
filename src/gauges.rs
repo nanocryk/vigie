@@ -39,6 +39,11 @@ impl MainRequest {
         if line.parent_tool_use_id.is_some() {
             return None;
         }
+        Self::from_any_assistant(line)
+    }
+
+    /// Like `from_assistant`, subagent lines included.
+    pub fn from_any_assistant(line: &AssistantMessage) -> Option<Self> {
         let usage: Usage = serde_json::from_value(line.message.extra.get("usage")?.clone()).ok()?;
         let prompt_tokens =
             usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;

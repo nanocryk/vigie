@@ -1,4 +1,5 @@
 import {
+  type AgentState,
   type CliLine,
   type CommandInfo,
   type ContentBlock,
@@ -8,6 +9,7 @@ import {
   type FolderOffer,
   type GateFailure,
   type HostEvent,
+  type RelayFailure,
   type RestartMode,
   type StopReason,
   type WireEvent,
@@ -28,10 +30,22 @@ export type Delivery = "on_host" | "received" | "handled";
  * began: the server sending a user message, the first text of a Claude bubble,
  * the tool call line.
  */
-export type Item = { time: number | null } & ItemBody;
+export type Item = {
+  time: number | null;
+  /** Not shown: the parts of a faithful relay in the main discussion. */
+  hidden?: true;
+} & ItemBody;
 
 type ItemBody =
-  | { kind: "user"; key: string; text: string; delivery: Delivery; clientId: string | null }
+  | {
+      kind: "user";
+      key: string;
+      text: string;
+      delivery: Delivery;
+      clientId: string | null;
+      /** Typed in an agent's view and passed on by the main agent. */
+      relayed?: true;
+    }
   | { kind: "claude"; key: string; text: string; streaming: boolean }
   | { kind: "thinking"; key: string; text: string }
   | {
@@ -51,7 +65,65 @@ type ItemBody =
       attached: string | null;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
-  | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null };
+  | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null }
+  /** An Agent call: the one line its agent shows in the discussion that started it. */
+  | { kind: "agent"; key: string; toolUseId: string; name: string }
+  /** The prompt an agent was started with, first in its own view. */
+  | { kind: "brief"; key: string; text: string }
+  /** The main agent did not pass a relayed message on as asked. */
+  | { kind: "relay_failed"; key: string; reason: RelayFailure };
+
+/** What an agent's view knows of it from the lines: its Agent call and task. */
+export interface AgentInfo {
+  /** The Agent call; the agent's lines carry it as `parent_tool_use_id`. */
+  toolUseId: string;
+  /** Null until its `task_started`. */
+  taskId: string | null;
+  name: string;
+  /** The Agent call of the agent that started it; null for the main agent. */
+  parentToolUseId: string | null;
+  /** Null until a task line reported it. */
+  state: AgentState | null;
+  /** Time of its latest line, its Agent call's or a task line's included. */
+  lastActive: number | null;
+}
+
+/** Tools starting a subagent. */
+const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+const LOCAL_AGENT = "local_agent";
+/** The main agent's whole reply once it forwarded a relayed message. */
+export const RELAY_ACK = "[Relay acknowledged]";
+
+export function agentStateOf(status: string | null): AgentState | null {
+  switch (status) {
+    case "running":
+    case "pending":
+      return "running";
+    case "completed":
+      return "completed";
+    case "stopped":
+    case "killed":
+      return "stopped";
+    case "failed":
+    case "error":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+const RELAY_FAILURE_TEXT: Record<RelayFailure, string> = {
+  altered: "the main agent passed on a different text",
+  other_recipient: "the main agent sent it to another agent",
+  not_forwarded: "the main agent did not pass it on",
+  no_acknowledgement: "the main agent did not confirm it",
+  ended: "the Claude process stopped first",
+  unknown: "the main agent did not relay it as asked",
+};
+
+export function relayFailureText(reason: RelayFailure): string {
+  return `Relay failed: ${RELAY_FAILURE_TEXT[reason]}. See the main discussion.`;
+}
 
 export function restartLabel(item: { mode: RestartMode; exchanges: number }): string {
   if (item.mode === "clear") return "Cleared";
@@ -86,6 +158,8 @@ export interface PendingAsk {
   folder: FolderOffer | null;
   /** The file an allow can grant for good. */
   file: FileOffer | null;
+  /** Task id of the subagent asking; null for the main agent. */
+  agentId: string | null;
 }
 
 export interface TranscriptState {
@@ -123,6 +197,14 @@ export interface TranscriptState {
   catalog: Catalog | null;
   /** Commands the latest `system/init` reported as working only in the TUI. */
   terminalCommands: readonly string[];
+  /** Agents seen in the lines, by Agent call id, in the order they appeared. */
+  agents: ReadonlyMap<string, AgentInfo>;
+  /**
+   * Each agent's own discussion, by Agent call id: the lines carrying it as
+   * `parent_tool_use_id`, its brief, relays and end. The main discussion is
+   * this state's own `items`.
+   */
+  scopes: ReadonlyMap<string, TranscriptState>;
 }
 
 export interface Catalog {
@@ -158,6 +240,8 @@ export const emptyTranscript: TranscriptState = {
   pendingSeed: null,
   catalog: null,
   terminalCommands: [],
+  agents: new Map(),
+  scopes: new Map(),
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
@@ -316,8 +400,17 @@ class Draft {
   pendingSeed: string | null;
   catalog: Catalog | null;
   terminalCommands: readonly string[];
+  agents: Map<string, AgentInfo>;
+  /** Scopes not touched by the events being applied. */
+  private scopeStates: Map<string, TranscriptState>;
+  /** Scopes the events being applied touched. */
+  private scopeDrafts = new Map<string, Draft>();
 
-  constructor(state: TranscriptState) {
+  /** `scope` is the Agent call whose discussion this draft folds; null for the main one. */
+  constructor(
+    state: TranscriptState,
+    private readonly scope: string | null = null,
+  ) {
     this.lastSeq = state.lastSeq;
     this.firstSeq = state.firstSeq;
     this.items = [...state.items];
@@ -336,9 +429,13 @@ class Draft {
     this.pendingSeed = state.pendingSeed;
     this.catalog = state.catalog;
     this.terminalCommands = state.terminalCommands;
+    this.agents = new Map(state.agents);
+    this.scopeStates = new Map(state.scopes);
   }
 
   finish(): TranscriptState {
+    const scopes = new Map(this.scopeStates);
+    for (const [id, draft] of this.scopeDrafts) scopes.set(id, draft.finish());
     return {
       lastSeq: this.lastSeq,
       firstSeq: this.firstSeq,
@@ -358,7 +455,155 @@ class Draft {
       pendingSeed: this.pendingSeed,
       catalog: this.catalog,
       terminalCommands: this.terminalCommands,
+      agents: this.agents,
+      scopes,
     };
+  }
+
+  /** The draft of agent `id`'s discussion, entered at the event being applied. */
+  private scoped(id: string): Draft {
+    let draft = this.scopeDrafts.get(id);
+    if (draft === undefined) {
+      draft = new Draft(this.scopeStates.get(id) ?? emptyTranscript, id);
+      this.scopeDrafts.set(id, draft);
+    }
+    draft.enter(this.lastSeq, this.time, this.prelude);
+    return draft;
+  }
+
+  enter(seq: number, time: number | null, prelude: boolean): void {
+    this.lastSeq = seq;
+    this.time = time;
+    this.prelude = prelude;
+  }
+
+  /** The agent of task `taskId`'s Agent call id, if its `task_started` was seen. */
+  private agentOfTask(taskId: string | null): string | null {
+    if (taskId === null) return null;
+    for (const agent of this.agents.values()) {
+      if (agent.taskId === taskId) return agent.toolUseId;
+    }
+    return null;
+  }
+
+  /** Records the Agent calls of an `assistant` line, main or subagent. */
+  private agentCalls(line: Extract<CliLine, { type: "assistant" }>): void {
+    for (const block of line.content) {
+      if (block.type !== "tool_use" || !AGENT_TOOLS.has(block.name)) continue;
+      if (this.agents.has(block.id)) continue;
+      this.agents.set(block.id, {
+        toolUseId: block.id,
+        taskId: null,
+        name: field(block.input, "description") ?? block.name,
+        parentToolUseId: line.parentToolUseId,
+        state: null,
+        lastActive: this.time,
+      });
+    }
+  }
+
+  private touchAgent(id: string): void {
+    const agent = this.agents.get(id);
+    if (agent === undefined || this.time === null) return;
+    if (agent.lastActive !== null && agent.lastActive >= this.time) return;
+    this.agents.set(id, { ...agent, lastActive: this.time });
+  }
+
+  /** A `task_*` line: the agent's state, its brief on start, a closing line on end. */
+  private task(line: Extract<CliLine, { type: "system" }>, key: string): void {
+    const task = line.task;
+    if (task === null) return;
+    if (line.subtype === "task_started") {
+      if (task.taskType !== LOCAL_AGENT || task.toolUseId === null) return;
+      const known = this.agents.get(task.toolUseId);
+      this.agents.set(task.toolUseId, {
+        toolUseId: task.toolUseId,
+        taskId: task.taskId,
+        name: task.description ?? known?.name ?? task.taskId,
+        parentToolUseId: known?.parentToolUseId ?? null,
+        state: "running",
+        lastActive: this.time ?? known?.lastActive ?? null,
+      });
+      if (task.prompt !== null) this.scoped(task.toolUseId).brief(task.prompt, key);
+      return;
+    }
+    const id = task.toolUseId !== null && this.agents.has(task.toolUseId)
+      ? task.toolUseId
+      : this.agentOfTask(task.taskId);
+    if (id === null) return;
+    this.touchAgent(id);
+    const agent = this.agents.get(id);
+    const state = agentStateOf(task.status);
+    if (agent === undefined || state === null) return;
+    this.agents.set(id, { ...agent, state });
+    if (line.subtype === "task_notification") this.scoped(id).ended(state, key);
+  }
+
+  /** Opens the discussion with the agent's brief; a later brief replaces it. */
+  brief(text: string, key: string): void {
+    const first = this.items[0];
+    if (first?.kind === "brief") {
+      this.items[0] = { ...first, text };
+      return;
+    }
+    if (this.items.length === 0) this.add({ kind: "brief", key, text });
+  }
+
+  /** The agent's task ended. */
+  ended(state: AgentState, key: string): void {
+    this.turnOpen = false;
+    this.endStreaming();
+    this.items = this.items.map((item) =>
+      item.kind === "tool" && item.status === "running" ? { ...item, status: "unfinished" } : item,
+    );
+    const text: Record<AgentState, string> = {
+      running: "Agent running",
+      completed: "Agent finished",
+      stopped: "Agent stopped",
+      failed: "Agent failed",
+    };
+    this.add({
+      kind: "notice",
+      key,
+      tone: state === "failed" ? "error" : "info",
+      text: text[state],
+      detail: null,
+    });
+  }
+
+  /** A relay typed in this agent's view. */
+  private relayed(text: string, clientId: string | null, key: string): void {
+    this.add({ kind: "user", key, text, delivery: "on_host", clientId, relayed: true });
+  }
+
+  /** The verdict on the relay at `key`, in this agent's view. */
+  private relayChecked(key: string, failure: RelayFailure | null, at: string): void {
+    const index = this.items.findIndex((item) => item.key === key);
+    const item = this.items[index];
+    if (item?.kind === "user") this.items[index] = { ...item, delivery: "received" };
+    if (failure !== null) this.add({ kind: "relay_failed", key: at, reason: failure });
+  }
+
+  /** Hides a faithful relay here: its wrapped message, the SendMessage call and the acknowledgement. */
+  private hideRelay(key: string, sendMessage: string): void {
+    const start = this.items.findIndex((item) => item.key === key);
+    if (start < 0) return;
+    let ackHidden = false;
+    this.items = this.items.map((item, index) => {
+      if (index === start) return { ...item, hidden: true };
+      if (index < start) return item;
+      if (item.kind === "tool" && item.toolUseId === sendMessage) return { ...item, hidden: true };
+      if (
+        !ackHidden &&
+        item.kind === "claude" &&
+        item.hidden !== true &&
+        item.text.trim() === RELAY_ACK
+      ) {
+        ackHidden = true;
+        return { ...item, hidden: true };
+      }
+      return item;
+    });
   }
 
   /** Time of the event being applied. */
@@ -411,12 +656,15 @@ class Draft {
           acceptEdits: event.accept_edits,
           folder: event.folder,
           file: event.file,
+          agentId: event.agent_id,
         });
         return;
       }
-      case "auto_allowed":
+      case "auto_allowed": {
         this.requests.delete(event.request_id);
-        this.add({
+        const agent = this.agentOfTask(event.agent_id);
+        const target = agent === null ? this : this.scoped(agent);
+        target.add({
           kind: "notice",
           key,
           tone: "info",
@@ -424,6 +672,23 @@ class Draft {
           detail: null,
         });
         return;
+      }
+      case "relay_sent":
+        this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
+        this.add({ kind: "user", key, text: event.wrapped, delivery: "on_host", clientId: null });
+        this.scoped(event.agent_tool_use_id).relayed(event.text, event.client_id, key);
+        return;
+      case "relay_checked": {
+        const relayKey = String(event.relay_seq);
+        const outcome = event.outcome;
+        if (outcome.kind === "faithful") this.hideRelay(relayKey, outcome.send_message);
+        this.scoped(event.agent_tool_use_id).relayChecked(
+          relayKey,
+          outcome.kind === "failed" ? outcome.reason : null,
+          key,
+        );
+        return;
+      }
       case "ask_resolved":
         this.asks = this.asks.filter((ask) => ask.requestId !== event.request_id);
         this.requests.delete(event.request_id);
@@ -455,6 +720,11 @@ class Draft {
             ? { ...item, status: "unfinished" }
             : item,
         );
+        for (const [id, agent] of this.agents) {
+          if (agent.state !== "running") continue;
+          this.agents.set(id, { ...agent, state: "stopped" });
+          this.scoped(id).ended("stopped", key);
+        }
         const code = event.code === null ? "no exit code" : `code ${event.code}`;
         this.add({
           kind: "notice",
@@ -484,19 +754,34 @@ class Draft {
   }
 
   private line(line: CliLine, key: string): void {
+    if (line.type === "assistant" && this.scope === null) this.agentCalls(line);
+    // An agent's lines go to its own discussion only.
+    if (
+      this.scope === null &&
+      (line.type === "user" || line.type === "assistant" || line.type === "stream_event") &&
+      line.parentToolUseId !== null
+    ) {
+      this.touchAgent(line.parentToolUseId);
+      this.scoped(line.parentToolUseId).line(line, key);
+      return;
+    }
     switch (line.type) {
       case "user":
-        if (line.parentToolUseId === null) {
+        if (line.parentToolUseId === this.scope) {
           this.user(line.content, line.isMeta, line.isSynthetic, line.toolUseResult, key);
         }
         return;
       case "assistant":
-        if (line.parentToolUseId !== null) return;
+        if (line.parentToolUseId !== this.scope) return;
         this.answered(false);
         this.turnOpen = true;
         this.assistant(line.messageId, line.content, key);
         return;
       case "system":
+        if (line.task !== null) {
+          this.task(line, key);
+          return;
+        }
         if (line.subtype === "init") this.turnOpen = true;
         if (line.subtype === "init" && line.terminalCommands !== null) {
           this.terminalCommands = line.terminalCommands;
@@ -507,7 +792,7 @@ class Draft {
         }
         return;
       case "stream_event":
-        if (line.parentToolUseId !== null) return;
+        if (line.parentToolUseId !== this.scope) return;
         this.turnOpen = true;
         switch (line.event.type) {
           case "message_start":
@@ -609,6 +894,10 @@ class Draft {
     const item = entry === undefined ? undefined : this.items[entry.index];
     if (entry === undefined || item?.kind !== "user") {
       if (seeded) return;
+      // A relayed message reaching the agent is already shown.
+      const relayed = (candidate: Item) =>
+        candidate.kind === "user" && candidate.relayed === true && candidate.text === text;
+      if (this.scope !== null && this.items.some(relayed)) return;
       // History recorded before `user_sent` existed only has the echo.
       this.add({ kind: "user", key, text, delivery: "received", clientId: null });
       return;
@@ -643,6 +932,11 @@ class Draft {
    * stdout, so a skill's content folds into the latest Skill call.
    */
   private synthetic(text: string, key: string): void {
+    // An agent's first synthetic message, before it did anything, is its brief.
+    if (this.scope !== null && this.items.every((item) => item.kind === "brief")) {
+      this.brief(text, key);
+      return;
+    }
     for (let index = this.items.length - 1; index >= 0; index -= 1) {
       const item = this.items[index];
       if (item?.kind !== "tool" || item.name !== SKILL_TOOL) continue;
@@ -690,6 +984,15 @@ class Draft {
           this.add({ kind: "thinking", key: blockKey, text: block.thinking });
           return;
         case "tool_use":
+          if (AGENT_TOOLS.has(block.name)) {
+            this.add({
+              kind: "agent",
+              key: blockKey,
+              toolUseId: block.id,
+              name: field(block.input, "description") ?? block.name,
+            });
+            return;
+          }
           this.tools.set(block.id, this.items.length);
           this.add({
             kind: "tool",

@@ -65,6 +65,21 @@ describe("chooseSide", () => {
   });
 });
 
+describe("per-side swipe counts", () => {
+  /** An agent row: one swipe right opens it, two swipes left stop it. */
+  const AGENT: SwipeContext = { ...SAFE, swipes: { right: 1, left: 2 }, presses: 2 };
+
+  it("fires one side at once and arms the other", () => {
+    expect(run(swipe(150, 0), AGENT)).toEqual(fired("right"));
+    expect(run(swipe(-150, 0), AGENT)).toEqual(armed("left", 100));
+    expect(run([...swipe(-150, 0), ...swipe(-150, 500)], AGENT)).toEqual(fired("left"));
+  });
+
+  it("a swipe toward the single side while the other is armed only cancels", () => {
+    expect(run([...swipe(-150, 0), ...swipe(150, 500)], AGENT)).toEqual(idle);
+  });
+});
+
 describe("first swipe", () => {
   it("arms the chosen side when released past the threshold", () => {
     expect(run(swipe(150, 0), SAFE)).toEqual(armed("right", 100));

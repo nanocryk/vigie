@@ -13,6 +13,7 @@ use tokio::task::AbortHandle;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
+use crate::agents::AgentView;
 use crate::child::{Launch, ModelSettings, Program};
 use crate::gauges::{self, MainRequest};
 use crate::protocol::{Inbound, System};
@@ -224,6 +225,18 @@ impl SessionManager {
             .iter()
             .filter(|(_, session)| !session.is_closed())
             .map(|(id, session)| (*id, *session.status().borrow()))
+            .collect()
+    }
+
+    /// Subagents of every session whose child is running.
+    pub async fn agents(&self) -> HashMap<Uuid, Vec<AgentView>> {
+        self.inner
+            .live
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, session)| !session.is_closed())
+            .map(|(id, session)| (*id, session.agents().borrow().clone()))
             .collect()
     }
 
@@ -515,6 +528,7 @@ impl SessionManager {
         tokio::spawn(announce_changes(
             id,
             session.status(),
+            session.agents(),
             self.inner.changes.clone(),
         ));
         let (first_ask, store, changes, catalog_changes) = (
@@ -536,9 +550,17 @@ impl SessionManager {
 async fn announce_changes(
     id: Uuid,
     mut status: watch::Receiver<LiveStatus>,
+    mut agents: watch::Receiver<Vec<AgentView>>,
     changes: broadcast::Sender<Uuid>,
 ) {
-    while status.changed().await.is_ok() {
+    loop {
+        let changed = tokio::select! {
+            changed = status.changed() => changed,
+            changed = agents.changed() => changed,
+        };
+        if changed.is_err() {
+            break;
+        }
         let _ = changes.send(id);
     }
     let _ = changes.send(id);

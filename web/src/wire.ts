@@ -41,6 +41,30 @@ export interface SessionView {
   /** What the CLI last reported applying, e.g. `claude-opus-5-5[1m]` and `medium`; null while unknown. */
   applied_model: string | null;
   applied_effort: string | null;
+  /** Subagents of the running child, oldest first; empty when not live. */
+  agents: AgentView[];
+}
+
+export type AgentState = "running" | "completed" | "stopped" | "failed";
+
+/** A subagent of the running child. */
+export interface AgentView {
+  task_id: string;
+  /** The Agent call; the agent's lines carry it as `parent_tool_use_id`. */
+  tool_use_id: string;
+  /** The Agent call's description. */
+  name: string;
+  subagent_type: string | null;
+  /** The Agent call of the agent that started it; null for the main agent. */
+  parent_tool_use_id: string | null;
+  state: AgentState;
+  /** Latest progress, then the final summary. */
+  activity: string | null;
+  /** From the agent's own last request. */
+  cache: CacheView | null;
+  /** That request's prompt: what a relay to a cold agent caches again. */
+  prompt_tokens: number;
+  started_at: string;
 }
 
 /** A model the CLI accepts; `effort_levels` is empty for one without effort. */
@@ -142,6 +166,18 @@ export type ClientMessage =
   | { type: "unsubscribe"; session: string }
   | { type: "send"; session: string; text: string; rewarm?: true; client_id: string }
   | { type: "interrupt"; session: string; client_id: string }
+  /** A message for subagent `task_id`, relayed by the main agent. */
+  | {
+      type: "relay";
+      session: string;
+      task_id: string;
+      text: string;
+      rewarm?: true;
+      client_id: string;
+    }
+  | { type: "stop_task"; session: string; task_id: string; client_id: string }
+  /** Stops every running agent. */
+  | { type: "stop_agents"; session: string; client_id: string }
   | {
       type: "answer";
       session: string;
@@ -209,6 +245,39 @@ export interface FileOffer {
   path: string;
 }
 
+/** `unknown` stands for a reason this client does not know. */
+export type RelayFailure =
+  | "altered"
+  | "other_recipient"
+  | "not_forwarded"
+  | "no_acknowledgement"
+  | "ended"
+  | "unknown";
+
+/** `send_message` is the tool use id of the SendMessage call that forwarded the text. */
+export type RelayOutcome =
+  | { kind: "faithful"; send_message: string }
+  | { kind: "failed"; reason: RelayFailure };
+
+const RELAY_FAILURES: readonly RelayFailure[] = [
+  "altered",
+  "other_recipient",
+  "not_forwarded",
+  "no_acknowledgement",
+  "ended",
+];
+
+function parseRelayOutcome(raw: unknown): RelayOutcome | null {
+  if (!isRecord(raw)) return null;
+  if (raw["kind"] === "faithful") {
+    const sendMessage = stringOrNull(raw["send_message"]);
+    return sendMessage === null ? null : { kind: "faithful", send_message: sendMessage };
+  }
+  if (raw["kind"] !== "failed") return null;
+  const reason = RELAY_FAILURES.find((known) => known === raw["reason"]) ?? "unknown";
+  return { kind: "failed", reason };
+}
+
 export type HostEvent =
   | { event: "started"; cwd: string }
   | { event: "user_sent"; text: string; client_id: string | null }
@@ -222,6 +291,8 @@ export type HostEvent =
       accept_edits: boolean;
       folder: FolderOffer | null;
       file: FileOffer | null;
+      /** Task id of the subagent asking; null for the main agent. */
+      agent_id: string | null;
     }
   /** An ask on a file granted for good, allowed by the server without queueing it. */
   | {
@@ -230,6 +301,26 @@ export type HostEvent =
       tool_name: string;
       tool_use_id: string;
       file: FileOffer;
+      agent_id: string | null;
+    }
+  /** A message for a subagent, written to the main agent as `wrapped`. */
+  | {
+      event: "relay_sent";
+      text: string;
+      client_id: string | null;
+      task_id: string;
+      /** The Agent call that started the agent. */
+      agent_tool_use_id: string;
+      name: string;
+      wrapped: string;
+    }
+  /** How the main agent handled the relay whose `relay_sent` has seq `relay_seq`. */
+  | {
+      event: "relay_checked";
+      relay_seq: number;
+      task_id: string;
+      agent_tool_use_id: string;
+      outcome: RelayOutcome;
     }
   | { event: "ask_resolved"; request_id: string }
   | { event: "permission_mode"; mode: string }
@@ -385,7 +476,33 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     settings_changed_at: optStr(value, "settings_changed_at", label),
     applied_model: optStr(value, "applied_model", label),
     applied_effort: optStr(value, "applied_effort", label),
+    agents: parseAgents(value["agents"], `${label}.agents`),
   };
+}
+
+const AGENT_STATES: readonly AgentState[] = ["running", "completed", "stopped", "failed"];
+
+function parseAgents(raw: unknown, label: string): AgentView[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) fail(label, "expected an array", raw);
+  return raw.map((item: unknown, index) => {
+    const itemLabel = `${label}[${index}]`;
+    const value = record(item, itemLabel);
+    const state = AGENT_STATES.find((known) => known === value["state"]);
+    if (state === undefined) fail(`${itemLabel}.state`, "unknown agent state", value["state"]);
+    return {
+      task_id: str(value, "task_id", itemLabel),
+      tool_use_id: str(value, "tool_use_id", itemLabel),
+      name: str(value, "name", itemLabel),
+      subagent_type: optStr(value, "subagent_type", itemLabel),
+      parent_tool_use_id: optStr(value, "parent_tool_use_id", itemLabel),
+      state,
+      activity: optStr(value, "activity", itemLabel),
+      cache: parseCache(value["cache"], `${itemLabel}.cache`),
+      prompt_tokens: num(value, "prompt_tokens", itemLabel),
+      started_at: str(value, "started_at", itemLabel),
+    };
+  });
 }
 
 function parseCache(raw: unknown, label: string): CacheView | null {
@@ -573,6 +690,53 @@ export function parseHostEvent(raw: unknown): HostEvent {
         accept_edits: raw["accept_edits"] === true,
         folder: parseFolderOffer(raw["folder"]),
         file: parseFileOffer(raw["file"]),
+        agent_id: text("agent_id"),
+      };
+    }
+    case "relay_sent": {
+      const sentText = text("text");
+      const taskId = text("task_id");
+      const agentToolUseId = text("agent_tool_use_id");
+      const name = text("name");
+      const wrapped = text("wrapped");
+      if (
+        sentText === null ||
+        taskId === null ||
+        agentToolUseId === null ||
+        name === null ||
+        wrapped === null
+      ) {
+        return { event: "unknown", raw };
+      }
+      return {
+        event: "relay_sent",
+        text: sentText,
+        client_id: text("client_id"),
+        task_id: taskId,
+        agent_tool_use_id: agentToolUseId,
+        name,
+        wrapped,
+      };
+    }
+    case "relay_checked": {
+      const relaySeq = raw["relay_seq"];
+      const taskId = text("task_id");
+      const agentToolUseId = text("agent_tool_use_id");
+      const outcome = parseRelayOutcome(raw["outcome"]);
+      if (
+        typeof relaySeq !== "number" ||
+        taskId === null ||
+        agentToolUseId === null ||
+        outcome === null
+      ) {
+        return { event: "unknown", raw };
+      }
+      return {
+        event: "relay_checked",
+        relay_seq: relaySeq,
+        task_id: taskId,
+        agent_tool_use_id: agentToolUseId,
+        outcome,
       };
     }
     case "auto_allowed": {
@@ -589,6 +753,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         tool_name: toolName,
         tool_use_id: toolUseId,
         file,
+        agent_id: text("agent_id"),
       };
     }
     case "ask_resolved": {
@@ -791,6 +956,8 @@ export type CliLine =
       permissionMode: string | null;
       /** `terminal_slash_commands` of an `init`: commands that only work in the TUI. Null when absent. */
       terminalCommands: string[] | null;
+      /** Set on the `task_*` subtypes. */
+      task: TaskLine | null;
     }
   | {
       type: "can_use_tool";
@@ -800,6 +967,36 @@ export type CliLine =
       toolUseId: string | null;
     }
   | { type: "raw"; raw: unknown };
+
+/** The fields of a `task_started`, `task_progress`, `task_updated` or `task_notification` line. */
+export interface TaskLine {
+  taskId: string;
+  /** The call that started the task: the Agent call of a subagent. */
+  toolUseId: string | null;
+  /** `local_agent` for a subagent, on `task_started`. */
+  taskType: string | null;
+  description: string | null;
+  /** A subagent's brief, on `task_started`. */
+  prompt: string | null;
+  /** Of `task_notification`, or of `task_updated`'s patch. */
+  status: string | null;
+  summary: string | null;
+}
+
+function parseTaskLine(raw: Record<string, unknown>): TaskLine | null {
+  const taskId = stringOrNull(raw["task_id"]);
+  if (taskId === null) return null;
+  const patch = raw["patch"];
+  return {
+    taskId,
+    toolUseId: stringOrNull(raw["tool_use_id"]),
+    taskType: stringOrNull(raw["task_type"]),
+    description: stringOrNull(raw["description"]),
+    prompt: stringOrNull(raw["prompt"]),
+    status: stringOrNull(raw["status"]) ?? (isRecord(patch) ? stringOrNull(patch["status"]) : null),
+    summary: stringOrNull(raw["summary"]),
+  };
+}
 
 function stringOrNull(raw: unknown): string | null {
   return typeof raw === "string" ? raw : null;
@@ -931,6 +1128,7 @@ export function parseCliLine(raw: unknown): CliLine {
             terminalCommands: Array.isArray(terminal)
               ? terminal.filter((name): name is string => typeof name === "string")
               : null,
+            task: subtype.startsWith("task_") ? parseTaskLine(raw) : null,
           };
     }
     case "control_request": {

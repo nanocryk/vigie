@@ -23,6 +23,14 @@
 //!   ended. The session emits a `user_sent {text, client_id}` host event before
 //!   writing the text.
 //! - `interrupt {session, client_id}`
+//! - `relay {session, task_id, text, rewarm?, client_id}`: a message to the
+//!   subagent `task_id` of the running child, which `-p` cannot reach directly.
+//!   The main agent gets a wrapped message asking it to forward `text` verbatim
+//!   with SendMessage to `task_id`, then to reply exactly `[Relay acknowledged]`.
+//!   Emits `relay_sent` before writing it; follows the cold rule of `send`.
+//!   Refused when the child is not running or does not know the agent.
+//! - `stop_task {session, task_id, client_id}`: stops one agent of the running
+//!   child. `stop_agents {session, client_id}` stops every running one.
 //! - `answer {session, request_id, answer, rewarm?, client_id}`: `answer` is `allow
 //!   {updated_input?, note?, accept_edits?, folder?, always_for_file?}`, `deny
 //!   {message}` or `questions {answers}`, tagged by `kind`. A non-blank allow
@@ -86,7 +94,19 @@
 //!   `read` or `edit`, `path` the absolute file path, as `C:\a\b.md` or `/a/b.md`.
 //!   An ask on a file granted with `always_for_file` is answered by the server
 //!   and recorded as `auto_allowed {request_id, tool_name, tool_use_id, file}`
-//!   instead of `ask_queued`.
+//!   instead of `ask_queued`. Both carry `agent_id`, the task id of the
+//!   subagent asking, absent for the main agent.
+//!   `relay_sent {text, client_id?, task_id, agent_tool_use_id, name, wrapped,
+//!   mid_turn?}` precedes the write of a relay: `wrapped` is the message the
+//!   main agent gets, `agent_tool_use_id` the Agent call that started the agent.
+//!   `relay_checked {relay_seq, task_id, agent_tool_use_id, outcome}` follows
+//!   the turn that took it (`relay_seq` is the seq of its `relay_sent`):
+//!   `outcome` is `faithful {send_message}` when that turn called SendMessage
+//!   to `task_id` with `text` unchanged (`send_message` is that call's tool use
+//!   id) and replied `[Relay acknowledged]`, else `failed {reason}` with
+//!   `reason` `altered` (SendMessage to the agent with other text),
+//!   `other_recipient`, `not_forwarded`, `no_acknowledgement` or `ended` (the
+//!   child stopped first).
 //!   `catalog {models, commands}` follows each accepted `initialize`: `models
 //!   [{value, resolved_model?, display_name, description?, effort_levels}]`
 //!   (`resolved_model` the model id `value` stands for, `effort_levels` empty
@@ -106,7 +126,8 @@
 //!   of pending asks, ended, had
 //!   the permission mode of its stopped state or its model or effort changed, its main conversation
 //!   made a request or finished a turn (new `cache` and `context`), or the CLI
-//!   reported a new context usage or new applied settings, it restarted on a fresh Claude session, or it
+//!   reported a new context usage or new applied settings, one of its agents
+//!   started, progressed, made a request or ended, it restarted on a fresh Claude session, or it
 //!   was killed, archived or restored; `GET /api/sessions` has the new list.
 //! - `usage_changed`: a usage reading was taken or a turn finished;
 //!   `GET /api/usage` has the new snapshot.
@@ -141,7 +162,16 @@
 //! replaced it with its prompt tokens. `max_tokens` is the CLI's when known,
 //! else the model's context window. `autocompact_threshold` (nullable) and
 //! `categories [{name, tokens, kind}]` (empty while unknown) come from the
-//! latest CLI reply.
+//! latest CLI reply. `agents` lists the subagents the running child started,
+//! oldest first, empty when not live: `{task_id, tool_use_id, name,
+//! subagent_type, parent_tool_use_id, state, activity, cache, prompt_tokens,
+//! started_at}`. `tool_use_id` is the Agent call, which the agent's lines carry
+//! as `parent_tool_use_id`; `name` its description; `parent_tool_use_id` the
+//! Agent call of the agent that started it, null for the main agent; `state`
+//! `running`, `completed`, `stopped` or `failed`; `activity` its latest
+//! progress, then its final summary (nullable); `cache` as the session's, from
+//! its own last request (nullable); `prompt_tokens` that request's prompt, the
+//! context a relay to a cold agent caches again (0 before any).
 
 use std::path::PathBuf;
 
@@ -150,6 +180,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::agents::AgentView;
 use crate::gauges::{Cache, Context};
 use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
@@ -188,6 +219,26 @@ pub enum ClientMessage {
         client_id: String,
     },
     Interrupt {
+        session: Uuid,
+        client_id: String,
+    },
+    /// A message for subagent `task_id`, relayed by the main agent.
+    Relay {
+        session: Uuid,
+        task_id: String,
+        text: String,
+        /// Goes through on a cold cache.
+        #[serde(default)]
+        rewarm: bool,
+        client_id: String,
+    },
+    StopTask {
+        session: Uuid,
+        task_id: String,
+        client_id: String,
+    },
+    /// Stops every running agent.
+    StopAgents {
         session: Uuid,
         client_id: String,
     },
@@ -371,11 +422,13 @@ pub struct SessionView {
     /// `medium`; `None` while unknown.
     pub applied_model: Option<String>,
     pub applied_effort: Option<String>,
+    /// Subagents of the running child, oldest first; empty when not live.
+    pub agents: Vec<AgentView>,
 }
 
 impl SessionView {
     /// `status` is `None` when the child is not running.
-    pub fn new(row: SessionRow, status: Option<LiveStatus>) -> Self {
+    pub fn new(row: SessionRow, status: Option<LiveStatus>, agents: Vec<AgentView>) -> Self {
         Self {
             id: row.id,
             cwd: row.cwd,
@@ -395,6 +448,7 @@ impl SessionView {
             settings_changed_at: row.settings_changed_at,
             applied_model: row.applied.model,
             applied_effort: row.applied.effort,
+            agents,
         }
     }
 }

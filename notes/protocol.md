@@ -98,11 +98,17 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 
 Recording: `spike/runs/agents.ndjson`, launched with `--forward-subagent-text` and `initialize {perTaskStopAffordance: true}`.
 
-- A background Agent call gives `task_started` with `task_id`, `tool_use_id` (the Agent call), `task_type: "local_agent"`, `subagent_type`, `description`, `is_backgrounded`, `spawn_depth`. Its own tool calls also start tasks (`local_bash`).
+- A background Agent call gives `task_started` with `task_id`, `tool_use_id` (the Agent call), `task_type: "local_agent"`, `subagent_type`, `description`, `is_backgrounded`, `spawn_depth`, `prompt` (the brief). Its own tool calls also start tasks (`local_bash`, with `owned_by_subagent: true`).
+- While it works: `task_progress` with `task_id`, `tool_use_id`, `description` (`Running <tool description>`), `subagent_type`, `usage {total_tokens, tool_uses, duration_ms}`, `last_tool_name`. At its end: `task_updated {status: "completed"}` and `task_notification` with `summary` (its final text) and `usage`.
+- With `--forward-subagent-text`, the agent's own `assistant` and `user` lines come on stdout with `parent_tool_use_id` set to the Agent call; its `user` lines also carry `subagent_type` and `task_description`. No `stream_event` lines for it. No `isSynthetic` brief line showed in the recording; the brief is in `task_started.prompt` and the Agent call's input.
+- Subagent requests write the cache with the 5 minute TTL (`ephemeral_5m_input_tokens`), the main conversation with the 1 hour one.
+- `SendMessage` input as the main agent wrote it: `to` (the task id), `message` (the text), `summary`, `type: "message"`, `recipient`, `content`. Its result: `{"success":true,"message":"Message queued for delivery to <task id> at its next tool round.", ...}`; the agent read it at its next tool round.
 - `stop_task {task_id}` stops one agent: success response, `task_updated {status: "killed"}`, `task_notification {status: "stopped"}`, and the agent's running Bash task is stopped too. The CLI then starts a main turn by itself to react.
 - A user message sent with `parent_tool_use_id` set to an Agent call does not reach that agent: the CLI echoes it with `parent_tool_use_id: null` and the main agent takes it, then relays it with its `SendMessage` tool. The CLI's stdin handling drops the field.
 - No control request messages an agent. The only agent-related control subtype is `stop_task`; the TUI queues a user's message on the agent task internally (`pendingMessages`, `userInitiatedAt`), which `-p` does not expose.
-- `perTaskStopAffordance` in the SDK types: when declared, an interrupt spares running background agents; otherwise an interrupt kills them. Sent here in `initialize`; whether the CLI took it is untested.
+- `stop_task` answers `{}`.
+- `perTaskStopAffordance` in the SDK types: when declared, an interrupt spares running background agents; otherwise an interrupt kills them. Sent here in `initialize`, which the CLI answered with success; whether an interrupt then spares agents is untested (no interrupt in the recording). vigie2 does not send it.
+- Whether `SendMessage` to a finished agent resumes it is untested (the recording's message reached a running agent).
 
 ### Slash commands
 

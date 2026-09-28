@@ -17,9 +17,11 @@ import {
 } from "@/history";
 import {
   type Item,
+  RELAY_ACK,
   type TranscriptState,
   applyEvents,
   emptyTranscript,
+  relayFailureText,
   restartLabel,
   toolSummary,
   toolTimeVisible,
@@ -72,6 +74,7 @@ function recordingEvents(name: string, legacy = false): WireEvent[] {
           request_id: msg["request_id"],
           tool_name: request["tool_name"],
           tool_use_id: request["tool_use_id"],
+          agent_id: request["agent_id"],
         });
       }
     } else if (step["dir"] === "in" && msg["type"] === "user" && !legacy) {
@@ -98,10 +101,19 @@ type Shape =
   | ["user" | "claude" | "thinking", string]
   | ["tool", string, string, string]
   | ["notice", string]
-  | ["restart", string, string | null];
+  | ["restart", string, string | null]
+  | ["agent", string]
+  | ["brief", string]
+  | ["relay_failed", string];
 
 function shape(item: Item): Shape {
   switch (item.kind) {
+    case "agent":
+      return ["agent", item.name];
+    case "brief":
+      return ["brief", item.text];
+    case "relay_failed":
+      return ["relay_failed", item.reason];
     case "user":
     case "thinking":
       return [item.kind, item.text];
@@ -271,6 +283,7 @@ describe("transcript from recordings", () => {
         acceptEdits: false,
         folder: null,
         file: null,
+        agentId: null,
       },
     ]);
   });
@@ -793,6 +806,213 @@ describe("paged history", () => {
     expect(reached).toMatchObject({ firstSeq: 1, beginning: "loaded", request: "idle" });
     expect(nextRequest(reached)).toBeNull();
     expect(nextRequest(wholeHistory)).toBeNull();
+  });
+});
+
+describe("subagents", () => {
+  const SLEEPER = "toolu_012QcBdgY7ftdrny3oJtHMt5";
+  const STOPPER = "toolu_015G4gKRa122iYWaHqcCUYmB";
+  const SLEEPER_TASK = "a26cdafd895afd968";
+  const SLEEPER_BRIEF =
+    'Use the Bash tool to run exactly: python -c "import time; time.sleep(20)". Then reply with the single word DONE, unless a message told you another word; then reply with that word instead.';
+  const scope = (state: TranscriptState, id: string): Item[] => [
+    ...(state.scopes.get(id)?.items ?? []),
+  ];
+
+  it("each agent's lines fold into its own discussion, the main one shows its creation line", () => {
+    const state = transcript("agents");
+    const main = state.items.map(shape);
+    expect(main).toContainEqual(["agent", "sleeper"]);
+    expect(main).toContainEqual(["agent", "stopper"]);
+    expect(main.filter((item) => item[0] === "tool" && item[1] === "Bash")).toEqual([]);
+    expect(main).not.toContainEqual(["claude", "PINEAPPLE"]);
+    expect(scope(state, SLEEPER).map(shape)).toEqual([
+      ["brief", SLEEPER_BRIEF],
+      ["tool", "Bash", 'python -c "import time; time.sleep(20)"', "ok"],
+      ["thinking", ""],
+      ["claude", "PINEAPPLE"],
+      ["notice", "Agent finished"],
+    ]);
+    const stopper = scope(state, STOPPER).map(shape);
+    expect(stopper[0]?.[0]).toBe("brief");
+    expect(stopper).toContainEqual(["notice", "Agent stopped"]);
+    expect(stopper.filter((item) => item[0] === "tool")).toHaveLength(1);
+    expect([...state.agents.values()]).toEqual([
+      {
+        toolUseId: SLEEPER,
+        taskId: SLEEPER_TASK,
+        name: "sleeper",
+        parentToolUseId: null,
+        state: "completed",
+        lastActive: Date.parse("2026-09-27T10:01:28.724Z"),
+      },
+      {
+        toolUseId: STOPPER,
+        taskId: "a053c040a86fec5a7",
+        name: "stopper",
+        parentToolUseId: null,
+        state: "stopped",
+        lastActive: Date.parse("2026-09-27T10:02:12.681Z"),
+      },
+    ]);
+  });
+
+  it("an agent's ask names it and stays on the shared ask list", () => {
+    const events = recordingEvents("agents");
+    const firstAsk = events.findIndex(
+      (event) => event.kind === "host" && event.payload.event === "ask_queued",
+    );
+    const pending = applyEvents(emptyTranscript, events.slice(0, firstAsk + 1));
+    expect(pending.asks.map((ask) => [ask.toolName, ask.agentId])).toEqual([
+      ["Bash", SLEEPER_TASK],
+    ]);
+    expect(pending.scopes.get(SLEEPER)?.asks).toEqual([]);
+  });
+
+  it("folds the same over pages", () => {
+    const events = recordingEvents("agents");
+    const full = applyEvents(emptyTranscript, events);
+    const stepwise = events.reduce((state, event) => applyEvents(state, [event]), emptyTranscript);
+    expect(stepwise).toEqual(full);
+  });
+
+  const line = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "line",
+    payload,
+  });
+  const host = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "host",
+    payload: parseHostEvent(payload),
+  });
+  const started = (seq: number): WireEvent =>
+    line(seq, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "a1",
+      tool_use_id: "t1",
+      task_type: "local_agent",
+      description: "sleeper",
+      prompt: "Sleep.",
+    });
+  const WRAPPED = "(vigie2 relay) ... The text:\n\nSay PINEAPPLE.";
+
+  function relayed(sendMessageTo: string, reply: string, outcome: unknown): TranscriptState {
+    return applyEvents(emptyTranscript, [
+      started(1),
+      host(2, {
+        event: "relay_sent",
+        text: "Say PINEAPPLE.",
+        client_id: "c1",
+        task_id: "a1",
+        agent_tool_use_id: "t1",
+        name: "sleeper",
+        wrapped: WRAPPED,
+      }),
+      line(3, { type: "user", message: { role: "user", content: WRAPPED }, isReplay: true }),
+      line(4, {
+        type: "assistant",
+        message: {
+          id: "m1",
+          content: [
+            {
+              type: "tool_use",
+              id: "s1",
+              name: "SendMessage",
+              input: { to: sendMessageTo, message: "Say PINEAPPLE." },
+            },
+          ],
+        },
+      }),
+      line(5, { type: "assistant", message: { id: "m2", content: [{ type: "text", text: reply }] } }),
+      line(6, { type: "result", subtype: "success", is_error: false }),
+      host(7, {
+        event: "relay_checked",
+        relay_seq: 2,
+        task_id: "a1",
+        agent_tool_use_id: "t1",
+        outcome,
+      }),
+    ]);
+  }
+
+  it("a faithful relay is hidden from the main discussion and shows in the agent's view", () => {
+    const state = relayed("a1", RELAY_ACK, { kind: "faithful", send_message: "s1" });
+    expect(state.items.filter((item) => item.hidden !== true)).toEqual([]);
+    expect(state.items.map((item) => item.kind)).toEqual(["user", "tool", "claude"]);
+    const view = scope(state, "t1");
+    expect(view.map(shape)).toEqual([
+      ["brief", "Sleep."],
+      ["user", "Say PINEAPPLE."],
+    ]);
+    expect(view[1]).toMatchObject({ relayed: true, delivery: "received", clientId: "c1" });
+  });
+
+  it("a failed relay stays in the main discussion and warns in the agent's view", () => {
+    const state = relayed("a2", "Done.", { kind: "failed", reason: "other_recipient" });
+    expect(state.items.filter((item) => item.hidden === true)).toEqual([]);
+    expect(state.items.map(shape)).toEqual([
+      ["user", WRAPPED],
+      ["tool", "SendMessage", "to a2 · message Say PINEAPPLE.", "running"],
+      ["claude", "Done."],
+    ]);
+    expect(scope(state, "t1").map(shape)).toEqual([
+      ["brief", "Sleep."],
+      ["user", "Say PINEAPPLE."],
+      ["relay_failed", "other_recipient"],
+    ]);
+    expect(relayFailureText("other_recipient")).toContain("See the main discussion");
+  });
+
+  it("a synthetic brief line replaces the brief of task_started, a later one does not", () => {
+    const brief = (seq: number, text: string): WireEvent =>
+      line(seq, {
+        type: "user",
+        parent_tool_use_id: "t1",
+        isSynthetic: true,
+        message: { role: "user", content: [{ type: "text", text }] },
+      });
+    const state = applyEvents(emptyTranscript, [
+      started(1),
+      brief(2, "Sleep, in full."),
+      line(3, {
+        type: "assistant",
+        parent_tool_use_id: "t1",
+        message: { id: "m1", content: [{ type: "text", text: "Sleeping." }] },
+      }),
+      brief(4, "Skill text"),
+    ]);
+    expect(scope(state, "t1").map(shape)).toEqual([
+      ["brief", "Sleep, in full."],
+      ["claude", "Sleeping."],
+      ["notice", "System message"],
+    ]);
+  });
+
+  it("an auto-allowed ask of an agent shows in its view, and a process exit stops its agents", () => {
+    const state = applyEvents(emptyTranscript, [
+      started(1),
+      host(2, {
+        event: "auto_allowed",
+        request_id: "r",
+        tool_name: "Read",
+        tool_use_id: "t9",
+        file: { kind: "read", path: "/a.md" },
+        agent_id: "a1",
+      }),
+      host(3, { event: "child_exited", code: 0, stderr_tail: [] }),
+    ]);
+    expect(scope(state, "t1").map(shape)).toEqual([
+      ["brief", "Sleep."],
+      ["notice", "Auto-allowed: Read /a.md"],
+      ["notice", "Agent stopped"],
+    ]);
+    expect(state.agents.get("t1")?.state).toBe("stopped");
   });
 });
 
