@@ -47,6 +47,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - The gauges have two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below.
 - On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
 - A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and the device label and the reload button on the right.
+- In a session, the thin bar also shows two pills: the permission mode in its mode's color, and the model with its effort (`Opus 5.5 · high`). Tapping a pill opens the menu on that entry.
 - Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote. A discussion with no recorded request but idle for longer than the longest TTL (1 hour) counts as cold.
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
@@ -97,6 +98,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Send takes gestures: tap or swipe right sends, swipe left stops, swipe up opens the menu. Single swipes, no confirmation. Stop works only while a turn runs (not for background tasks alone); Send stays available to queue messages. Nothing floats over the discussion.
 - Send's borders show the directions: a red left border pulsing while stopping is possible, absent otherwise; a top border in the theme's text color for the menu.
 - The composer's text area and Send fill the bottom bar's height, at any number of text lines: Send always spans the full height. The bar has a taller minimum height and Send is wide, an easy target to press or swipe. Swipe thresholds on Send are fixed distances, not a share of its width.
+- On desktop, Send's gestures are three buttons: Send, Stop and Menu. Stop is always shown; while no turn runs it is inactive, with a red border on a black background. Enter sends. Esc stops the turn; with the menu open, Esc closes the menu instead; with no turn running, it does nothing.
 - The menu opens upward over the discussion, anchored on the right. It holds the controls that need no single-tap access, as large readable entries: permission mode, model, effort, commands, agents, revoke all folders. Revoke all folders restarts the Claude process on the same session, dropping the folders granted from asks. The mode entry lists the other modes as chips in their mode's color: yellow for Manual, teal for Accept edits, purple for Plan.
 - With a keyboard, Shift+Tab cycles the permission mode in the TUI order: Manual, Accept edits, Plan, Manual. A mode outside that list cycles as Manual.
 - The permission mode is stored per session and kept current (picked in the menu, or reported by the CLI). Every start of the child (resume after a cold cache, a crash or a server restart) passes it with `--permission-mode`, so a session comes back in its mode. On a stopped session, picking a mode only stores it; the next message starts the child in it. New sessions start in Manual; a cold-cache "continue" inherits the mode of the session it continues.
@@ -225,8 +227,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Lag when the phone's VPN sleeps. Ideas: self-signed certificate and port forwarding.
 - Mascot and session comic: undecided.
 - Subagent name in "Go to agent: <name>": its task description or its type.
-- Where the current permission mode, model and effort show outside the menu (ideas: composer border or session bar tinted in the mode color).
-- Desktop keys for Send's gestures and the menu (ideas: Enter sends, Escape stops).
 - Killing a single subagent: whether the CLI supports it.
 - Folder grants: whether a same-session restart within the TTL keeps the cache warm.
 - Bash asks also carry a suggestion to always allow the exact command, saved in the project's local settings. The CLI's suggested command is "often either too broad or overly specific"; the ask panel would offer an improved version of it. How is not designed.
