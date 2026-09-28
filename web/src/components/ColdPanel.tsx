@@ -45,6 +45,11 @@ const RESUME = {
   explain: "Nothing changed: back to the discussion, the cache is untouched.",
   tone: "border-swipe-accept-strong bg-swipe-accept-strong/15 [&>:first-child]:text-swipe-accept-strong",
 };
+const RESUME_AS_IS = {
+  ...RESUME,
+  label: "Resume",
+  explain: "Nothing changes: back to the discussion as it is, the cache is untouched.",
+};
 const REWARM_SETTINGS = {
   label: "Rewarm with new settings",
   explain: "Same Claude session on the new settings: the next request reads the whole context again.",
@@ -121,22 +126,26 @@ export function ColdPanel({
   /** A choice was sent and awaits the server. */
   busy: boolean;
   error: string | null;
-  settings: { changed: boolean; onCancel: () => void } | null;
+  /** `restart`: opened from the menu's Restart entry, not a model or effort change. */
+  settings: { changed: boolean; restart: boolean; onCancel: () => void } | null;
   onChoose: (choice: ColdChoice) => void;
 }) {
   const typed = draft.trim() !== "" && settings?.changed !== false;
   const [confirmingRewarm, setConfirmingRewarm] = useState(false);
   const choices = CHOICES.map((entry) => {
     if (settings === null || entry.choice !== "rewarm") return entry;
-    return settings.changed ? { ...entry, ...REWARM_SETTINGS } : { ...entry, ...RESUME };
+    if (settings.changed) return { ...entry, ...REWARM_SETTINGS };
+    return settings.restart ? { ...entry, ...RESUME_AS_IS } : { ...entry, ...RESUME };
   });
   const confirms = (choice: ColdChoice) =>
     choice === "rewarm" && (settings === null || settings.changed);
   const heading = archived
     ? "This discussion is archived; any choice restores it."
-    : settings !== null
-      ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
-      : "The cache is cold.";
+    : settings?.restart === true
+      ? "Restart this discussion?"
+      : settings !== null
+        ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
+        : "The cache is cold.";
   return (
     <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-5xl space-y-3">

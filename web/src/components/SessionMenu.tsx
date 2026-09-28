@@ -123,8 +123,10 @@ export function SessionMenu({
   effort,
   commandsEnabled,
   revoke,
+  restartEnabled,
   onEntry,
   onCommands,
+  onRestart,
   onClose,
 }: {
   entry: MenuEntry | null;
@@ -137,8 +139,11 @@ export function SessionMenu({
   effort: SettingControl;
   commandsEnabled: boolean;
   revoke: { enabled: boolean; busy: boolean; error: string | null; onRevoke: () => void };
+  restartEnabled: boolean;
   onEntry: (entry: MenuEntry | null) => void;
   onCommands: () => void;
+  /** Opens the restart choices: resume, continue or blank. */
+  onRestart: () => void;
   onClose: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -226,6 +231,19 @@ export function SessionMenu({
               >
                 <span>Commands</span>
                 <span className="text-muted-foreground voice-code text-sm">/</span>
+              </button>
+            </Entry>
+            <Entry>
+              <button
+                type="button"
+                disabled={!restartEnabled}
+                onClick={onRestart}
+                className={`${ENTRY} hover:bg-muted flex-col items-start gap-0.5`}
+              >
+                <span>Restart...</span>
+                <span className="text-muted-foreground text-xs">
+                  Resume as is, or start fresh with the last exchanges or with no context.
+                </span>
               </button>
             </Entry>
             <Entry>

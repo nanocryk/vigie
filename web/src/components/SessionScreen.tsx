@@ -391,8 +391,16 @@ export function SessionScreen({
     setFlow({ kind: "choosing", picks: current });
   };
 
+  /** The change flow's panel on the current settings: its first choice resumes untouched. */
+  const startRestart = () => {
+    setPanel(closedPanel);
+    setMenu(closedMenu);
+    setColdError(null);
+    setFlow({ kind: "choosing", picks: current, restart: true });
+  };
+
   const choosePicks = (next: Settings) => {
-    if (flow.kind === "choosing") setFlow({ kind: "choosing", picks: next });
+    if (flow.kind === "choosing") setFlow({ ...flow, picks: next });
   };
 
   const chooseSettings = (choice: ColdChoice) => {
@@ -709,6 +717,8 @@ export function SessionScreen({
                 error: revokeError,
                 onRevoke: revoke,
               }}
+              restartEnabled={controlsEnabled && !choosingSettings}
+              onRestart={startRestart}
               onEntry={(entry) => setMenu({ kind: "open", entry })}
               onCommands={() => {
                 setMenu(closedMenu);
@@ -745,6 +755,7 @@ export function SessionScreen({
               ? null
               : {
                   changed: firstButton(picks, current) === "rewarm",
+                  restart: flow.kind === "choosing" && flow.restart === true,
                   onCancel: () => {
                     setColdError(null);
                     setFlow(closedFlow);

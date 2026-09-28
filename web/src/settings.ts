@@ -15,8 +15,11 @@ export const DEFAULT_MODEL = "default";
 
 export type SettingsFlow =
   | { kind: "closed" }
-  /** The choice panel shows with both tabs open on their lists. */
-  | { kind: "choosing"; picks: Settings }
+  /**
+   * The choice panel shows with both tabs open on their lists. `restart`: opened
+   * from the menu's Restart entry rather than a model or effort change.
+   */
+  | { kind: "choosing"; picks: Settings; restart?: boolean }
   /** A choice was sent; the flow ends once the session list reflects it. */
   | { kind: "applying"; picks: Settings; choice: ColdChoice };
 
