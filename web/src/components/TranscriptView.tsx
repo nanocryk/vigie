@@ -147,6 +147,14 @@ function ToolRow({
       <div className="mt-1 mr-2 ml-9 space-y-2">
         {timing !== null && <div className={STAMP}>{timing}</div>}
         <ToolOutput item={item} />
+        {item.attached !== null && (
+          <details>
+            <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
+              skill content
+            </summary>
+            <pre className={`${PANEL} mt-1`}>{item.attached}</pre>
+          </details>
+        )}
         <ToolInput item={item} />
       </div>
     </details>

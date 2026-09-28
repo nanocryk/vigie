@@ -45,6 +45,8 @@ type ItemBody =
       result: unknown;
       /** When its result arrived. */
       endTime: number | null;
+      /** Text the CLI injected after the call: a loaded skill's content. */
+      attached: string | null;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
   | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null };
@@ -146,6 +148,7 @@ export const emptyTranscript: TranscriptState = {
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
+const SKILL_TOOL = "Skill";
 const SUMMARY_LIMIT = 300;
 const UNKNOWN_MESSAGE = "?";
 
@@ -440,7 +443,7 @@ class Draft {
     switch (line.type) {
       case "user":
         if (line.parentToolUseId === null) {
-          this.user(line.content, line.isMeta, line.toolUseResult, key);
+          this.user(line.content, line.isMeta, line.isSynthetic, line.toolUseResult, key);
         }
         return;
       case "assistant":
@@ -502,6 +505,7 @@ class Draft {
   private user(
     content: string | ContentBlock[],
     isMeta: boolean,
+    isSynthetic: boolean,
     toolUseResult: unknown,
     key: string,
   ): void {
@@ -518,6 +522,10 @@ class Draft {
     }
     if (texts.length === 0 || isMeta) return;
     const text = texts.join("\n");
+    if (isSynthetic) {
+      this.synthetic(text, key);
+      return;
+    }
     if (text.startsWith(INTERRUPT_PREFIX)) {
       this.interrupted = true;
       this.add({
@@ -584,6 +592,21 @@ class Draft {
     }
   }
 
+  /**
+   * Text the CLI wrote in the user's place. It carries no link to its call on
+   * stdout, so a skill's content folds into the latest Skill call.
+   */
+  private synthetic(text: string, key: string): void {
+    for (let index = this.items.length - 1; index >= 0; index -= 1) {
+      const item = this.items[index];
+      if (item?.kind !== "tool" || item.name !== SKILL_TOOL) continue;
+      if (item.attached !== null) break;
+      this.items[index] = { ...item, attached: text };
+      return;
+    }
+    this.add({ kind: "notice", key, tone: "info", text: "System message", detail: text });
+  }
+
   private toolResult(
     block: Extract<ContentBlock, { type: "tool_result" }>,
     result: unknown,
@@ -633,6 +656,7 @@ class Draft {
             output: null,
             result: undefined,
             endTime: null,
+            attached: null,
           });
           return;
         case "tool_result":

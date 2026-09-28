@@ -660,6 +660,8 @@ export type CliLine =
       parentToolUseId: string | null;
       isReplay: boolean;
       isMeta: boolean;
+      /** Written by the CLI, not typed: a loaded skill's text, a subagent's brief. */
+      isSynthetic: boolean;
       content: string | ContentBlock[];
       /** The CLI's structured result of the tool call answered by this line, if any. */
       toolUseResult: unknown;
@@ -784,6 +786,7 @@ export function parseCliLine(raw: unknown): CliLine {
         parentToolUseId,
         isReplay: raw["isReplay"] === true,
         isMeta: raw["isMeta"] === true,
+        isSynthetic: raw["isSynthetic"] === true,
         content: parsed,
         toolUseResult: raw["tool_use_result"],
       };

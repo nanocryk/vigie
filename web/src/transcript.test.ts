@@ -318,6 +318,7 @@ describe("times", () => {
             output: null,
             result: undefined,
             endTime: null,
+            attached: null,
           }
         : { kind, key: String(time), time, tone: "info", text: "", detail: null };
     const items = [
@@ -383,6 +384,61 @@ describe("permission mode", () => {
     );
     if (denied?.kind !== "tool") throw new Error("no denied Write row");
     expect(toolDiff({ ...denied, path: denied.summary })).toBeNull();
+  });
+});
+
+describe("synthetic user lines", () => {
+  const line = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "line",
+    payload,
+  });
+  const synthetic = (seq: number, text: string): WireEvent =>
+    line(seq, {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text }] },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+    });
+  const skillCall = [
+    line(1, {
+      type: "assistant",
+      message: {
+        id: "m1",
+        role: "assistant",
+        content: [{ type: "tool_use", id: "s1", name: "Skill", input: { skill: "rust-dev" } }],
+      },
+      parent_tool_use_id: null,
+    }),
+    line(2, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "s1", content: "Launching skill: rust-dev" }],
+      },
+      parent_tool_use_id: null,
+    }),
+  ];
+
+  it("a skill's content folds into its Skill call", () => {
+    const state = applyEvents(emptyTranscript, [...skillCall, synthetic(3, "## Rules")]);
+    expect(state.items.map(shape)).toEqual([["tool", "Skill", expect.any(String), "ok"]]);
+    expect(state.items[0]).toMatchObject({ kind: "tool", attached: "## Rules" });
+  });
+
+  it("without a Skill call to fold into, it is a system message", () => {
+    const state = applyEvents(emptyTranscript, [
+      ...skillCall,
+      synthetic(3, "## Rules"),
+      synthetic(4, "more"),
+    ]);
+    expect(state.items.map(shape)).toEqual([
+      ["tool", "Skill", expect.any(String), "ok"],
+      ["notice", "System message"],
+    ]);
+    expect(state.items[1]).toMatchObject({ detail: "more" });
   });
 });
 
