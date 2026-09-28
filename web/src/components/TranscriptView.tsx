@@ -509,6 +509,47 @@ export function TranscriptView({
     return () => observer.disconnect();
   }, [stick]);
 
+  // Android re-places a selection handle scrolled out of the discussion from its
+  // screen position, which lands in the header: that end is put back where it was.
+  useEffect(() => {
+    const element = content.current;
+    if (element === null) return;
+    let last: { anchor: Node; anchorOffset: number; focus: Node; focusOffset: number } | null =
+      null;
+    const onChange = () => {
+      const selection = document.getSelection();
+      const anchor = selection?.anchorNode ?? null;
+      const focus = selection?.focusNode ?? null;
+      if (selection === null || anchor === null || focus === null) {
+        last = null;
+        return;
+      }
+      const anchorInside = element.contains(anchor);
+      const focusInside = element.contains(focus);
+      if (anchorInside && focusInside) {
+        last = {
+          anchor,
+          anchorOffset: selection.anchorOffset,
+          focus,
+          focusOffset: selection.focusOffset,
+        };
+      } else if (last !== null && anchorInside !== focusInside) {
+        const kept = last;
+        if (focusInside && element.contains(kept.anchor)) {
+          selection.setBaseAndExtent(kept.anchor, kept.anchorOffset, focus, selection.focusOffset);
+        } else if (anchorInside && element.contains(kept.focus)) {
+          selection.setBaseAndExtent(anchor, selection.anchorOffset, kept.focus, kept.focusOffset);
+        } else {
+          last = null;
+        }
+      } else {
+        last = null;
+      }
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
+
   const jump = () => {
     atBottom.current = true;
     setShowJump(false);
