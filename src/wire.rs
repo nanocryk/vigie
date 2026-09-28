@@ -24,12 +24,15 @@
 //!   writing the text.
 //! - `interrupt {session, client_id}`
 //! - `answer {session, request_id, answer, rewarm?, client_id}`: `answer` is `allow
-//!   {updated_input?, note?, accept_edits?, folder?}`, `deny {message}` or
-//!   `questions {answers}`, tagged by `kind`. A non-blank allow `note` is then sent
-//!   as a user message queued for the running turn, with its own `user_sent` event.
-//!   `accept_edits: true` also sends the ask's `setMode acceptEdits` suggestion;
-//!   `folder` also grants that folder for the session, in the kind of the ask's
-//!   folder suggestion. Either is refused when the ask did not offer it, and
+//!   {updated_input?, note?, accept_edits?, folder?, always_for_file?}`, `deny
+//!   {message}` or `questions {answers}`, tagged by `kind`. A non-blank allow
+//!   `note` is then sent as a user message queued for the running turn, with its
+//!   own `user_sent` event. `accept_edits: true` also sends the ask's `setMode
+//!   acceptEdits` suggestion; `folder` also grants that folder for the session, in
+//!   the kind of the ask's folder suggestion; `always_for_file: true` grants the
+//!   ask's file until the child stops: later asks on it of the same kind are
+//!   allowed by the server, and the allow carries a session rule for it unless the
+//!   ask is a safety check. Each is refused when the ask did not offer it, and
 //!   `folder` must be the offered folder or one of its parents.
 //! - While the discussion's cache is cold (`gauges::is_cold`), or a model or
 //!   effort change awaits its first main request (`settings_changed_at` set), a
@@ -62,7 +65,7 @@
 //! - `kill {session, reason?, client_id}`: stops the live child the graceful way;
 //!   the discussion stays listed and the next `send` resumes it. Acked without
 //!   effect when not live. `reason` is `kill` (the default, from Home) or `revoke`
-//!   (dropping the granted folders). A stop for a reason (these two, or
+//!   (dropping the granted folders and files). A stop for a reason (these two, or
 //!   `shutdown` when the server stops) emits `stopping {reason}` as it begins,
 //!   and `child_exited` carries the reason too.
 //! - `archive {session, client_id}`: refused with the ack error `session_live`
@@ -79,6 +82,11 @@
 //!   and `folder {kind, folder, broad}` when the CLI suggests a folder to grant:
 //!   `kind` `read` or `directory`, `folder` as `C:\a\b` or `/a/b`, `broad` the
 //!   folder and parents too broad to grant (drive roots, the home folder, ...).
+//!   It also carries `file {kind, path}` on a Read or edit-tool ask: `kind`
+//!   `read` or `edit`, `path` the absolute file path, as `C:\a\b.md` or `/a/b.md`.
+//!   An ask on a file granted with `always_for_file` is answered by the server
+//!   and recorded as `auto_allowed {request_id, tool_name, tool_use_id, file}`
+//!   instead of `ask_queued`.
 //!   `catalog {models, commands}` follows each accepted `initialize`: `models
 //!   [{value, resolved_model?, display_name, description?, effort_levels}]`
 //!   (`resolved_model` the model id `value` stands for, `effort_levels` empty

@@ -5,7 +5,7 @@ import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import { type Segment, broadReason, offerSegments } from "@/grant";
 import type { Side } from "@/swipe";
-import { type PendingAsk, toolSummary } from "@/transcript";
+import { type PendingAsk, relativePath, toolSummary } from "@/transcript";
 import { type Answer, type Danger, type GrantKind, isRecord } from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
@@ -260,6 +260,38 @@ function FolderPicker({
   );
 }
 
+const COPIED_MS = 1500;
+
+/** Copies `text`; text inside the swipe surface cannot be selected. */
+function CopyButton({ text }: { text: string }) {
+  const [label, setLabel] = useState("Copy");
+  const show = (shown: string) => {
+    setLabel(shown);
+    setTimeout(() => setLabel("Copy"), COPIED_MS);
+  };
+  const copy = () => {
+    // Undefined outside secure contexts, whatever the DOM types say.
+    const clipboard: Clipboard | undefined = navigator.clipboard;
+    if (clipboard === undefined) {
+      show("Copy failed");
+      return;
+    }
+    clipboard.writeText(text).then(
+      () => show("Copied"),
+      () => show("Copy failed"),
+    );
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="voice-ui border-destructive rounded-[5px] border px-2 py-0.5 text-xs"
+    >
+      {label}
+    </button>
+  );
+}
+
 /** An allow or deny ask (tool use or plan approval), answered by swipe. */
 function ApprovalCard({
   submit,
@@ -276,6 +308,7 @@ function ApprovalCard({
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [acceptEdits, setAcceptEdits] = useState(false);
+  const [alwaysForFile, setAlwaysForFile] = useState(false);
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   // A failed answer remounts the swipe so it can be done again.
   const [attempt, setAttempt] = useState(0);
@@ -300,6 +333,7 @@ function ApprovalCard({
             ...(text === "" ? {} : { note: text }),
             ...(acceptEdits && offersAcceptEdits ? { accept_edits: true } : {}),
             ...(picked === null ? {} : { folder: picked.path }),
+            ...(alwaysForFile && ask.file !== null ? { always_for_file: true } : {}),
           }
         : { kind: "deny", message: text === "" ? DEFAULT_DENY : text };
     void answer(value).then((ok) => {
@@ -312,7 +346,7 @@ function ApprovalCard({
     <CardFrame title={null} queued={0}>
       {/* Keyed by the ask and the choices: another ask or another grant means a fresh gesture. */}
       <Swipe
-        key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}`}
+        key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}:${alwaysForFile}`}
         labels={plan !== null ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
         dangerous={danger.dangerous}
         onConfirm={confirm}
@@ -345,7 +379,10 @@ function ApprovalCard({
           </div>
           {danger.dangerous && (
             <div className="border-destructive bg-destructive/15 text-destructive rounded-[5px] border px-3 py-2 text-sm">
-              <p className="voice-heading">Dangerous</p>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="voice-heading">Dangerous</p>
+                <CopyButton text={danger.reasons.join("\n")} />
+              </div>
               <ul className="list-disc pl-5">
                 {danger.reasons.map((reason) => (
                   <li key={reason} className="[overflow-wrap:anywhere]">
@@ -370,6 +407,24 @@ function ApprovalCard({
               onPick={setPickedPath}
               disabled={sending}
             />
+          )}
+          {ask.file !== null && (
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={sending}
+                aria-pressed={alwaysForFile}
+                onClick={() => setAlwaysForFile((on) => !on)}
+                className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${alwaysForFile ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground bg-card/60"}`}
+              >
+                {alwaysForFile ? "✓ " : ""}Always for this file
+              </button>
+              {alwaysForFile && (
+                <p className="text-muted-foreground voice-ui text-xs [overflow-wrap:anywhere]">
+                  {`Allowing also allows later ${ask.file.kind === "read" ? "reads" : "edits"} of ${relativePath(ask.file.path, cwd)} until the Claude process stops`}
+                </p>
+              )}
+            </div>
           )}
           {noteOpen ? (
             <textarea

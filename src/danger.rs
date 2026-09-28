@@ -42,7 +42,7 @@ pub fn classify(ask: &CanUseTool, cwd: &Path) -> Danger {
     if ask.default_to_no == Some(Value::Bool(true)) {
         reasons.push("Claude Code defaults this request to no".to_string());
     }
-    if ask.decision_reason_type.as_ref().and_then(Value::as_str) == Some(SAFETY_CHECK) {
+    if is_safety_check(ask) {
         match ask.decision_reason.as_ref().and_then(Value::as_str) {
             Some(reason) => reasons.push(format!("Claude Code safety check: {reason}")),
             None => reasons.push("Claude Code safety check".to_string()),
@@ -77,6 +77,11 @@ pub fn classify(ask: &CanUseTool, cwd: &Path) -> Danger {
         _ => {}
     }
     Danger::from_reasons(reasons)
+}
+
+/// Whether the CLI asks because of a safety check, which no permission rule skips.
+pub fn is_safety_check(ask: &CanUseTool) -> bool {
+    ask.decision_reason_type.as_ref().and_then(Value::as_str) == Some(SAFETY_CHECK)
 }
 
 /// Reasons from each simple command of a shell command line.
@@ -235,20 +240,24 @@ fn end_word(words: &mut Vec<String>, word: &mut String, in_word: &mut bool) {
 
 /// Whether `target`, resolved against `cwd` and normalized, lies inside `cwd`.
 pub fn is_inside(target: &str, cwd: &Path) -> bool {
-    let target = Path::new(target);
-    let absolute = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        cwd.join(target)
-    };
     let base = normalize(cwd);
-    let path = normalize(&absolute);
+    let path = absolute(target, cwd);
     let mut path_components = path.components();
     base.components().all(|component| {
         path_components
             .next()
             .is_some_and(|other| same_component(component, other))
     })
+}
+
+/// `target` resolved against `cwd` and normalized.
+pub fn absolute(target: &str, cwd: &Path) -> PathBuf {
+    let target = Path::new(target);
+    if target.is_absolute() {
+        normalize(target)
+    } else {
+        normalize(&cwd.join(target))
+    }
 }
 
 /// Resolves `.` and `..` without touching the file system.

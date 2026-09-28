@@ -4,6 +4,7 @@ import {
   type ContentBlock,
   type ModelChoice,
   type Danger,
+  type FileOffer,
   type FolderOffer,
   type GateFailure,
   type HostEvent,
@@ -83,6 +84,8 @@ export interface PendingAsk {
   /** An edit ask offering a switch to Accept edits. */
   acceptEdits: boolean;
   folder: FolderOffer | null;
+  /** The file an allow can grant for good. */
+  file: FileOffer | null;
 }
 
 export interface TranscriptState {
@@ -162,7 +165,7 @@ const SKILL_TOOL = "Skill";
 
 const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
-  revoke: "Folders revoked",
+  revoke: "Grants revoked",
   shutdown: "Server stopped",
 };
 const SUMMARY_LIMIT = 300;
@@ -407,9 +410,20 @@ class Draft {
           danger: event.danger,
           acceptEdits: event.accept_edits,
           folder: event.folder,
+          file: event.file,
         });
         return;
       }
+      case "auto_allowed":
+        this.requests.delete(event.request_id);
+        this.add({
+          kind: "notice",
+          key,
+          tone: "info",
+          text: `Auto-allowed: ${event.tool_name} ${relativePath(event.file.path, this.cwd)}`,
+          detail: null,
+        });
+        return;
       case "ask_resolved":
         this.asks = this.asks.filter((ask) => ask.requestId !== event.request_id);
         this.requests.delete(event.request_id);

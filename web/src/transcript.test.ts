@@ -270,6 +270,7 @@ describe("transcript from recordings", () => {
         danger: { dangerous: false, reasons: [] },
         acceptEdits: false,
         folder: null,
+        file: null,
       },
     ]);
   });
@@ -531,7 +532,7 @@ describe("restarts", () => {
       exited(3),
     ]);
     expect(state.items.map(shape)).toEqual([
-      ["notice", "Folders revoked"],
+      ["notice", "Grants revoked"],
       ["notice", "Stopped from Home"],
       ["notice", "Claude process ended (code 0)"],
     ]);
@@ -546,6 +547,29 @@ describe("restarts", () => {
       ["notice", "Server stopped"],
       ["notice", "Request interrupted by user"],
     ]);
+  });
+
+  it("an ask offers its file, and an auto-allowed one shows a row", () => {
+    const file = { kind: "edit", path: "C:\\work\\notes\\plan.md" };
+    const state = applyEvents(emptyTranscript, [
+      event(1, "host", { event: "started", cwd: "C:\\work" }),
+      event(2, "host", {
+        event: "ask_queued",
+        request_id: "r1",
+        tool_name: "Edit",
+        tool_use_id: "t1",
+        file,
+      }),
+      event(3, "host", {
+        event: "auto_allowed",
+        request_id: "r2",
+        tool_name: "Write",
+        tool_use_id: "t2",
+        file,
+      }),
+    ]);
+    expect(state.asks.map((ask) => ask.file)).toEqual([file]);
+    expect(state.items.map(shape)).toEqual([["notice", "Auto-allowed: Write notes\\plan.md"]]);
   });
 
   it("a clear shows a Cleared divider", () => {

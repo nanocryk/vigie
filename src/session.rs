@@ -4,7 +4,7 @@
 //! out on a broadcast channel, numbered by a per-session sequence.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::child::{Child, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
-use crate::grant::{self, FolderOffer};
+use crate::grant::{self, FileOffer, FolderOffer};
 use crate::protocol::{
     AppliedSettings, CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse,
     Extra, GetUsageResponse, HostRequest, Inbound, InitCommand, InitModel, InitializeResponse,
@@ -109,6 +109,16 @@ pub enum HostEvent {
         /// The folder the CLI suggests granting for the session.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<FolderOffer>,
+        /// The file of a Read or edit-tool ask, which the allow can grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<FileOffer>,
+    },
+    /// An ask on a granted file, allowed by the host without queueing it.
+    AutoAllowed {
+        request_id: String,
+        tool_name: String,
+        tool_use_id: String,
+        file: FileOffer,
     },
     AskResolved {
         request_id: String,
@@ -245,6 +255,9 @@ pub enum Answer {
         /// Also grants this folder for the session: the suggested one or a parent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
+        /// Also allows the later asks on the ask's file, until the child stops.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        always_for_file: bool,
     },
     /// The message is shown to the model.
     Deny { message: String },
@@ -406,6 +419,7 @@ impl Session {
             status: status_sender,
             tracker: ActivityTracker::default(),
             asks: Vec::new(),
+            file_grants: Vec::new(),
             requests: HashMap::new(),
             mode_requests: HashSet::new(),
             unrecorded_requests: HashSet::new(),
@@ -639,6 +653,8 @@ struct Actor {
     tracker: ActivityTracker,
     /// In arrival order.
     asks: Vec<PendingAsk>,
+    /// Files allowed with `always_for_file`; their later asks are answered here.
+    file_grants: Vec<FileOffer>,
     /// Host control requests awaiting their `control_response`.
     requests: HashMap<String, oneshot::Sender<Result<ControlResponse>>>,
     /// Ids among `requests` that are `set_permission_mode` requests.
@@ -755,6 +771,15 @@ impl Actor {
     async fn on_cli_request(&mut self, request: &ControlRequest<CliRequest>) {
         match &request.request {
             CliRequest::CanUseTool(ask) => {
+                let file = FileOffer::of(ask, &self.cwd);
+                if let Some(granted) = file
+                    .as_ref()
+                    .filter(|file| self.file_grants.iter().any(|grant| grant.same(file)))
+                {
+                    self.auto_allow(&request.request_id, ask, granted.clone())
+                        .await;
+                    return;
+                }
                 self.asks.push(PendingAsk {
                     request_id: request.request_id.clone(),
                     request: (**ask).clone(),
@@ -766,6 +791,7 @@ impl Actor {
                     danger: danger::classify(ask, &self.cwd),
                     accept_edits: grant::offers_accept_edits(ask),
                     folder: grant::folder_offer(ask, dirs::home_dir().as_deref()),
+                    file,
                 });
                 self.publish_status();
             }
@@ -946,10 +972,19 @@ impl Actor {
         let index = self
             .ask_index(&request_id)
             .ok_or_else(|| anyhow!("no pending ask {request_id}"))?;
-        let result = permission_result(&self.asks[index].request, &answer)?;
+        let result = permission_result(&self.asks[index].request, &answer, &self.cwd)?;
         let response = ControlResponse::permission(request_id.clone(), &result);
         self.write(Outbound::ControlResponse(response)).await?;
         let ask = self.asks.remove(index);
+        if let Answer::Allow {
+            always_for_file: true,
+            ..
+        } = &answer
+            && let Some(file) = FileOffer::of(&ask.request, &self.cwd)
+            && !self.file_grants.iter().any(|grant| grant.same(&file))
+        {
+            self.file_grants.push(file);
+        }
         let note = match &answer {
             Answer::Allow {
                 note: Some(note), ..
@@ -966,6 +1001,21 @@ impl Actor {
                 .await?;
         }
         Ok(())
+    }
+
+    async fn auto_allow(&mut self, request_id: &str, ask: &CanUseTool, file: FileOffer) {
+        let result = PermissionResult::allow(ask.input.clone());
+        let response = ControlResponse::permission(request_id.to_string(), &result);
+        if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
+            tracing::warn!("auto-allow {}: {err:#}", ask.tool_name);
+            return;
+        }
+        self.emit_host(HostEvent::AutoAllowed {
+            request_id: request_id.to_string(),
+            tool_name: ask.tool_name.clone(),
+            tool_use_id: ask.tool_use_id.clone(),
+            file,
+        });
     }
 
     fn ask_index(&self, request_id: &str) -> Option<usize> {
@@ -1095,17 +1145,29 @@ fn allow_note(tool_name: &str, note: &str) -> String {
     )
 }
 
-fn permission_result(ask: &CanUseTool, answer: &Answer) -> Result<PermissionResult> {
+/// `cwd` is the session folder, which relative tool paths resolve against.
+fn permission_result(ask: &CanUseTool, answer: &Answer, cwd: &Path) -> Result<PermissionResult> {
     Ok(match answer {
         Answer::Allow {
             updated_input,
             accept_edits,
             folder,
+            always_for_file,
             ..
-        } => PermissionResult::allow_with(
-            updated_input.clone().unwrap_or_else(|| ask.input.clone()),
-            grant::updates(ask, *accept_edits, folder.as_deref())?,
-        ),
+        } => {
+            let file = if *always_for_file {
+                Some(
+                    FileOffer::of(ask, cwd)
+                        .ok_or_else(|| anyhow!("{} offers no file", ask.tool_name))?,
+                )
+            } else {
+                None
+            };
+            PermissionResult::allow_with(
+                updated_input.clone().unwrap_or_else(|| ask.input.clone()),
+                grant::updates(ask, *accept_edits, folder.as_deref(), file.as_ref())?,
+            )
+        }
         Answer::Deny { message } => PermissionResult::deny(message.clone()),
         Answer::Questions { answers } => {
             if ask.tool_name != ASK_USER_QUESTION {
@@ -1200,6 +1262,7 @@ mod tests {
                 note: Some("then test".into()),
                 accept_edits: false,
                 folder: None,
+                always_for_file: false,
             }
         );
         let bare: Answer = serde_json::from_value(serde_json::json!({"kind": "allow"})).unwrap();
@@ -1208,7 +1271,7 @@ mod tests {
             serde_json::json!({"kind": "allow"})
         );
         let granting: Answer = serde_json::from_value(serde_json::json!({"kind": "allow",
-            "accept_edits": true, "folder": "C:\\a"}))
+            "accept_edits": true, "folder": "C:\\a", "always_for_file": true}))
         .unwrap();
         assert_eq!(
             granting,
@@ -1217,6 +1280,7 @@ mod tests {
                 note: None,
                 accept_edits: true,
                 folder: Some("C:\\a".into()),
+                always_for_file: true,
             }
         );
 
@@ -1227,6 +1291,7 @@ mod tests {
             danger: Danger::from_reasons(vec!["Hard reset: git reset --hard".into()]),
             accept_edits: false,
             folder: None,
+            file: None,
         };
         assert_eq!(
             serde_json::to_value(&queued).unwrap(),
@@ -1238,8 +1303,12 @@ mod tests {
             "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
         .unwrap();
         assert!(matches!(stored, HostEvent::AskQueued {
-            danger, accept_edits: false, folder: None, ..
+            danger, accept_edits: false, folder: None, file: None, ..
         } if danger == Danger::default()));
+    }
+
+    fn cwd() -> PathBuf {
+        std::env::temp_dir().join("vigie2-session").join("project")
     }
 
     #[test]
@@ -1253,7 +1322,9 @@ mod tests {
                     note: Some("then stop".into()),
                     accept_edits: false,
                     folder: None,
-                }
+                    always_for_file: false,
+                },
+                &cwd(),
             )
             .unwrap(),
             PermissionResult::allow(serde_json::json!({"command": "ls"})),
@@ -1263,18 +1334,46 @@ mod tests {
             note: None,
             accept_edits: false,
             folder: Some("C:\\Users".into()),
+            always_for_file: false,
         };
         assert!(
-            permission_result(&bash, &grant).is_err(),
+            permission_result(&bash, &grant, &cwd()).is_err(),
             "no folder was suggested"
+        );
+        let always = Answer::Allow {
+            updated_input: None,
+            note: None,
+            accept_edits: false,
+            folder: None,
+            always_for_file: true,
+        };
+        assert!(
+            permission_result(&bash, &always, &cwd()).is_err(),
+            "Bash offers no file"
+        );
+        let edit = ask("Edit", serde_json::json!({"file_path": "notes.md"}));
+        let PermissionResult::Allow {
+            updated_permissions: Some(updates),
+            ..
+        } = permission_result(&edit, &always, &cwd()).unwrap()
+        else {
+            panic!("an always-for-file allow carries the file rule");
+        };
+        let rule = serde_json::to_value(&updates).unwrap();
+        assert_eq!(rule[0]["rules"][0]["toolName"], "Edit");
+        assert!(
+            rule[0]["rules"][0]["ruleContent"]
+                .as_str()
+                .unwrap()
+                .ends_with("/vigie2-session/project/notes.md")
         );
         let questions = Answer::Questions {
             answers: BTreeMap::from([("Pick?".to_string(), "blue".to_string())]),
         };
-        assert!(permission_result(&bash, &questions).is_err());
+        assert!(permission_result(&bash, &questions, &cwd()).is_err());
         let question = ask(ASK_USER_QUESTION, serde_json::json!({"questions": []}));
         assert_eq!(
-            permission_result(&question, &questions).unwrap(),
+            permission_result(&question, &questions, &cwd()).unwrap(),
             PermissionResult::allow(
                 serde_json::json!({"questions": [], "answers": {"Pick?": "blue"}})
             ),

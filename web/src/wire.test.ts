@@ -70,6 +70,26 @@ describe("parseServerMessage", () => {
     expect(queued({ ...ask, folder: { kind: "directory", folder: "C:\\a" } })).toMatchObject({
       event: { payload: { folder: { kind: "directory", folder: "C:\\a", broad: [] } } },
     });
+    const file = { kind: "read", path: "C:\\a\\b.md" };
+    expect(queued({ ...ask, file })).toMatchObject({ event: { payload: { file } } });
+    expect(queued(ask)).toMatchObject({ event: { payload: { file: null } } });
+    expect(queued({ ...ask, file: { kind: "write", path: "C:\\a" } })).toMatchObject({
+      event: { payload: { file: null } },
+    });
+  });
+
+  it("reads an auto-allowed ask, which needs its file", () => {
+    const allowed = { event: "auto_allowed", request_id: "r", tool_name: "Edit", tool_use_id: "t" };
+    const host = (payload: unknown) =>
+      parseServerMessage(
+        { type: "event", session: "s", seq: 1, time: "t", kind: "host", payload },
+        "msg",
+      );
+    const file = { kind: "edit", path: "/a/b.md" };
+    expect(host({ ...allowed, file })).toMatchObject({
+      event: { payload: { event: "auto_allowed", request_id: "r", file } },
+    });
+    expect(host(allowed)).toMatchObject({ event: { payload: { event: "unknown" } } });
   });
 
   it("reads an ack without an error", () => {

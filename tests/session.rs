@@ -340,6 +340,7 @@ async fn permissions_deny_and_question_answer() {
                     accept_edits: false,
                     folder: None,
                     note: None,
+                    always_for_file: false,
                 }
             )
             .await
@@ -409,6 +410,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
                 accept_edits: false,
                 folder: None,
                 note: None,
+                always_for_file: false,
             },
         )
         .await
@@ -467,6 +469,7 @@ async fn permission_mode_changes_are_announced_once_each() {
         accept_edits: false,
         folder: None,
         note: None,
+        always_for_file: false,
     };
     for expected in ["ExitPlanMode", "Write"] {
         let (request_id, tool_name) = harness.until_ask().await;
@@ -519,6 +522,7 @@ async fn folder_grants_and_accept_edits_reach_the_cli() {
         note: None,
         accept_edits,
         folder,
+        always_for_file: false,
     };
     let script = vec![
         (
@@ -747,6 +751,7 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
         accept_edits: false,
         folder: None,
         note: None,
+        always_for_file: false,
     };
     assert!(
         harness
@@ -793,6 +798,7 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         accept_edits: false,
         folder: None,
         note: Some("Then run the tests.".into()),
+        always_for_file: false,
     };
     harness
         .session
@@ -833,7 +839,113 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         accept_edits: false,
         folder: None,
         note: Some("  ".into()),
+        always_for_file: false,
     };
     harness.session.answer("cli-2", blank).await.unwrap();
+    harness.finish().await;
+}
+
+/// A safety-check edit allowed for good: its allow carries no rule, and the next
+/// edit of the file, spelled in another case, is allowed by the host. A read of
+/// the same file is another kind: it asks, and its grant does send a Read rule.
+/// An edit of another file still asks.
+const FILE_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t1", "decision_reason_type": "safetyCheck"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Write", "input": {"file_path": "c:\\X\\plans\\P.md"}, "tool_use_id": "t2", "decision_reason_type": "safetyCheck"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"file_path": "c:\\X\\plans\\P.md"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t3", "decision_reason_type": "workingDir"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}, "updatedPermissions": [{"type": "addRules", "rules": [{"toolName": "Read", "ruleContent": "//c/x/plans/p.md"}], "behavior": "allow", "destination": "session"}]}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-4", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t4"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-4", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-5", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\plans\\q.md"}, "tool_use_id": "t5"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-5", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\q.md"}}}}}
+"#;
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_file_granted_for_good_is_allowed_by_the_host() {
+    use vigie2::grant::{FileKind, FileOffer};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.ndjson");
+    std::fs::write(&path, FILE_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let plan = |kind| FileOffer {
+        kind,
+        path: r"C:\x\plans\p.md".into(),
+    };
+    let always = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: true,
+    };
+    async fn queued_file(harness: &mut Harness) -> (String, Option<FileOffer>) {
+        match harness
+            .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+            .await
+        {
+            HostEvent::AskQueued {
+                request_id, file, ..
+            } => (request_id, file),
+            _ => unreachable!(),
+        }
+    }
+    async fn auto_allowed(harness: &mut Harness) -> (String, FileOffer) {
+        match harness
+            .until_host(|host| matches!(host, HostEvent::AutoAllowed { .. }))
+            .await
+        {
+            HostEvent::AutoAllowed {
+                request_id, file, ..
+            } => (request_id, file),
+            _ => unreachable!(),
+        }
+    }
+
+    let (request_id, file) = queued_file(&mut harness).await;
+    assert_eq!(file, Some(plan(FileKind::Edit)));
+    harness
+        .session
+        .answer(request_id, always.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        auto_allowed(&mut harness).await,
+        (
+            "cli-2".to_string(),
+            FileOffer {
+                kind: FileKind::Edit,
+                path: r"C:\X\plans\P.md".into()
+            }
+        ),
+        "the ask's own spelling"
+    );
+
+    let (request_id, file) = queued_file(&mut harness).await;
+    assert_eq!(
+        (request_id.as_str(), file),
+        ("cli-3", Some(plan(FileKind::Read)))
+    );
+    harness.session.answer(request_id, always).await.unwrap();
+    assert_eq!(
+        auto_allowed(&mut harness).await,
+        ("cli-4".to_string(), plan(FileKind::Read))
+    );
+
+    let (request_id, _) = queued_file(&mut harness).await;
+    assert_eq!(request_id, "cli-5");
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: false,
+    };
+    harness.session.answer(request_id, allow).await.unwrap();
     harness.finish().await;
 }

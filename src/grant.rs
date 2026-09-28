@@ -1,6 +1,6 @@
 //! What an allow can grant beyond the call itself: the CLI's `setMode acceptEdits`
-//! suggestion, and its folder suggestion moved to a folder picked among the
-//! suggested one and its ancestors.
+//! suggestion, its folder suggestion moved to a folder picked among the
+//! suggested one and its ancestors, and the ask's file.
 
 use std::fmt;
 use std::path::Path;
@@ -8,13 +8,16 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{CanUseTool, PermissionUpdate};
+use crate::danger;
+use crate::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
 
 pub const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const ACCEPT_EDITS: &str = "acceptEdits";
 const SESSION: &str = "session";
 const ALLOW: &str = "allow";
 const READ_TOOL: &str = "Read";
+const EDIT_TOOL: &str = "Edit";
+const NOTEBOOK_EDIT: &str = "NotebookEdit";
 
 /// First-level folders too broad to grant, on any drive or under `/`.
 const BROAD_TOP: [&str; 10] = [
@@ -62,6 +65,67 @@ pub struct FolderOffer {
     pub broad: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    Read,
+    /// Any edit tool: an Edit rule covers them all.
+    Edit,
+}
+
+/// The file of a Read or edit-tool ask, which an allow can grant until the child stops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileOffer {
+    pub kind: FileKind,
+    /// Absolute: `C:\a\b.md` on a drive, `/a/b.md` otherwise.
+    pub path: String,
+}
+
+impl FileOffer {
+    /// Relative tool paths resolve against `cwd`, the session folder.
+    pub fn of(ask: &CanUseTool, cwd: &Path) -> Option<Self> {
+        let (kind, key) = match ask.tool_name.as_str() {
+            READ_TOOL => (FileKind::Read, "file_path"),
+            NOTEBOOK_EDIT => (FileKind::Edit, "notebook_path"),
+            tool if EDIT_TOOLS.contains(&tool) => (FileKind::Edit, "file_path"),
+            _ => return None,
+        };
+        let target = ask.input.get(key)?.as_str()?;
+        let file = Folder::parse(danger::absolute(target, cwd).to_str()?)?;
+        Some(Self {
+            kind,
+            path: file.to_string(),
+        })
+    }
+
+    /// Same kind and same file, compared as Windows compares paths.
+    pub fn same(&self, other: &FileOffer) -> bool {
+        self.kind == other.kind
+            && Folder::parse(&self.path)
+                .zip(Folder::parse(&other.path))
+                .is_some_and(|(mine, theirs)| mine.same(&theirs))
+    }
+
+    /// The session rule allowing this file: `Read(//c/a/b.md)` or `Edit(//c/a/b.md)`.
+    fn rule(&self) -> Option<PermissionUpdate> {
+        let file = Folder::parse(&self.path)?;
+        let tool = match self.kind {
+            FileKind::Read => READ_TOOL,
+            FileKind::Edit => EDIT_TOOL,
+        };
+        Some(PermissionUpdate::AddRules {
+            rules: vec![PermissionRule {
+                tool_name: tool.to_string(),
+                rule_content: Some(file.rule_path()),
+                extra: Extra::new(),
+            }],
+            behavior: ALLOW.to_string(),
+            destination: SESSION.to_string(),
+            extra: Extra::new(),
+        })
+    }
+}
+
 /// Whether the ask is an edit carrying the CLI's `setMode acceptEdits` suggestion.
 pub fn offers_accept_edits(ask: &CanUseTool) -> bool {
     accept_edits_suggestion(ask, &ask.suggestions()).is_some()
@@ -85,11 +149,13 @@ pub fn folder_offer(ask: &CanUseTool, home: Option<&Path>) -> Option<FolderOffer
 
 /// The updates an allow carries: the CLI's `setMode acceptEdits` suggestion when
 /// `accept_edits`, and its folder suggestion moved to `folder`, which must be the
-/// suggested folder or one of its ancestors. The Bash command rule is never sent.
+/// suggested folder or one of its ancestors, and a session rule for `file` unless
+/// the ask is a safety check, which ignores rules. The Bash command rule is never sent.
 pub fn updates(
     ask: &CanUseTool,
     accept_edits: bool,
     folder: Option<&str>,
+    file: Option<&FileOffer>,
 ) -> Result<Vec<PermissionUpdate>> {
     let suggestions = ask.suggestions();
     let mut updates = Vec::new();
@@ -115,6 +181,12 @@ pub fn updates(
         let mode = accept_edits_suggestion(ask, &suggestions)
             .ok_or_else(|| anyhow!("{} offers no accept edits", ask.tool_name))?;
         updates.push(mode.clone());
+    }
+    if let Some(rule) = file
+        .filter(|_| !danger::is_safety_check(ask))
+        .and_then(FileOffer::rule)
+    {
+        updates.push(rule);
     }
     Ok(updates)
 }
@@ -198,7 +270,7 @@ enum Root {
     Slash,
 }
 
-/// An absolute folder without `.` or `..` parts.
+/// An absolute folder (or file) path without `.` or `..` parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Folder {
     root: Root,
@@ -247,17 +319,21 @@ impl Folder {
     }
 
     fn read_rule(&self) -> String {
-        let mut rule = String::from("/");
+        format!("{}/**", self.rule_path())
+    }
+
+    /// `//c/a/b` (drive `c`) or `//a/b`, as rules name paths.
+    fn rule_path(&self) -> String {
+        let mut path = String::from("/");
         if let Root::Drive(letter) = self.root {
-            rule.push('/');
-            rule.push(letter.to_ascii_lowercase());
+            path.push('/');
+            path.push(letter.to_ascii_lowercase());
         }
         for part in &self.parts {
-            rule.push('/');
-            rule.push_str(part);
+            path.push('/');
+            path.push_str(part);
         }
-        rule.push_str("/**");
-        rule
+        path
     }
 
     /// The root first, the folder itself last.
@@ -471,13 +547,21 @@ mod tests {
         assert_eq!(offer.kind, GrantKind::Read);
         assert_eq!(offer.folder, OUTSIDE);
         assert_eq!(
-            sent(updates(&bash, false, Some(r"C:\Users\user\AppData\Local\Temp")).unwrap()),
+            sent(
+                updates(
+                    &bash,
+                    false,
+                    Some(r"C:\Users\user\AppData\Local\Temp"),
+                    None
+                )
+                .unwrap()
+            ),
             json!([read_rule("//c/Users/user/AppData/Local/Temp/**")]),
         );
-        assert_eq!(sent(updates(&bash, false, None).unwrap()), json!([]));
+        assert_eq!(sent(updates(&bash, false, None, None).unwrap()), json!([]));
         let only_command = ask("Bash", json!([bash_rule()]));
         assert_eq!(folder_offer(&only_command, home()), None);
-        assert!(updates(&only_command, false, Some(r"C:\Users")).is_err());
+        assert!(updates(&only_command, false, Some(r"C:\Users"), None).is_err());
     }
 
     #[test]
@@ -489,24 +573,27 @@ mod tests {
             )]),
         );
         assert_eq!(
-            sent(updates(&read, false, Some(&format!("{OUTSIDE}\\a"))).unwrap()),
+            sent(updates(&read, false, Some(&format!("{OUTSIDE}\\a")), None).unwrap()),
             json!([read_rule(
                 "//c/Users/user/AppData/Local/Temp/vigie2-spike/outside/a/**"
             )]),
         );
         let lowercase = format!("{}\\A\\B", OUTSIDE.to_lowercase());
         assert_eq!(
-            sent(updates(&read, false, Some(&lowercase)).unwrap()),
+            sent(updates(&read, false, Some(&lowercase), None).unwrap()),
             json!([read_rule(
                 "//c/Users/user/AppData/Local/Temp/vigie2-spike/outside/a/b/**"
             )]),
             "the suggested spelling wins"
         );
         for outside in [&format!("{OUTSIDE}\\c") as &str, r"D:\", "relative"] {
-            assert!(updates(&read, false, Some(outside)).is_err(), "{outside}");
+            assert!(
+                updates(&read, false, Some(outside), None).is_err(),
+                "{outside}"
+            );
         }
         assert!(
-            updates(&read, true, None).is_err(),
+            updates(&read, true, None, None).is_err(),
             "Read offers no accept edits"
         );
     }
@@ -518,11 +605,11 @@ mod tests {
         assert_eq!(offer.kind, GrantKind::Directory);
         assert_eq!(offer.folder, format!("{OUTSIDE}\\w"));
         assert_eq!(
-            sent(updates(&write, false, Some(OUTSIDE)).unwrap()),
+            sent(updates(&write, false, Some(OUTSIDE), None).unwrap()),
             json!([directory(OUTSIDE)]),
         );
         assert_eq!(
-            sent(updates(&write, false, Some(r"C:\")).unwrap()),
+            sent(updates(&write, false, Some(r"C:\"), None).unwrap()),
             json!([directory(r"C:\")]),
         );
     }
@@ -533,17 +620,17 @@ mod tests {
         assert!(offers_accept_edits(&write));
         assert_eq!(folder_offer(&write, home()), None);
         assert_eq!(
-            sent(updates(&write, true, None).unwrap()),
+            sent(updates(&write, true, None, None).unwrap()),
             json!([accept_edits()])
         );
-        assert_eq!(sent(updates(&write, false, None).unwrap()), json!([]));
+        assert_eq!(sent(updates(&write, false, None, None).unwrap()), json!([]));
 
         let both = ask(
             "Edit",
             json!([accept_edits(), directory(&format!("{OUTSIDE}\\w"))]),
         );
         assert_eq!(
-            sent(updates(&both, true, Some(OUTSIDE)).unwrap()),
+            sent(updates(&both, true, Some(OUTSIDE), None).unwrap()),
             json!([directory(OUTSIDE), accept_edits()]),
         );
 
@@ -551,5 +638,99 @@ mod tests {
         assert!(!offers_accept_edits(&bash), "only edit tools offer it");
         assert!(!offers_accept_edits(&ask("Write", json!([]))));
         assert!(!offers_accept_edits(&ask("Write", json!("odd"))));
+    }
+
+    fn tool(tool_name: &str, input: Value, reason_type: Option<&str>) -> CanUseTool {
+        serde_json::from_value(json!({"tool_name": tool_name, "input": input,
+            "tool_use_id": "t1", "decision_reason_type": reason_type}))
+        .unwrap()
+    }
+
+    fn edit_rule(tool_name: &str, content: &str) -> Value {
+        json!({"type": "addRules", "rules": [{"toolName": tool_name, "ruleContent": content}],
+            "behavior": "allow", "destination": "session"})
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_and_edit_asks_offer_their_file() {
+        let cwd = Path::new(r"C:\work\project");
+        let offer = |name: &str, input: Value| FileOffer::of(&tool(name, input, None), cwd);
+        let plan = r"C:\Users\user\.claude\plans\x.md";
+        assert_eq!(
+            offer("Read", json!({"file_path": plan})),
+            Some(FileOffer {
+                kind: FileKind::Read,
+                path: plan.into()
+            })
+        );
+        for (name, key) in [
+            ("Edit", "file_path"),
+            ("Write", "file_path"),
+            ("MultiEdit", "file_path"),
+            ("NotebookEdit", "notebook_path"),
+        ] {
+            assert_eq!(
+                offer(name, json!({key: "src/../notes/a.md"})),
+                Some(FileOffer {
+                    kind: FileKind::Edit,
+                    path: r"C:\work\project\notes\a.md".into()
+                }),
+                "{name}"
+            );
+        }
+        assert_eq!(offer("Bash", json!({"command": "cat a"})), None);
+        assert_eq!(offer("Glob", json!({"pattern": "*.md"})), None);
+        assert_eq!(offer("Edit", json!({})), None);
+    }
+
+    #[test]
+    fn file_offers_match_by_kind_and_path_without_case() {
+        let edit = FileOffer {
+            kind: FileKind::Edit,
+            path: r"C:\Users\user\.claude\plans\x.md".into(),
+        };
+        let same = FileOffer {
+            path: r"c:\users\USER\.claude\plans\X.md".into(),
+            ..edit.clone()
+        };
+        assert!(edit.same(&same));
+        assert!(!edit.same(&FileOffer {
+            kind: FileKind::Read,
+            ..edit.clone()
+        }));
+        assert!(!edit.same(&FileOffer {
+            path: r"C:\Users\user\.claude\plans\y.md".into(),
+            ..edit.clone()
+        }));
+    }
+
+    #[test]
+    fn a_file_grant_sends_its_rule_unless_a_safety_check_asked() {
+        let file = FileOffer {
+            kind: FileKind::Edit,
+            path: format!("{OUTSIDE}\\note.md"),
+        };
+        let outside = tool("Edit", json!({}), Some("workingDir"));
+        assert_eq!(
+            sent(updates(&outside, false, None, Some(&file)).unwrap()),
+            json!([edit_rule(
+                "Edit",
+                "//c/Users/user/AppData/Local/Temp/vigie2-spike/outside/note.md"
+            )]),
+        );
+        let read = FileOffer {
+            kind: FileKind::Read,
+            path: "/home/me/a.md".into(),
+        };
+        assert_eq!(
+            sent(updates(&outside, false, None, Some(&read)).unwrap()),
+            json!([edit_rule("Read", "//home/me/a.md")]),
+        );
+        let sensitive = tool("Edit", json!({}), Some("safetyCheck"));
+        assert_eq!(
+            sent(updates(&sensitive, false, None, Some(&file)).unwrap()),
+            json!([])
+        );
     }
 }

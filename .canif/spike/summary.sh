@@ -3,7 +3,7 @@
 # description: Summarize recorded spike runs of claude -p (reads spike/runs only)
 # args:
 #   scenario:
-#     choices: [basic, permissions, plan, interrupt, background, cd, context, grants, agents]
+#     choices: [basic, permissions, plan, interrupt, background, cd, context, grants, agents, filerules]
 #     many: true
 # ---
 set -euo pipefail

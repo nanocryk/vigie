@@ -128,6 +128,8 @@ export type Answer =
       accept_edits?: true;
       /** Also grants this folder for the session: the offered one or a parent. */
       folder?: string;
+      /** Also allows the later asks on the ask's file until the Claude process stops. */
+      always_for_file?: true;
     }
   | { kind: "deny"; message: string }
   | { kind: "questions"; answers: Record<string, string> };
@@ -197,6 +199,16 @@ export interface FolderOffer {
   broad: string[];
 }
 
+/** Reading, or any edit tool. */
+export type FileKind = "read" | "edit";
+
+/** The file of a Read or edit-tool ask, which an allow can grant for good. */
+export interface FileOffer {
+  kind: FileKind;
+  /** Absolute: `C:\a\b.md` on a drive, `/a/b.md` otherwise. */
+  path: string;
+}
+
 export type HostEvent =
   | { event: "started"; cwd: string }
   | { event: "user_sent"; text: string; client_id: string | null }
@@ -209,6 +221,15 @@ export type HostEvent =
       /** An edit ask offering a switch to Accept edits. */
       accept_edits: boolean;
       folder: FolderOffer | null;
+      file: FileOffer | null;
+    }
+  /** An ask on a file granted for good, allowed by the server without queueing it. */
+  | {
+      event: "auto_allowed";
+      request_id: string;
+      tool_name: string;
+      tool_use_id: string;
+      file: FileOffer;
     }
   | { event: "ask_resolved"; request_id: string }
   | { event: "permission_mode"; mode: string }
@@ -506,6 +527,15 @@ export function parseFolderOffer(raw: unknown): FolderOffer | null {
   };
 }
 
+/** An offer of unexpected shape is dropped: the ask stays answerable without it. */
+export function parseFileOffer(raw: unknown): FileOffer | null {
+  if (!isRecord(raw)) return null;
+  const kind = raw["kind"];
+  const path = raw["path"];
+  if ((kind !== "read" && kind !== "edit") || typeof path !== "string") return null;
+  return { kind, path };
+}
+
 export function parseHostEvent(raw: unknown): HostEvent {
   if (!isRecord(raw)) return { event: "unknown", raw };
   const text = (key: string): string | null => {
@@ -542,6 +572,23 @@ export function parseHostEvent(raw: unknown): HostEvent {
         danger: parseDanger(raw["danger"]),
         accept_edits: raw["accept_edits"] === true,
         folder: parseFolderOffer(raw["folder"]),
+        file: parseFileOffer(raw["file"]),
+      };
+    }
+    case "auto_allowed": {
+      const requestId = text("request_id");
+      const toolName = text("tool_name");
+      const toolUseId = text("tool_use_id");
+      const file = parseFileOffer(raw["file"]);
+      if (requestId === null || toolName === null || toolUseId === null || file === null) {
+        return { event: "unknown", raw };
+      }
+      return {
+        event: "auto_allowed",
+        request_id: requestId,
+        tool_name: toolName,
+        tool_use_id: toolUseId,
+        file,
       };
     }
     case "ask_resolved": {

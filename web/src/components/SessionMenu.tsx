@@ -253,7 +253,7 @@ export function SessionMenu({
                 onClick={revoke.onRevoke}
                 className={`${ENTRY} hover:bg-muted flex-col items-start gap-0.5`}
               >
-                <span>{revoke.busy ? "Revoking..." : "Revoke all folders"}</span>
+                <span>{revoke.busy ? "Revoking..." : "Revoke all grants"}</span>
                 <span className="text-muted-foreground text-xs">
                   Restarts Claude on this session without the folders granted from asks.
                 </span>

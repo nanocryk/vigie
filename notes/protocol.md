@@ -67,6 +67,8 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
   - Bash (`cat` of an outside file): the same Read rule as above, preceded by `{type: "addRules", rules: [{toolName: "Bash", ruleContent: "<exact command>"}], behavior: "allow", destination: "localSettings"}`, a persisted rule for the exact command.
 - The allow result can grant an ancestor of the suggested folder, as a Read rule (`//c/<parent>/**`) or as `addDirectories: ["<parent>"]`: a later Read in a sibling folder under `<parent>` does not ask, and a Read outside `<parent>` still asks.
 - Allowing a Write with its `setMode acceptEdits` suggestion switches the mode: the next Write does not ask.
+- File rules (spike `filerules`): an allow carrying `{type: "addRules", rules: [{toolName: "Edit" or "Read", ruleContent: "//c/<path to the file>"}], behavior: "allow", destination: "session"}` stops later asks on that file outside the working folder: Edit rules for edits, Read rules for reads.
+- Edits under `~/.claude` (a plan file) ask with `decision_reason_type: "safetyCheck"`, "Claude requested permissions to edit <path> which is a sensitive file.", and ask again whatever rule was sent, in the `//c/` or the `C:\` form. Reads there are plain `workingDir` asks, and a Read rule holds. `suppress_always_allow_rule` was absent throughout.
 
 ### Interrupt
 

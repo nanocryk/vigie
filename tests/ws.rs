@@ -382,6 +382,7 @@ fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
             note: None,
             accept_edits: false,
             folder: None,
+            always_for_file: false,
         },
         rewarm: false,
         client_id: client_id.into(),

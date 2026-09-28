@@ -392,8 +392,67 @@ def agents(s, cwd):
     s.drain(20, allow)
 
 
+def posix_rule_path(path):
+    """`C:\\a\\b` as `//c/a/b`, the form the CLI's own rule suggestions use."""
+    drive, rest = str(path).split(":", 1)
+    return f"//{drive.lower()}{rest.replace(chr(92), '/')}"
+
+
+def filerules(s, cwd):
+    plain = Path(cwd).parent / "outside-rules" / "note.md"
+    sensitive = Path.home() / ".claude" / "plans" / "vigie2-spike-rule.md"
+
+    def rule(tool, content):
+        return {"type": "addRules", "rules": [{"toolName": tool, "ruleContent": content}],
+                "behavior": "allow", "destination": "session"}
+
+    def logged(label, policy):
+        def answer(req):
+            s.note("ask", label=label, tool=req["tool_name"], input=req["input"],
+                   suppress_always_allow_rule=req.get("suppress_always_allow_rule"),
+                   decision_reason=req.get("decision_reason"),
+                   decision_reason_type=req.get("decision_reason_type"),
+                   suggestions=req.get("permission_suggestions"))
+            return policy(req)
+        return answer
+
+    def allow_rule(tool, content):
+        return lambda req: {"behavior": "allow", "updatedInput": req["input"],
+                            "updatedPermissions": [rule(tool, content)]}
+
+    def edit(path, old, new):
+        return (f"Use the Edit tool on exactly {path} to replace '{old}' with '{new}'. "
+                "Reply done, or refused if refused, and do not retry or use another tool.")
+
+    def read(path):
+        return (f"Use the Read tool on exactly {path}. Reply with its content, or refused if "
+                "refused, and do not retry or use another tool.")
+
+    s.control("initialize")
+    try:
+        for name, path in (("plain", plain), ("sensitive", sensitive)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("one\n", encoding="utf-8")
+            s.note(f"{name}: first read, allowing with a Read rule in //c/ form")
+            s.turn(read(path), logged(f"{name} read 1", allow_rule("Read", posix_rule_path(path))))
+            s.note(f"{name}: second read, an ask means the rule did not hold")
+            s.turn(read(path), logged(f"{name} read 2", deny_with("Asked again.")))
+            s.note(f"{name}: first edit, allowing with an Edit rule in //c/ form")
+            s.turn(edit(path, "one", "two"),
+                   logged(f"{name} edit 1", allow_rule("Edit", posix_rule_path(path))))
+            s.note(f"{name}: second edit, an ask means the //c/ rule did not hold; "
+                   "allowing with a Windows-path rule")
+            s.turn(edit(path, "two", "three"),
+                   logged(f"{name} edit 2", allow_rule("Edit", str(path))))
+            s.note(f"{name}: third edit, an ask means no rule form held")
+            s.turn(edit(path, "three", "four"),
+                   logged(f"{name} edit 3", deny_with("Asked again.")))
+    finally:
+        sensitive.unlink(missing_ok=True)
+
+
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context, grants, agents)}
+                                     context, grants, agents, filerules)}
 FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",)}
 
 
