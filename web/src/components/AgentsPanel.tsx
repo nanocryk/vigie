@@ -5,13 +5,13 @@ import { useSwipe } from "@/components/Swipe";
 import { formatTokens } from "@/gauges";
 import { type Side, TAP_SLOP_PX } from "@/swipe";
 
-const SPRING_BACK = "transform 200ms ease-out";
+export const SPRING_BACK = "transform 200ms ease-out";
 const ROW = "bg-card relative w-full touch-pan-y rounded-[5px] border px-3 py-2 text-left select-none";
-const SIDE_BUTTON = "voice-ui shrink-0 rounded-[5px] border px-3 text-xs disabled:opacity-50";
+export const SIDE_BUTTON = "voice-ui shrink-0 rounded-[5px] border px-3 text-xs disabled:opacity-50";
 /** Indent per level of the tree. */
 const INDENT_REM = 1;
 
-function coarsePointer(): boolean {
+export function coarsePointer(): boolean {
   return window.matchMedia("(pointer: coarse)").matches;
 }
 
@@ -20,7 +20,7 @@ function errorMessage(err: unknown): string {
 }
 
 /** Revealed behind a swiped row: green toward opening it, red toward stopping it. */
-function reveal(lean: number, armedLeft: boolean): string {
+export function reveal(lean: number, armedLeft: boolean): string {
   if (armedLeft || lean <= -1) return "var(--swipe-deny-latched)";
   if (lean >= 1) return "var(--swipe-accept-latched)";
   const fill = lean < 0 ? "var(--swipe-deny)" : "var(--swipe-accept)";
@@ -28,7 +28,7 @@ function reveal(lean: number, armedLeft: boolean): string {
 }
 
 /** Switches on a click, but not on the tap ending a drag or cancelling an arming. */
-function useSwitchOnTap(armed: boolean, onSwitch: () => void) {
+export function useSwitchOnTap(armed: boolean, onSwitch: () => void) {
   const down = useRef<{ x: number; y: number; armed: boolean } | null>(null);
   return {
     onPointerDown: (event: PointerEvent) => {

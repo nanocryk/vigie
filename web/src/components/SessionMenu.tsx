@@ -1,5 +1,12 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import {
+  SIDE_BUTTON,
+  SPRING_BACK,
+  coarsePointer,
+  reveal,
+  useSwitchOnTap,
+} from "@/components/AgentsPanel";
 import {
   MODE_CHOICES,
   type PermissionModeControl,
@@ -7,6 +14,7 @@ import {
   modeOutline,
   modeStyle,
 } from "@/components/PermissionMode";
+import { useSwipe } from "@/components/Swipe";
 
 export type MenuEntry = "mode" | "model" | "effort";
 
@@ -106,6 +114,120 @@ function SettingEntry({
         </div>
       )}
     </Entry>
+  );
+}
+
+/**
+ * Tap opens the agents panel; two swipes left stop every running agent. On
+ * desktop, a Stop all button pressed twice. Both work with no agent running,
+ * then only say so.
+ */
+function AgentsEntry({
+  summary,
+  busy,
+  running,
+  error,
+  onOpen,
+  onStopAll,
+}: {
+  summary: string;
+  busy: boolean;
+  running: boolean;
+  error: string | null;
+  onOpen: () => void;
+  onStopAll: () => void;
+}) {
+  // A new attempt starts the gesture over.
+  const [attempt, setAttempt] = useState(0);
+  const [idle, setIdle] = useState(false);
+  const confirm = () => {
+    setAttempt((count) => count + 1);
+    setIdle(!running);
+    if (running) onStopAll();
+  };
+  const notice = idle ? "No agent running" : error;
+  return (
+    <>
+      <AgentsRow
+        key={`${attempt}-${busy}`}
+        summary={busy ? "stopping all..." : summary}
+        stoppable={!busy}
+        onOpen={onOpen}
+        onConfirm={confirm}
+      />
+      {notice !== null && (
+        <p className={`voice-ui px-4 pb-2 text-xs ${idle ? "text-muted-foreground" : "text-destructive"}`}>
+          {notice}
+        </p>
+      )}
+    </>
+  );
+}
+
+function AgentsRow({
+  summary,
+  stoppable,
+  onOpen,
+  onConfirm,
+}: {
+  summary: string;
+  stoppable: boolean;
+  onOpen: () => void;
+  onConfirm: () => void;
+}) {
+  const { surface, view, press } = useSwipe(
+    { dangerous: false, sides: ["left"], swipes: 2, presses: 2 },
+    onConfirm,
+  );
+  const coarse = coarsePointer();
+  const swipeable = coarse && stoppable;
+  const armed = view.armed !== null;
+  const tap = useSwitchOnTap(armed, onOpen);
+  return (
+    <div className="flex items-stretch">
+      <div className="relative min-w-0 flex-1 overflow-hidden">
+        {swipeable && (
+          <div
+            aria-hidden
+            className="voice-ui absolute inset-0 flex items-center justify-end px-4 text-sm text-black"
+            style={{ background: reveal(view.lean, armed) }}
+          >
+            Stop all
+          </div>
+        )}
+        <div
+          ref={swipeable ? surface : undefined}
+          role="button"
+          tabIndex={0}
+          {...tap}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onOpen();
+          }}
+          className={`${ENTRY} bg-background hover:bg-muted relative touch-pan-y select-none ${armed ? "text-destructive" : ""}`}
+          style={{
+            transform: `translateX(${view.offset}px)`,
+            transition: view.dragging ? "none" : SPRING_BACK,
+          }}
+        >
+          <span>{armed ? "Stop all?" : "Agents"}</span>
+          <span className="text-muted-foreground truncate text-sm">{summary}</span>
+        </div>
+      </div>
+      {!coarse && stoppable && (
+        <div className="flex py-2 pr-3">
+          <button
+            type="button"
+            disabled={view.fired !== null}
+            onClick={() => press("left")}
+            className={`${SIDE_BUTTON} border-destructive ${armed ? "bg-destructive text-black" : "text-destructive hover:bg-muted"}`}
+          >
+            {armed ? "Stop all?" : "Stop all"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -241,26 +363,14 @@ export function SessionMenu({
               </button>
             </Entry>
             <Entry>
-              <button type="button" onClick={agents.onOpen} className={`${ENTRY} hover:bg-muted`}>
-                <span>Agents</span>
-                <span className="text-muted-foreground truncate text-sm">{agents.summary}</span>
-              </button>
-            </Entry>
-            <Entry>
-              <button
-                type="button"
-                disabled={!agents.stopAll.enabled || agents.stopAll.busy}
-                onClick={agents.stopAll.onStop}
-                className={`${ENTRY} hover:bg-muted text-destructive flex-col items-start gap-0.5`}
-              >
-                <span>{agents.stopAll.busy ? "Stopping agents..." : "Stop all agents"}</span>
-                <span className="text-muted-foreground text-xs">
-                  Stops every running agent at once; the main agent goes on.
-                </span>
-              </button>
-              {agents.stopAll.error !== null && (
-                <p className="text-destructive voice-ui px-4 pb-2 text-xs">{agents.stopAll.error}</p>
-              )}
+              <AgentsEntry
+                summary={agents.summary}
+                busy={agents.stopAll.busy}
+                running={agents.stopAll.enabled}
+                error={agents.stopAll.error}
+                onOpen={agents.onOpen}
+                onStopAll={agents.stopAll.onStop}
+              />
             </Entry>
             <Entry>
               <button
