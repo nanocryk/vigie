@@ -55,6 +55,7 @@ struct Inner {
     /// What each client connection shows, by connection.
     presence: parking_lot::Mutex<HashMap<Uuid, Presence>>,
     notices: broadcast::Sender<Notice>,
+    seen: broadcast::Sender<Uuid>,
 }
 
 /// Something a discussion wants the user for, raised while no active client has it on screen.
@@ -128,12 +129,18 @@ impl SessionManager {
             cache_watch: tokio::spawn(warn_cold_caches(inner.clone())).abort_handle(),
             presence: parking_lot::Mutex::new(HashMap::new()),
             notices: broadcast::channel(CHANGES_CAPACITY).0,
+            seen: broadcast::channel(CHANGES_CAPACITY).0,
         });
         Ok(Self { inner })
     }
 
     pub fn subscribe_notices(&self) -> broadcast::Receiver<Notice> {
         self.inner.notices.subscribe()
+    }
+
+    /// Receives a discussion's id each time an active client starts showing it.
+    pub fn subscribe_seen(&self) -> broadcast::Receiver<Uuid> {
+        self.inner.seen.subscribe()
     }
 
     pub fn store(&self) -> &Store {
@@ -150,6 +157,7 @@ impl SessionManager {
         let Some(id) = session.filter(|_| active) else {
             return;
         };
+        let _ = self.inner.seen.send(id);
         let (store, changes) = (self.inner.store.clone(), self.inner.changes.clone());
         tokio::spawn(async move { mark_seen(&store, &changes, id).await });
     }

@@ -1,7 +1,8 @@
 /** Without input for this long, a visible page counts as left alone. */
 export const IDLE_AFTER_MS = 2 * 60_000;
 
-const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "scroll"];
+// No `scroll`: the discussion scrolls itself as a reply streams in.
+const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"];
 
 /** The user is at this page: it is visible and got input recently. */
 export function isActive(lastInput: number, visible: boolean, now: number): boolean {

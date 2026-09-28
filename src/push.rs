@@ -2,6 +2,7 @@
 //! `ring`, sent with `reqwest`. The P-256 key pair is generated on first start
 //! and kept in the state directory; browsers subscribe with its public key.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -154,12 +155,39 @@ pub struct Message {
     pub url: String,
 }
 
+/// Closes the notification tagged `clear` without showing anything.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Clear {
+    pub clear: String,
+}
+
 /// Sends messages to every subscribed device.
 pub struct Pusher {
     vapid: Vapid,
     client: reqwest::Client,
     store: Store,
     auth: Arc<Auth>,
+    holding: parking_lot::Mutex<Holding>,
+}
+
+/// The devices each tag was delivered to since its last clear.
+#[derive(Debug, Default)]
+pub struct Holding {
+    devices: HashMap<String, HashSet<String>>,
+}
+
+impl Holding {
+    pub fn delivered(&mut self, tag: &str, device: String) {
+        self.devices
+            .entry(tag.to_string())
+            .or_default()
+            .insert(device);
+    }
+
+    /// The devices to clear `tag` on; forgets them.
+    pub fn take(&mut self, tag: &str) -> HashSet<String> {
+        self.devices.remove(tag).unwrap_or_default()
+    }
 }
 
 impl Pusher {
@@ -175,28 +203,58 @@ impl Pusher {
             client,
             store,
             auth,
+            holding: parking_lot::Mutex::new(Holding::default()),
         })
     }
 
     /// Sends `message` to every subscription of an active device; drops dead ones.
     pub async fn broadcast(&self, message: &Message) {
+        let delivered = self.send_all(message, |_| true).await;
+        let mut holding = self.holding.lock();
+        for device in delivered {
+            holding.delivered(&message.tag, device);
+        }
+    }
+
+    /// Closes notification `tag` on the devices it was delivered to since its last clear.
+    pub async fn clear(&self, tag: &str) {
+        let devices = self.holding.lock().take(tag);
+        if devices.is_empty() {
+            return;
+        }
+        let clear = Clear {
+            clear: tag.to_string(),
+        };
+        self.send_all(&clear, |device| devices.contains(device))
+            .await;
+    }
+
+    /// Sends `message` to the subscriptions of active devices `wanted` keeps;
+    /// returns the devices it reached and drops dead subscriptions.
+    async fn send_all(
+        &self,
+        message: &impl Serialize,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
         let subscriptions = match self.store.push_subscriptions().await {
             Ok(subscriptions) => subscriptions,
             Err(err) => {
                 warn!("read push subscriptions: {err:#}");
-                return;
+                return Vec::new();
             }
         };
         let payload = match serde_json::to_vec(message) {
             Ok(payload) => payload,
             Err(err) => {
                 warn!("serialize push message: {err}");
-                return;
+                return Vec::new();
             }
         };
         let sends = subscriptions
             .into_iter()
-            .filter(|(device, _)| self.auth.registry.find_active(device).is_some())
+            .filter(|(device, _)| {
+                wanted(device) && self.auth.registry.find_active(device).is_some()
+            })
             .map(|(device, subscription)| {
                 let payload = &payload;
                 async move {
@@ -204,9 +262,11 @@ impl Pusher {
                     (device, outcome)
                 }
             });
+        let mut delivered = Vec::new();
         for (device, outcome) in futures_util::future::join_all(sends).await {
             match outcome {
-                Ok(SendOutcome::Ok | SendOutcome::Transient) => {}
+                Ok(SendOutcome::Ok) => delivered.push(device),
+                Ok(SendOutcome::Transient) => {}
                 Ok(SendOutcome::Gone) => {
                     if let Err(err) = self.store.remove_push_subscription(&device).await {
                         warn!("drop the push subscription of a device: {err:#}");
@@ -215,6 +275,7 @@ impl Pusher {
                 Err(err) => warn!("push send: {err:#}"),
             }
         }
+        delivered
     }
 
     /// Encrypts `payload` for `subscription` and posts it to its endpoint.
@@ -470,16 +531,28 @@ pub async fn test(
     }
 }
 
-/// Pushes every notice the manager raises, until the manager is gone.
+/// Pushes every notice the manager raises, and clears a discussion's notification
+/// once it is seen, until the manager is gone.
 pub fn spawn_dispatcher(manager: &SessionManager, pusher: Arc<Pusher>) {
     let mut notices = manager.subscribe_notices();
+    let mut seen = manager.subscribe_seen();
     let store = manager.store().clone();
     tokio::spawn(async move {
         loop {
-            let notice = match notices.recv().await {
-                Ok(notice) => notice,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return,
+            let notice = tokio::select! {
+                notice = notices.recv() => match notice {
+                    Ok(notice) => notice,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => return,
+                },
+                session = seen.recv() => {
+                    match session {
+                        Ok(session) => pusher.clear(&session.to_string()).await,
+                        Err(RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => return,
+                    }
+                    continue;
+                }
             };
             let cwd = match store.session(notice.session).await {
                 Ok(Some(row)) => row.cwd,
@@ -559,6 +632,24 @@ mod tests {
         assert_eq!(message.body, "Turn finished");
         assert_eq!(message.tag, session.to_string());
         assert_eq!(message.url, format!("#/s/{session}"));
+    }
+
+    #[test]
+    fn a_clear_goes_once_to_the_devices_holding_the_tag() {
+        let mut holding = Holding::default();
+        holding.delivered("s1", "phone".into());
+        holding.delivered("s1", "desktop".into());
+        holding.delivered("s2", "phone".into());
+        assert_eq!(
+            holding.take("s1"),
+            HashSet::from(["phone".to_string(), "desktop".to_string()])
+        );
+        assert!(holding.take("s1").is_empty());
+        assert_eq!(holding.take("s2"), HashSet::from(["phone".to_string()]));
+        assert_eq!(
+            serde_json::to_string(&Clear { clear: "s1".into() }).unwrap(),
+            r#"{"clear":"s1"}"#
+        );
     }
 
     #[test]
