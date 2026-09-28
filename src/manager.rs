@@ -721,8 +721,20 @@ async fn raise(inner: &Weak<Inner>, id: Uuid, kind: NoticeKind) {
     let _ = notices.send(Notice { session: id, kind });
 }
 
-/// Every minute, raises `CacheSoonCold` once per request for each discussion
-/// whose 1 hour cache goes cold within `CACHE_WARNING_BEFORE`.
+/// The discussion's latest child was stopped from Home.
+async fn killed(store: &Store, id: Uuid) -> bool {
+    match store.latest_stop_reason(id).await {
+        Ok(reason) => reason == Some(StopReason::Kill),
+        Err(err) => {
+            tracing::warn!("read the stop reason of session {id}: {err:#}");
+            false
+        }
+    }
+}
+
+/// Every minute, raises `CacheSoonCold` once per request for each unarchived
+/// discussion whose 1 hour cache goes cold within `CACHE_WARNING_BEFORE`,
+/// unless it was killed from Home: the user let it go.
 async fn warn_cold_caches(inner: Weak<Inner>) {
     let mut warned: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
     let mut ticks = tokio::time::interval(CACHE_WATCH_INTERVAL);
@@ -754,6 +766,9 @@ async fn warn_cold_caches(inner: Weak<Inner>) {
                 continue;
             }
             warned.insert(row.id, cache.last_request_at);
+            if row.state != SessionState::Running && killed(&store, row.id).await {
+                continue;
+            }
             raise(&inner, row.id, NoticeKind::CacheSoonCold).await;
         }
     }

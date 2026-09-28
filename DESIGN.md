@@ -50,7 +50,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - In a session, the thin bar also shows two pills: the permission mode in its mode's color, and the model with its effort (`Opus 5.5 · high`). Tapping a pill opens the menu on that entry.
 - Context usage comes from the CLI's `get_context_usage`, asked when the session's child starts and after each turn (total, window, autocompact threshold, categories). Between two asks, each main-conversation request updates the total from its own prompt tokens, which is the same figure.
 - Cache expiry is tracked from the last main-conversation request and the TTL each response reports it wrote. A discussion with no recorded request but idle for longer than the longest TTL (1 hour) counts as cold.
-- Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold.
+- Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold. Not after a kill from Home: killing is how the user lets a discussion go for now. A crash, a revoke or a server stop still warns.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued (main agent or subagent), the main agent finished answering with no tool use and no background task pending, or the child stopped unexpectedly.
 
 ## Notifications

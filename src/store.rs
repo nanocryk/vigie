@@ -20,7 +20,9 @@ use crate::child::{Launch, ModelSettings};
 use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
 use crate::protocol::{AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound};
 use crate::push::{PushKeys, PushSubscription};
-use crate::session::{CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice};
+use crate::session::{
+    CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice, StopReason,
+};
 use crate::usage::db::{MessageTokens, UsageDb};
 use crate::usage::inputs::{self, Reading};
 use crate::usage::units::Timestamp;
@@ -514,6 +516,28 @@ impl Store {
                 [device],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Why the discussion's latest child was stopped; `None` when it exited
+    /// without being asked to, or never ran.
+    pub async fn latest_stop_reason(&self, session: Uuid) -> Result<Option<StopReason>> {
+        self.call(move |connection| {
+            let Some(raw) = connection
+                .query_row(
+                    LATEST_HOST_EVENT,
+                    params![session.to_string(), "child_exited", NO_SEQ_LIMIT],
+                    RawEvent::read,
+                )
+                .optional()?
+            else {
+                return Ok(None);
+            };
+            match serde_json::from_str(&raw.parse()?.payload)? {
+                HostEvent::ChildExited { reason, .. } => Ok(reason),
+                _ => Ok(None),
+            }
         })
         .await
     }

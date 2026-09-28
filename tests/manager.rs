@@ -670,6 +670,13 @@ async fn an_unasked_exit_is_unread_and_a_kill_is_not() {
 
     let row = manager.store().session(killed.id()).await.unwrap().unwrap();
     assert_eq!(row.unread, None);
+    // Only a kill spares the cache warning.
+    let store = manager.store();
+    assert_eq!(
+        store.latest_stop_reason(killed.id()).await.unwrap(),
+        Some(StopReason::Kill)
+    );
+    assert_eq!(store.latest_stop_reason(crashed.id()).await.unwrap(), None);
     manager.shutdown().await.unwrap();
 }
 
