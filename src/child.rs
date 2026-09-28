@@ -24,6 +24,17 @@ const STRIPPED_ENV: [&str; 5] = [
 ];
 /// Vigie's hook variables; without them its hook does nothing.
 const STRIPPED_ENV_PREFIX: &str = "VIGIE_";
+/// Variables `cargo run` injects, describing vigie2's own crate. Build scripts
+/// tracking them (ring, among others) would see other values than in a plain
+/// terminal and rebuild every crate above them on each switch.
+const CARGO_RUN_ENV: [&str; 5] = [
+    "CARGO",
+    "CARGO_MANIFEST_DIR",
+    "CARGO_MANIFEST_PATH",
+    "CARGO_CRATE_NAME",
+    "CARGO_BIN_NAME",
+];
+const CARGO_RUN_ENV_PREFIX: &str = "CARGO_PKG_";
 /// Set to false so claude.ai connectors are not loaded; an unauthorized one otherwise gets reported by the model.
 const CONNECTORS_ENV: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
@@ -137,7 +148,10 @@ pub fn env(
 
 fn is_stripped(name: &OsStr) -> bool {
     let upper = name.to_string_lossy().to_ascii_uppercase();
-    upper.starts_with(STRIPPED_ENV_PREFIX) || STRIPPED_ENV.contains(&upper.as_str())
+    upper.starts_with(STRIPPED_ENV_PREFIX)
+        || upper.starts_with(CARGO_RUN_ENV_PREFIX)
+        || STRIPPED_ENV.contains(&upper.as_str())
+        || CARGO_RUN_ENV.contains(&upper.as_str())
 }
 
 fn same_name(name: &OsStr, other: &str) -> bool {
@@ -280,6 +294,12 @@ mod tests {
             var("enable_claudeai_mcp_servers", "true"),
             var("CLAUDE_CONFIG_DIR", "/c"),
             var("ANTHROPIC_MODEL", "m"),
+            var("CARGO", "cargo.exe"),
+            var("CARGO_MANIFEST_DIR", "/vigie2"),
+            var("CARGO_PKG_NAME", "vigie2"),
+            var("CARGO_BIN_NAME", "vigie2"),
+            var("CARGO_HOME", "/cargo"),
+            var("CARGO_TARGET_DIR", "/target"),
         ];
         let child = env(parent, session);
         assert_eq!(
@@ -288,6 +308,8 @@ mod tests {
                 var("PATH", "/bin"),
                 var("CLAUDE_CONFIG_DIR", "/c"),
                 var("ANTHROPIC_MODEL", "m"),
+                var("CARGO_HOME", "/cargo"),
+                var("CARGO_TARGET_DIR", "/target"),
                 var(SESSION_ENV, &session.to_string()),
                 var(CONNECTORS_ENV, "false"),
             ]

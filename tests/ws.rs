@@ -25,7 +25,7 @@ use vigie2::child::Program;
 use vigie2::manager::SessionManager;
 use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::server::{AppState, build_app};
-use vigie2::session::{Answer, Event, EventBody, Line, RestartMode};
+use vigie2::session::{Answer, Event, EventBody, Line, RestartMode, StopReason};
 use vigie2::store::{EventKind, SessionState, Store};
 use vigie2::wire::{
     CACHE_COLD, ClientMessage, SESSION_LIVE, ServerMessage, SessionList, SessionView, WireEvent,
@@ -920,9 +920,10 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
     assert_eq!(client.ack("send-5").await, (true, None));
 }
 
-fn kill(session: Uuid, client_id: &str) -> ClientMessage {
+fn kill(session: Uuid, reason: StopReason, client_id: &str) -> ClientMessage {
     ClientMessage::Kill {
         session,
+        reason,
         client_id: client_id.into(),
     }
 }
@@ -977,7 +978,7 @@ async fn kill_stops_a_live_session_and_keeps_it_listed() {
     let mut client = server.client().await;
     assert_eq!(
         client
-            .command_announced(&kill(id, "kill-1"), "kill-1")
+            .command_announced(&kill(id, StopReason::Kill, "kill-1"), "kill-1")
             .await,
         (true, None)
     );
@@ -990,11 +991,13 @@ async fn kill_stops_a_live_session_and_keeps_it_listed() {
     // Not live any more: acked without effect.
     assert_eq!(
         client
-            .command_announced(&kill(id, "kill-2"), "kill-2")
+            .command_announced(&kill(id, StopReason::Kill, "kill-2"), "kill-2")
             .await,
         (true, None)
     );
-    client.send(&kill(Uuid::new_v4(), "kill-3")).await;
+    client
+        .send(&kill(Uuid::new_v4(), StopReason::Kill, "kill-3"))
+        .await;
     let (ok, error) = client.ack("kill-3").await;
     assert!(!ok);
     assert!(error.unwrap().contains("unknown session"));
@@ -1017,7 +1020,7 @@ async fn archive_is_refused_while_live_and_restore_undoes_it() {
     );
     assert_eq!(server.view(id).await.archived_at, None);
 
-    client.send(&kill(id, "kill-1")).await;
+    client.send(&kill(id, StopReason::Kill, "kill-1")).await;
     assert_eq!(client.ack("kill-1").await, (true, None));
     assert_eq!(
         client
@@ -1226,11 +1229,12 @@ async fn stored_settings_are_passed_at_launch() {
     client.send(&say(id, "hello", true, "send-2")).await;
     assert_eq!(client.ack("send-2").await, (true, None));
     client.until(|event| host_event(event, "ask_queued")).await;
-    client.send(&kill(id, "kill-1")).await;
+    client.send(&kill(id, StopReason::Revoke, "kill-1")).await;
     assert_eq!(client.ack("kill-1").await, (true, None));
     let exited = client
         .until(|event| host_event(event, "child_exited"))
         .await;
+    assert_eq!(client.events[exited].payload["reason"], "revoke");
     let args = client.events[exited].payload["stderr_tail"]
         .as_array()
         .unwrap()

@@ -8,6 +8,7 @@ import {
   type GateFailure,
   type HostEvent,
   type RestartMode,
+  type StopReason,
   type WireEvent,
   isRecord,
   parseCliLine,
@@ -149,6 +150,11 @@ export const emptyTranscript: TranscriptState = {
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
 const SKILL_TOOL = "Skill";
+
+const STOPPED: Record<StopReason, string> = {
+  kill: "Stopped from Home",
+  revoke: "Folders revoked",
+};
 const SUMMARY_LIMIT = 300;
 const UNKNOWN_MESSAGE = "?";
 
@@ -415,8 +421,8 @@ class Draft {
         this.add({
           kind: "notice",
           key,
-          tone: event.code === 0 ? "info" : "error",
-          text: `Claude process ended (${code})`,
+          tone: event.reason !== null || event.code === 0 ? "info" : "error",
+          text: event.reason === null ? `Claude process ended (${code})` : STOPPED[event.reason],
           detail: event.stderr_tail.length > 0 ? event.stderr_tail.join("\n") : null,
         });
         return;

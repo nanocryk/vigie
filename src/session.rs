@@ -123,6 +123,9 @@ pub enum HostEvent {
     ChildExited {
         code: Option<i32>,
         stderr_tail: Vec<String>,
+        /// Why a client stopped the child; absent for any other exit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<StopReason>,
     },
     /// The discussion moved to a fresh Claude session; a continue carries the seed
     /// its first message starts with.
@@ -319,6 +322,17 @@ impl ActivityTracker {
     }
 }
 
+/// Why a client stopped a live child.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    /// Stopped from Home.
+    #[default]
+    Kill,
+    /// Stopped to drop the folders granted from asks.
+    Revoke,
+}
+
 enum Command {
     Send {
         text: String,
@@ -335,7 +349,7 @@ enum Command {
         answer: Answer,
         reply: oneshot::Sender<Result<()>>,
     },
-    Stop,
+    Stop(Option<StopReason>),
 }
 
 /// Handle to a session actor. The actor stops the child when every handle is dropped.
@@ -377,6 +391,7 @@ impl Session {
             events: events.clone(),
             history: config.history,
             end: None,
+            stop_reason: None,
             seq: config.last_seq,
             status: status_sender,
             tracker: ActivityTracker::default(),
@@ -535,7 +550,16 @@ impl Session {
 
     /// Closes the child's stdin and waits for the session to end.
     pub async fn stop(&self) {
-        let _ = self.commands.send(Command::Stop).await;
+        self.stop_with(None).await;
+    }
+
+    /// `stop` on a client's request; `ChildExited` carries `reason`.
+    pub async fn stop_for(&self, reason: StopReason) {
+        self.stop_with(Some(reason)).await;
+    }
+
+    async fn stop_with(&self, reason: Option<StopReason>) {
+        let _ = self.commands.send(Command::Stop(reason)).await;
         self.closed().await;
     }
 
@@ -598,6 +622,8 @@ struct Actor {
     history: Option<Store>,
     /// How the session ends, once decided; an unrequested exit leaves it `None`.
     end: Option<SessionState>,
+    /// Set when a client asked for the stop.
+    stop_reason: Option<StopReason>,
     seq: u64,
     status: watch::Sender<LiveStatus>,
     tracker: ActivityTracker,
@@ -649,7 +675,7 @@ impl Actor {
                 },
                 command = commands.recv(), if ready => match command {
                     Some(command) => self.on_command(command).await,
-                    None => self.begin_stop(),
+                    None => self.begin_stop(None),
                 },
                 _ = tokio::time::sleep_until(kill_at.unwrap_or_else(Instant::now)), if kill_at.is_some() => {
                     self.child.kill();
@@ -872,7 +898,7 @@ impl Actor {
             } => {
                 let _ = reply.send(self.answer(request_id, answer).await);
             }
-            Command::Stop => self.begin_stop(),
+            Command::Stop(reason) => self.begin_stop(reason),
         }
     }
 
@@ -937,11 +963,12 @@ impl Actor {
             .position(|ask| ask.request_id == request_id)
     }
 
-    fn begin_stop(&mut self) {
+    fn begin_stop(&mut self, reason: Option<StopReason>) {
         if self.state == State::Stopping {
             return;
         }
         self.state = State::Stopping;
+        self.stop_reason = reason;
         self.end = Some(SessionState::Stopped);
         self.child.close_stdin();
         self.kill_at = Some(Instant::now() + STOP_GRACE);
@@ -987,7 +1014,12 @@ impl Actor {
         self.requests.clear();
         self.mode_requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();
-        self.emit_host(HostEvent::ChildExited { code, stderr_tail });
+        let reason = self.stop_reason.take();
+        self.emit_host(HostEvent::ChildExited {
+            code,
+            stderr_tail,
+            reason,
+        });
         let end = self.end.take().unwrap_or(SessionState::Exited { code });
         if let Some(history) = &self.history {
             history.set_state(self.id, end);

@@ -374,7 +374,6 @@ export function TranscriptView({
   awaiting,
   turnOpen,
   overlay,
-  tabs,
   panel,
 }: {
   items: readonly Item[];
@@ -387,8 +386,6 @@ export function TranscriptView({
   turnOpen: boolean;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
-  /** Tabs resting on the bottom edge, over the discussion; the content keeps room for them. */
-  tabs?: ReactNode;
   /** In front of the discussion, positioned by itself. */
   panel?: ReactNode;
 }) {
@@ -455,7 +452,7 @@ export function TranscriptView({
         <div
           ref={content}
           onClickCapture={onSummaryClick}
-          className={`mx-auto max-w-5xl space-y-2 px-3 pt-4 ${tabs === undefined ? "pb-4" : "pb-12"}`}
+          className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4"
         >
           {items.length === 0 && pending.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">No messages yet.</p>
@@ -490,11 +487,6 @@ export function TranscriptView({
           {overlay}
         </div>
       </div>
-      {tabs !== undefined && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3">
-          <div className="mx-auto flex max-w-5xl items-end gap-1">{tabs}</div>
-        </div>
-      )}
       {panel}
     </div>
   );

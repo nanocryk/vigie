@@ -49,9 +49,10 @@
 //!   with `text` when not blank, else only at the next `send`; `clear` does the
 //!   same and is recorded as the Clear command. The `user_sent` event carries
 //!   `text` alone, and there is none for a blank `text`.
-//! - `kill {session, client_id}`: stops the live child the graceful way; the
-//!   discussion stays listed and the next `send` resumes it. Acked without effect
-//!   when not live.
+//! - `kill {session, reason?, client_id}`: stops the live child the graceful way;
+//!   the discussion stays listed and the next `send` resumes it. Acked without
+//!   effect when not live. `reason` is `kill` (the default, from Home) or `revoke`
+//!   (dropping the granted folders); the `child_exited` event carries it.
 //! - `archive {session, client_id}`: refused with the ack error `session_live`
 //!   while the child runs. `restore {session, client_id}` unarchives.
 //! - A `send`, `answer` or `restart` on an archived discussion unarchives it
@@ -120,7 +121,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::gauges::{Cache, Context};
-use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode};
+use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
 
 /// Ack error of a `send` or an `answer` refused on a cold cache.
@@ -191,6 +192,8 @@ pub enum ClientMessage {
     },
     Kill {
         session: Uuid,
+        #[serde(default)]
+        reason: StopReason,
         client_id: String,
     },
     Archive {

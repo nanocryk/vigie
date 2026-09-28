@@ -85,17 +85,32 @@ export function modelTabLabel(
 }
 
 /**
- * The effort tab, e.g. `medium effort`: the pick while choosing, else what the
- * CLI applies, else the stored pick, else `fallback`.
+ * The effort shown: the pick while choosing, else what the CLI applies, else
+ * the stored pick, else `fallback`; null when none is known.
  */
+export function shownEffort(
+  applied: string | null,
+  pick: string | null,
+  choosing: boolean,
+  fallback: string | null,
+): string | null {
+  return (choosing ? (pick ?? applied) : (applied ?? pick)) ?? fallback;
+}
+
+/** The effort entry, e.g. `medium effort`; see `shownEffort`. */
 export function effortTabLabel(
   applied: string | null,
   pick: string | null,
   choosing: boolean,
   fallback: string | null,
 ): string {
-  const effort = (choosing ? (pick ?? applied) : (applied ?? pick)) ?? fallback;
+  const effort = shownEffort(applied, pick, choosing, fallback);
   return effort === null ? UNKNOWN_LABEL : `${effort} effort`;
+}
+
+/** The model pill of the thin bar: `Opus 5.5 · high`, the model alone without a known effort. */
+export function modelPillLabel(model: string, effort: string | null): string {
+  return effort === null ? model : `${model} · ${effort}`;
 }
 
 /**

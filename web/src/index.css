@@ -482,6 +482,20 @@
   }
 }
 
+/* Send's left border while a swipe left can stop the turn: red, pulsing; steady under reduced motion. */
+@utility send-stop-edge {
+  border-left-color: var(--destructive);
+  @media (prefers-reduced-motion: no-preference) {
+    animation: send-stop-edge 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes send-stop-edge {
+  50% {
+    border-left-color: color-mix(in oklch, var(--destructive) 25%, transparent);
+  }
+}
+
 @keyframes thinking-dots {
   from {
     width: 1ch;

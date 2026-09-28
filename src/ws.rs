@@ -283,7 +283,11 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
             };
             (client_id, result.await)
         }
-        ClientMessage::Kill { session, client_id } => (client_id, manager.kill(session).await),
+        ClientMessage::Kill {
+            session,
+            reason,
+            client_id,
+        } => (client_id, manager.kill(session, reason).await),
         ClientMessage::Archive { session, client_id } => {
             (client_id, manager.archive(session).await)
         }

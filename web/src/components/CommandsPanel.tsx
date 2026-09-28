@@ -6,8 +6,8 @@ import type { Side } from "@/swipe";
 
 const SPRING_BACK = "transform 200ms ease-out";
 const USE_SIDES: readonly Side[] = ["right"];
-/** Same size as Send, which the field's action button replaces. */
-const ACTION = "voice-ui h-12 w-20 shrink-0 rounded-[5px] text-sm";
+/** Same size as the composer's touch Send, which the field's action button replaces. */
+const ACTION = "voice-ui h-14 w-28 shrink-0 rounded-[5px] text-sm";
 
 function coarsePointer(): boolean {
   return window.matchMedia("(pointer: coarse)").matches;
@@ -88,7 +88,7 @@ function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: Com
   );
 }
 
-/** In front of the discussion, above the tabs: one card per command matching the filter. */
+/** In front of the discussion: one card per command matching the filter. */
 export function CommandsPanel({
   cards,
   argument,
@@ -102,7 +102,7 @@ export function CommandsPanel({
   onClose: () => void;
 }) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-7 z-30 px-3">
+    <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 px-3">
       <div className="bg-background pointer-events-auto mx-auto flex max-h-[60dvh] max-w-5xl flex-col rounded-[5px] border shadow-lg">
         <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
           <span className="voice-heading text-sm">
@@ -195,7 +195,7 @@ export function CommandField({
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint={browsing ? "done" : "send"}
-          className="bg-card focus:ring-ring voice-code min-h-12 min-w-0 flex-1 rounded-[5px] border px-3 text-sm outline-none focus:ring-2"
+          className="bg-card focus:ring-ring voice-code min-h-14 min-w-0 flex-1 rounded-[5px] border px-3 text-sm outline-none focus:ring-2"
         />
         {browsing ? (
           <button

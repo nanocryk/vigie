@@ -9,11 +9,13 @@ import {
   effortTabLabel,
   firstButton,
   modelOptionLabel,
+  modelPillLabel,
   modelTabLabel,
   pickEffort,
   pickModel,
   settingsPatch,
   settingsPlan,
+  shownEffort,
 } from "@/settings";
 import type { ModelChoice } from "@/wire";
 
@@ -72,6 +74,13 @@ describe("labels and levels", () => {
     expect(effortTabLabel(null, "max", false, "medium")).toBe("max effort");
     expect(effortTabLabel("high", null, false, "medium")).toBe("high effort");
     expect(effortTabLabel(null, null, true, "medium")).toBe("medium effort");
+  });
+
+  it("labels the model pill with its effort when known", () => {
+    expect(modelPillLabel("Opus 5.5", "high")).toBe("Opus 5.5 · high");
+    expect(modelPillLabel("Haiku 4.5", null)).toBe("Haiku 4.5");
+    expect(shownEffort("medium", "max", false, null)).toBe("medium");
+    expect(shownEffort(null, null, false, null)).toBeNull();
   });
 
   it("keeps the shared default effort only where the model offers it", () => {

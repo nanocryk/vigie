@@ -276,6 +276,7 @@ export function Header({
   usage,
   column,
   info,
+  pills,
   label,
 }: {
   left: ReactNode;
@@ -285,6 +286,8 @@ export function Header({
   column: ReactNode;
   /** Left of the thin bar. */
   info: ReactNode;
+  /** Right after `info`, in a session: the mode and model pills. */
+  pills?: ReactNode;
   /** Device label, right of the thin bar. */
   label: string | null;
 }) {
@@ -307,7 +310,9 @@ export function Header({
         </div>
       </div>
       <div className="voice-ui flex h-7 items-center gap-2 border-b pr-1 pl-3 text-xs">
-        <div className="min-w-0 flex-1 truncate">{info}</div>
+        <div className="min-w-0 truncate">{info}</div>
+        {pills}
+        <div className="flex-1" />
         {label !== null && (
           <span className="text-muted-foreground max-w-[50%] min-w-0 truncate">{label}</span>
         )}

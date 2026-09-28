@@ -27,14 +27,22 @@ import {
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
 import { ColdPanel, useCacheGauge } from "@/components/ColdPanel";
 import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
-import { PermissionMode } from "@/components/PermissionMode";
+import { usePermissionMode } from "@/components/PermissionMode";
+import { DesktopSend, TouchSend } from "@/components/SendControls";
 import { BusyDot, ConnectionDot } from "@/components/SessionList";
-import { SettingTab } from "@/components/SettingTab";
+import {
+  type MenuEntry,
+  type MenuState,
+  MenuPills,
+  SessionMenu,
+  closedMenu,
+} from "@/components/SessionMenu";
 import { Header, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
 import { backToList } from "@/route";
+import type { SendAction } from "@/sendGesture";
 import {
   DEFAULT_MODEL,
   type Settings,
@@ -46,10 +54,12 @@ import {
   effortTabLabel,
   firstButton,
   modelOptionLabel,
+  modelPillLabel,
   modelTabLabel,
   pickEffort,
   pickModel,
   settingsPlan,
+  shownEffort,
 } from "@/settings";
 import { type Item, emptyTranscript, parseTime } from "@/transcript";
 
@@ -74,18 +84,30 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Send and the floating Stop above it share this size. */
-const ACTION_SIZE = "voice-ui h-12 w-20 shrink-0 rounded-[5px] text-sm";
-
 function Composer({
   session,
+  turnOpen,
+  stopping,
+  menuOpen,
   onSend,
   onSlash,
+  onStop,
+  onMenu,
+  onMenuToggle,
 }: {
   session: string;
+  turnOpen: boolean;
+  /** A stop was sent and awaits the server. */
+  stopping: boolean;
+  menuOpen: boolean;
   onSend: (text: string) => void;
   /** A `/` became the first character: `text` is the whole composer text. */
   onSlash: (text: string) => void;
+  onStop: () => void;
+  /** Opens the menu (swipe up on touch). */
+  onMenu: () => void;
+  /** Opens or closes the menu (the desktop button). */
+  onMenuToggle: () => void;
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
   const area = useRef<HTMLTextAreaElement>(null);
@@ -127,28 +149,53 @@ function Composer({
     }
   };
 
+  const coarse = coarsePointer();
+  const ready = text.trim() !== "";
+  const onAction = (action: SendAction) => {
+    switch (action) {
+      case "send":
+        submit();
+        return;
+      case "stop":
+        onStop();
+        return;
+      case "menu":
+        onMenu();
+        return;
+    }
+  };
+
+  // Send spans the bar's height at any number of lines: the row stretches its items.
   return (
-    <div className="mx-auto flex max-w-5xl items-end gap-2">
+    <div className="mx-auto flex max-w-5xl items-stretch gap-2">
       <textarea
         ref={area}
         rows={1}
         value={text}
         onChange={(event) => change(event.target.value)}
         onKeyDown={onKeyDown}
-        enterKeyHint={coarsePointer() ? "enter" : "send"}
+        enterKeyHint={coarse ? "enter" : "send"}
         placeholder="Message Claude"
-        className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-12 flex-1 resize-none rounded-[5px] border px-3 py-3.5 text-sm outline-none focus:ring-2"
+        className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-14 min-w-0 flex-1 resize-none rounded-[5px] border px-3 py-4 text-sm outline-none focus:ring-2"
       />
-      <button
-        type="button"
-        // Keeps the focus, and with it the OS keyboard, in the textarea.
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={submit}
-        disabled={text.trim() === ""}
-        className={`bg-primary text-primary-foreground ${ACTION_SIZE} disabled:opacity-50`}
-      >
-        Send
-      </button>
+      {coarse ? (
+        <TouchSend
+          ready={ready}
+          stoppable={turnOpen && !stopping}
+          stopping={stopping}
+          onAction={onAction}
+        />
+      ) : (
+        <DesktopSend
+          ready={ready}
+          turnOpen={turnOpen}
+          stopping={stopping}
+          menuOpen={menuOpen}
+          onSend={submit}
+          onStop={onStop}
+          onMenu={onMenuToggle}
+        />
+      )}
     </div>
   );
 }
@@ -315,9 +362,17 @@ export function SessionScreen({
   }, [applied, rewarmSpell, spell, id]);
 
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuState>(closedMenu);
+  /** Opens the menu on `entry`, or closes it when already open there. */
+  const toggleMenu = (entry: MenuEntry | null) =>
+    setMenu((current) =>
+      current.kind === "open" && current.entry === entry ? closedMenu : { kind: "open", entry },
+    );
 
-  const startSettings = () => {
+  /** Starts the change flow; the menu opens on `entry`, which lists its choices. */
+  const startSettings = (entry: "model" | "effort") => {
     setPanel(closedPanel);
+    setMenu({ kind: "open", entry });
     setColdError(null);
     if (transcript.turnOpen) {
       client
@@ -392,7 +447,7 @@ export function SessionScreen({
         return;
       case "model":
       case "effort":
-        startSettings();
+        startSettings(command);
         return;
     }
   };
@@ -436,7 +491,56 @@ export function SessionScreen({
         })
       : null;
   const shownCards = panel.kind === "browsing" ? filterCards(allCards, panel.filter) : [];
-  const tabsEnabled = view !== null && !archived;
+  const controlsEnabled = view !== null && !archived;
+  const choosingSettings = flow.kind !== "closed";
+
+  const mode =
+    view?.live === true
+      ? transcript.permissionMode
+      : (view?.permission_mode ?? transcript.permissionMode);
+  const modeControl = usePermissionMode(client, id, mode, controlsEnabled);
+  const modelLabel = modelTabLabel(
+    models,
+    view?.applied_model ?? null,
+    picks.model,
+    choosingSettings,
+    fallbackModel,
+  );
+  const effort = shownEffort(view?.applied_effort ?? null, picks.effort, choosingSettings, fallbackEffort);
+
+  // Revoking drops the granted folders with the Claude process; the next send
+  // resumes the same Claude session with `--resume`, keeping its context.
+  const [revoking, setRevoking] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const revoke = () => {
+    setRevoking(true);
+    setRevokeError(null);
+    client
+      .command({ type: "kill", session: id, reason: "revoke", client_id: client.newClientId() })
+      .then(
+        () => setMenu(closedMenu),
+        (err: unknown) => setRevokeError(errorMessage(err)),
+      )
+      .finally(() => setRevoking(false));
+  };
+
+  // Escape closes the menu, else the commands panel, else stops a running turn.
+  const escape = useRef(() => {});
+  useLayoutEffect(() => {
+    escape.current = () => {
+      if (menu.kind === "open") setMenu(closedMenu);
+      else if (panel.kind !== "closed") setPanel(closedPanel);
+      else if (transcript.turnOpen && !stopping) stop();
+    };
+  });
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      escape.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const choose = (choice: ColdChoice) => {
     if (spell === null && !archived) return;
@@ -519,6 +623,14 @@ export function SessionScreen({
             )}
           </>
         }
+        pills={
+          <MenuPills
+            mode={mode}
+            modelLabel={modelPillLabel(modelLabel, effort)}
+            enabled={controlsEnabled}
+            onOpen={toggleMenu}
+          />
+        }
         label={label}
       />
 
@@ -533,89 +645,64 @@ export function SessionScreen({
         onDismiss={dismiss}
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={transcript.turnOpen}
-        tabs={
-          <>
-            <PermissionMode
-              client={client}
-              session={id}
-              mode={
-                view?.live === true
-                  ? transcript.permissionMode
-                  : (view?.permission_mode ?? transcript.permissionMode)
-              }
-              enabled={view !== null && !archived}
-            />
-            <SettingTab
-              label={modelTabLabel(
-                models,
-                view?.applied_model ?? null,
-                picks.model,
-                flow.kind !== "closed",
-                fallbackModel,
-              )}
-              stopLabel="Stop here and change model"
-              enabled={tabsEnabled}
-              picking={flow.kind !== "closed"}
-              options={models.map((model) => ({ value: model.value, label: modelOptionLabel(models, model) }))}
-              selected={picks.model ?? DEFAULT_MODEL}
-              onStop={startSettings}
-              onPick={(value) => choosePicks(pickModel(picks, value, models))}
-            />
-            <SettingTab
-              label={effortTabLabel(
-                view?.applied_effort ?? null,
-                picks.effort,
-                flow.kind !== "closed",
-                fallbackEffort,
-              )}
-              stopLabel="Stop here and change effort"
-              enabled={tabsEnabled}
-              picking={flow.kind !== "closed"}
-              options={effortLevels(models, picks.model).map((level) => ({
-                value: level,
-                label: level,
-              }))}
-              selected={picks.effort}
-              onStop={startSettings}
-              onPick={(value) => choosePicks(pickEffort(picks, value))}
-            />
-            <button
-              type="button"
-              disabled={!tabsEnabled || flow.kind !== "closed"}
-              aria-expanded={panel.kind !== "closed"}
-              onClick={() => panelEvent({ type: panel.kind === "closed" ? "open_tab" : "close" })}
-              className={`voice-ui pointer-events-auto shrink-0 rounded-t-[5px] border border-b-0 px-2.5 py-1 text-xs whitespace-nowrap shadow-sm disabled:opacity-60 ${panel.kind === "closed" ? "bg-card text-foreground border-border" : "bg-primary text-primary-foreground border-primary"}`}
-            >
-              /<span className="hidden sm:inline"> Commands</span>
-            </button>
-            {transcript.turnOpen && (
-              <div className="pointer-events-auto ml-auto flex items-end gap-2">
-                {stopError !== null && (
-                  <span className="bg-background text-destructive mb-1 rounded-[5px] px-2 py-0.5 text-xs shadow-sm">
-                    {stopError}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={stop}
-                  disabled={stopping}
-                  className="border-destructive bg-destructive voice-ui w-20 text-black shrink-0 rounded-t-[5px] border border-b-0 py-1 text-xs whitespace-nowrap shadow-sm disabled:opacity-50"
-                >
-                  {stopping ? "Stopping..." : "Stop"}
-                </button>
-              </div>
-            )}
-          </>
-        }
         panel={
-          panel.kind === "closed" ? undefined : (
+          panel.kind !== "closed" ? (
             <CommandsPanel
               cards={shownCards}
               argument={argumentCard}
               onUse={(card) => panelEvent({ type: "use", card })}
               onClose={() => panelEvent({ type: "close" })}
             />
-          )
+          ) : menu.kind === "open" ? (
+            <SessionMenu
+              entry={menu.entry}
+              enabled={controlsEnabled}
+              picking={choosingSettings}
+              mode={mode}
+              modeControl={modeControl}
+              model={{
+                label: modelLabel,
+                stopLabel: "Stop here and change model",
+                options: models.map((model) => ({
+                  value: model.value,
+                  label: modelOptionLabel(models, model),
+                })),
+                selected: picks.model ?? DEFAULT_MODEL,
+                onStop: () => startSettings("model"),
+                onPick: (value) => choosePicks(pickModel(picks, value, models)),
+              }}
+              effort={{
+                label: effortTabLabel(
+                  view?.applied_effort ?? null,
+                  picks.effort,
+                  choosingSettings,
+                  fallbackEffort,
+                ),
+                stopLabel: "Stop here and change effort",
+                options: effortLevels(models, picks.model).map((level) => ({
+                  value: level,
+                  label: level,
+                })),
+                selected: picks.effort,
+                onStop: () => startSettings("effort"),
+                onPick: (value) => choosePicks(pickEffort(picks, value)),
+              }}
+              commandsEnabled={controlsEnabled && !choosingSettings}
+              revoke={{
+                // Revoking ends the process, so a running turn would be cut short.
+                enabled: controlsEnabled && view?.live === true && !turnOpen,
+                busy: revoking,
+                error: revokeError,
+                onRevoke: revoke,
+              }}
+              onEntry={(entry) => setMenu({ kind: "open", entry })}
+              onCommands={() => {
+                setMenu(closedMenu);
+                panelEvent({ type: "open_tab" });
+              }}
+              onClose={() => setMenu(closedMenu)}
+            />
+          ) : undefined
         }
       />
 
@@ -668,10 +755,28 @@ export function SessionScreen({
             {commandError !== null && (
               <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">{commandError}</p>
             )}
+            {stopError !== null && (
+              <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">
+                Stop failed: {stopError}
+              </p>
+            )}
             <Composer
               session={id}
+              turnOpen={transcript.turnOpen}
+              stopping={stopping}
+              menuOpen={menu.kind === "open"}
               onSend={send}
-              onSlash={(text) => panelEvent({ type: "open_slash", text })}
+              onSlash={(text) => {
+                setMenu(closedMenu);
+                panelEvent({ type: "open_slash", text });
+              }}
+              onStop={stop}
+              onMenu={() => setMenu({ kind: "open", entry: null })}
+              onMenuToggle={() =>
+                setMenu((current) =>
+                  current.kind === "open" ? closedMenu : { kind: "open", entry: null },
+                )
+              }
             />
           </footer>
         </>

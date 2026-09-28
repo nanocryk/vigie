@@ -505,6 +505,26 @@ describe("restarts", () => {
     );
   });
 
+  it("a stop a client asked for says why, not how", () => {
+    const exited = (seq: number, reason?: string): WireEvent =>
+      event(seq, "host", {
+        event: "child_exited",
+        code: 0,
+        stderr_tail: [],
+        ...(reason === undefined ? {} : { reason }),
+      });
+    const state = applyEvents(emptyTranscript, [
+      exited(1, "revoke"),
+      exited(2, "kill"),
+      exited(3),
+    ]);
+    expect(state.items.map(shape)).toEqual([
+      ["notice", "Folders revoked"],
+      ["notice", "Stopped from Home"],
+      ["notice", "Claude process ended (code 0)"],
+    ]);
+  });
+
   it("a clear shows a Cleared divider", () => {
     const state = applyEvents(emptyTranscript, [
       event(1, "host", { event: "restarted", mode: "clear", exchanges: 0, total_exchanges: 3 }),

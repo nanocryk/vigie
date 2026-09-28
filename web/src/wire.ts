@@ -155,11 +155,15 @@ export type ClientMessage =
       client_id: string;
     }
   | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string }
-  | { type: "kill"; session: string; client_id: string }
+  /** `reason` defaults to `kill`, a stop from Home. */
+  | { type: "kill"; session: string; reason?: StopReason; client_id: string }
   | { type: "archive"; session: string; client_id: string }
   | { type: "restore"; session: string; client_id: string };
 
 export type RestartMode = "continue" | "blank" | "clear";
+
+/** Why a client stopped a live child: from Home, or to drop the granted folders. */
+export type StopReason = "kill" | "revoke";
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
 
@@ -202,7 +206,13 @@ export type HostEvent =
   | { event: "ask_resolved"; request_id: string }
   | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
-  | { event: "child_exited"; code: number | null; stderr_tail: string[] }
+  | {
+      event: "child_exited";
+      code: number | null;
+      stderr_tail: string[];
+      /** Why a client stopped the child; null for any other exit. */
+      reason: StopReason | null;
+    }
   | {
       event: "restarted";
       mode: RestartMode;
@@ -530,6 +540,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         stderr_tail: Array.isArray(tail)
           ? tail.filter((line): line is string => typeof line === "string")
           : [],
+        reason: raw["reason"] === "kill" || raw["reason"] === "revoke" ? raw["reason"] : null,
       };
     }
     case "restarted": {

@@ -17,7 +17,7 @@ use crate::child::{Launch, ModelSettings, Program};
 use crate::gauges::{self, MainRequest};
 use crate::protocol::{Inbound, System};
 use crate::session::{
-    Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session,
+    Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
 use crate::store::{SessionRow, SharedCatalog, Store, StoredEvent};
 use crate::usage::{SessionContext, Snapshot};
@@ -341,14 +341,14 @@ impl SessionManager {
 
     /// Stops the child the graceful way, as a shutdown does; the discussion stays
     /// listed and the next send resumes it. Does nothing more when not live.
-    pub async fn kill(&self, id: Uuid) -> Result<()> {
+    pub async fn kill(&self, id: Uuid, reason: StopReason) -> Result<()> {
         let mut live = self.inner.live.lock().await;
         let session = live.remove(&id);
         if session.is_none() && self.inner.store.session(id).await?.is_none() {
             bail!("unknown session {id}");
         }
         if let Some(session) = session {
-            session.stop().await;
+            session.stop_for(reason).await;
         }
         drop(live);
         let _ = self.inner.changes.send(id);

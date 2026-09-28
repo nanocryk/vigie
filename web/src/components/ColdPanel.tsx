@@ -135,7 +135,7 @@ export function ColdPanel({
   const heading = archived
     ? "This discussion is archived; any choice restores it."
     : settings !== null
-      ? "Pick a model and an effort level in the tabs above."
+      ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
       : "The cache is cold.";
   return (
     <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

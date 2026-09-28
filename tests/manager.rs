@@ -103,7 +103,9 @@ fn assert_contiguous(events: &[StoredEvent], first: u64) {
 
 fn assert_clean_exit(event: &StoredEvent) {
     match host(event) {
-        HostEvent::ChildExited { code, stderr_tail } => {
+        HostEvent::ChildExited {
+            code, stderr_tail, ..
+        } => {
             assert_eq!(code, Some(0), "fake claude failed: {stderr_tail:?}")
         }
         other => panic!("expected ChildExited, got {other:?}"),
