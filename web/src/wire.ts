@@ -120,7 +120,15 @@ export interface UsageSnapshot {
 }
 
 export type Answer =
-  | { kind: "allow"; updated_input?: unknown; note?: string }
+  | {
+      kind: "allow";
+      updated_input?: unknown;
+      note?: string;
+      /** Also switches to Accept edits; only on an ask offering it. */
+      accept_edits?: true;
+      /** Also grants this folder for the session: the offered one or a parent. */
+      folder?: string;
+    }
   | { kind: "deny"; message: string }
   | { kind: "questions"; answers: Record<string, string> };
 
@@ -166,6 +174,18 @@ export interface Danger {
   reasons: string[];
 }
 
+/** A `Read` rule for Read, Glob, Grep and Bash; an added working folder for Write. */
+export type GrantKind = "read" | "directory";
+
+/** The folder an ask suggests granting for the session. */
+export interface FolderOffer {
+  kind: GrantKind;
+  /** `C:\a\b` on a drive, `/a/b` otherwise. */
+  folder: string;
+  /** The folder and its parents too broad to grant, in the same form. */
+  broad: string[];
+}
+
 export type HostEvent =
   | { event: "started"; cwd: string }
   | { event: "user_sent"; text: string; client_id: string | null }
@@ -175,6 +195,9 @@ export type HostEvent =
       tool_name: string;
       tool_use_id: string;
       danger: Danger;
+      /** An edit ask offering a switch to Accept edits. */
+      accept_edits: boolean;
+      folder: FolderOffer | null;
     }
   | { event: "ask_resolved"; request_id: string }
   | { event: "permission_mode"; mode: string }
@@ -436,6 +459,22 @@ export function parseDanger(raw: unknown): Danger {
   };
 }
 
+/** An offer of unexpected shape is dropped: the ask stays answerable without it. */
+export function parseFolderOffer(raw: unknown): FolderOffer | null {
+  if (!isRecord(raw)) return null;
+  const kind = raw["kind"];
+  const folder = raw["folder"];
+  const broad = raw["broad"];
+  if ((kind !== "read" && kind !== "directory") || typeof folder !== "string") return null;
+  return {
+    kind,
+    folder,
+    broad: Array.isArray(broad)
+      ? broad.filter((path): path is string => typeof path === "string")
+      : [],
+  };
+}
+
 export function parseHostEvent(raw: unknown): HostEvent {
   if (!isRecord(raw)) return { event: "unknown", raw };
   const text = (key: string): string | null => {
@@ -470,6 +509,8 @@ export function parseHostEvent(raw: unknown): HostEvent {
         tool_name: toolName,
         tool_use_id: toolUseId,
         danger: parseDanger(raw["danger"]),
+        accept_edits: raw["accept_edits"] === true,
+        folder: parseFolderOffer(raw["folder"]),
       };
     }
     case "ask_resolved": {

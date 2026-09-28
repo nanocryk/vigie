@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::child::{Child, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
+use crate::grant::{self, FolderOffer};
 use crate::protocol::{
     AppliedSettings, CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse,
     Extra, GetUsageResponse, HostRequest, Inbound, InitCommand, InitModel, InitializeResponse,
@@ -99,6 +100,12 @@ pub enum HostEvent {
         tool_use_id: String,
         #[serde(default)]
         danger: Danger,
+        /// An edit ask the CLI pairs with a switch to Accept edits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        accept_edits: bool,
+        /// The folder the CLI suggests granting for the session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<FolderOffer>,
     },
     AskResolved {
         request_id: String,
@@ -221,6 +228,12 @@ pub enum Answer {
         updated_input: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// Also switches to Accept edits, through the CLI's suggestion.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        accept_edits: bool,
+        /// Also grants this folder for the session: the suggested one or a parent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
     },
     /// The message is shown to the model.
     Deny { message: String },
@@ -715,6 +728,8 @@ impl Actor {
                     tool_name: ask.tool_name.clone(),
                     tool_use_id: ask.tool_use_id.clone(),
                     danger: danger::classify(ask, &self.cwd),
+                    accept_edits: grant::offers_accept_edits(ask),
+                    folder: grant::folder_offer(ask, dirs::home_dir().as_deref()),
                 });
                 self.publish_status();
             }
@@ -1036,9 +1051,15 @@ fn allow_note(tool_name: &str, note: &str) -> String {
 
 fn permission_result(ask: &CanUseTool, answer: &Answer) -> Result<PermissionResult> {
     Ok(match answer {
-        Answer::Allow { updated_input, .. } => {
-            PermissionResult::allow(updated_input.clone().unwrap_or_else(|| ask.input.clone()))
-        }
+        Answer::Allow {
+            updated_input,
+            accept_edits,
+            folder,
+            ..
+        } => PermissionResult::allow_with(
+            updated_input.clone().unwrap_or_else(|| ask.input.clone()),
+            grant::updates(ask, *accept_edits, folder.as_deref())?,
+        ),
         Answer::Deny { message } => PermissionResult::deny(message.clone()),
         Answer::Questions { answers } => {
             if ask.tool_name != ASK_USER_QUESTION {
@@ -1131,6 +1152,8 @@ mod tests {
             Answer::Allow {
                 updated_input: None,
                 note: Some("then test".into()),
+                accept_edits: false,
+                folder: None,
             }
         );
         let bare: Answer = serde_json::from_value(serde_json::json!({"kind": "allow"})).unwrap();
@@ -1138,12 +1161,26 @@ mod tests {
             serde_json::to_value(bare).unwrap(),
             serde_json::json!({"kind": "allow"})
         );
+        let granting: Answer = serde_json::from_value(serde_json::json!({"kind": "allow",
+            "accept_edits": true, "folder": "C:\\a"}))
+        .unwrap();
+        assert_eq!(
+            granting,
+            Answer::Allow {
+                updated_input: None,
+                note: None,
+                accept_edits: true,
+                folder: Some("C:\\a".into()),
+            }
+        );
 
         let queued = HostEvent::AskQueued {
             request_id: "r".into(),
             tool_name: "Bash".into(),
             tool_use_id: "t".into(),
             danger: Danger::from_reasons(vec!["Hard reset: git reset --hard".into()]),
+            accept_edits: false,
+            folder: None,
         };
         assert_eq!(
             serde_json::to_value(&queued).unwrap(),
@@ -1154,9 +1191,9 @@ mod tests {
         let stored: HostEvent = serde_json::from_value(serde_json::json!({"event": "ask_queued",
             "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
         .unwrap();
-        assert!(
-            matches!(stored, HostEvent::AskQueued { danger, .. } if danger == Danger::default())
-        );
+        assert!(matches!(stored, HostEvent::AskQueued {
+            danger, accept_edits: false, folder: None, ..
+        } if danger == Danger::default()));
     }
 
     #[test]
@@ -1168,10 +1205,22 @@ mod tests {
                 &Answer::Allow {
                     updated_input: None,
                     note: Some("then stop".into()),
+                    accept_edits: false,
+                    folder: None,
                 }
             )
             .unwrap(),
             PermissionResult::allow(serde_json::json!({"command": "ls"})),
+        );
+        let grant = Answer::Allow {
+            updated_input: None,
+            note: None,
+            accept_edits: false,
+            folder: Some("C:\\Users".into()),
+        };
+        assert!(
+            permission_result(&bash, &grant).is_err(),
+            "no folder was suggested"
         );
         let questions = Answer::Questions {
             answers: BTreeMap::from([("Pick?".to_string(), "blue".to_string())]),

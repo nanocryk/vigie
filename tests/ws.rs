@@ -335,6 +335,8 @@ fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
         answer: Answer::Allow {
             updated_input: None,
             note: None,
+            accept_edits: false,
+            folder: None,
         },
         rewarm: false,
         client_id: client_id.into(),

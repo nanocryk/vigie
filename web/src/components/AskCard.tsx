@@ -1,11 +1,12 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 
 import { DiffBlock } from "@/components/Diff";
 import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
+import { type Segment, broadReason, offerSegments } from "@/grant";
 import type { Side } from "@/swipe";
 import { type PendingAsk, toolSummary } from "@/transcript";
-import { type Answer, isRecord } from "@/wire";
+import { type Answer, type Danger, type GrantKind, isRecord } from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
 export type SubmitAnswer = (requestId: string, answer: Answer) => Promise<void>;
@@ -195,6 +196,70 @@ function useAnswer(submit: SubmitAnswer, requestId: string) {
   return { sending, error, answer };
 }
 
+const GRANT_HINT: Record<GrantKind, string> = {
+  read: "Tap a folder to also allow reading it for the session",
+  directory: "Tap a folder to also allow working in it for the session",
+};
+
+const GRANT_PICKED: Record<GrantKind, string> = {
+  read: "Allowing also allows reading",
+  directory: "Allowing also allows working in",
+};
+
+/** The suggested folder as segments; tapping one picks it, tapping it again clears the pick. */
+function FolderPicker({
+  kind,
+  segments,
+  picked,
+  onPick,
+  disabled,
+}: {
+  kind: GrantKind;
+  segments: readonly Segment[];
+  picked: Segment | null;
+  onPick: (path: string | null) => void;
+  disabled: boolean;
+}) {
+  const pickedIndex = picked === null ? -1 : segments.indexOf(picked);
+  return (
+    <div className="space-y-1">
+      <p className="text-muted-foreground voice-ui text-xs [overflow-wrap:anywhere]">
+        {picked === null ? GRANT_HINT[kind] : `${GRANT_PICKED[kind]} ${picked.path}`}
+      </p>
+      <div className="voice-code flex flex-wrap items-center gap-y-1 text-sm">
+        {segments.map((segment, index) => {
+          const on = index === pickedIndex;
+          // Folders under the pick are covered by it.
+          const covered = pickedIndex >= 0 && index > pickedIndex;
+          const look = on
+            ? segment.broad
+              ? "bg-destructive text-card border-destructive"
+              : "bg-primary text-primary-foreground border-primary"
+            : covered
+              ? "bg-primary/15 border-transparent"
+              : "bg-background border-transparent";
+          return (
+            <Fragment key={segment.path}>
+              {segment.separator !== "" && (
+                <span className="text-muted-foreground px-0.5">{segment.separator}</span>
+              )}
+              <button
+                type="button"
+                disabled={disabled}
+                aria-pressed={on}
+                onClick={() => onPick(on ? null : segment.path)}
+                className={`rounded-[5px] border px-1.5 py-1 disabled:opacity-50 ${look}`}
+              >
+                {segment.label}
+              </button>
+            </Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** An allow or deny ask (tool use or plan approval), answered by swipe. */
 function ApprovalCard({
   submit,
@@ -210,17 +275,32 @@ function ApprovalCard({
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [acceptEdits, setAcceptEdits] = useState(false);
+  const [pickedPath, setPickedPath] = useState<string | null>(null);
   // A failed answer remounts the swipe so it can be done again.
   const [attempt, setAttempt] = useState(0);
   const plan = ask.toolName === "ExitPlanMode" ? planText(ask.input) : null;
+  const offersAcceptEdits = ask.acceptEdits && !ask.danger.dangerous;
+  const segments = useMemo(
+    () => (ask.folder === null ? [] : offerSegments(ask.folder)),
+    [ask.folder],
+  );
+  const picked = segments.find((segment) => segment.path === pickedPath) ?? null;
+  const danger: Danger =
+    picked?.broad === true
+      ? { dangerous: true, reasons: [...ask.danger.reasons, broadReason(picked.path)] }
+      : ask.danger;
 
   const confirm = (side: Side) => {
     const text = note.trim();
     const value: Answer =
       side === "right"
-        ? text === ""
-          ? { kind: "allow" }
-          : { kind: "allow", note: text }
+        ? {
+            kind: "allow",
+            ...(text === "" ? {} : { note: text }),
+            ...(acceptEdits && offersAcceptEdits ? { accept_edits: true } : {}),
+            ...(picked === null ? {} : { folder: picked.path }),
+          }
         : { kind: "deny", message: text === "" ? DEFAULT_DENY : text };
     void answer(value).then((ok) => {
       if (!ok) setAttempt((count) => count + 1);
@@ -230,12 +310,25 @@ function ApprovalCard({
   // The whole panel is the swipe surface; its own controls keep their taps.
   return (
     <CardFrame title={null} queued={0}>
-      {/* Keyed by the ask: another ask on screen means a fresh gesture. */}
+      {/* Keyed by the ask and the choices: another ask or another grant means a fresh gesture. */}
       <Swipe
-        key={`${ask.requestId}:${attempt}`}
+        key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}`}
         labels={plan !== null ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
-        dangerous={ask.danger.dangerous}
+        dangerous={danger.dangerous}
         onConfirm={confirm}
+        beforeRight={
+          offersAcceptEdits && (
+            <button
+              type="button"
+              disabled={sending}
+              aria-pressed={acceptEdits}
+              onClick={() => setAcceptEdits((on) => !on)}
+              className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${acceptEdits ? "bg-mode-accept text-mode-accept-foreground border-mode-accept" : "text-muted-foreground bg-card/60"}`}
+            >
+              {acceptEdits ? "✓ " : ""}Accept edits
+            </button>
+          )
+        }
       >
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-2">
@@ -250,11 +343,11 @@ function ApprovalCard({
               <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
             )}
           </div>
-          {ask.danger.dangerous && (
+          {danger.dangerous && (
             <div className="border-destructive bg-destructive/15 text-destructive rounded-[5px] border px-3 py-2 text-sm">
               <p className="voice-heading">Dangerous</p>
               <ul className="list-disc pl-5">
-                {ask.danger.reasons.map((reason) => (
+                {danger.reasons.map((reason) => (
                   <li key={reason} className="[overflow-wrap:anywhere]">
                     {reason}
                   </li>
@@ -268,6 +361,15 @@ function ApprovalCard({
             </div>
           ) : (
             <InputView ask={ask} cwd={cwd} />
+          )}
+          {ask.folder !== null && segments.length > 0 && (
+            <FolderPicker
+              kind={ask.folder.kind}
+              segments={segments}
+              picked={picked}
+              onPick={setPickedPath}
+              disabled={sending}
+            />
           )}
           {noteOpen ? (
             <textarea

@@ -50,6 +50,28 @@ describe("parseServerMessage", () => {
     });
   });
 
+  it("reads the offers of a queued ask, dropping an odd folder offer", () => {
+    const ask = { event: "ask_queued", request_id: "r", tool_name: "Read", tool_use_id: "t" };
+    const queued = (payload: unknown) =>
+      parseServerMessage(
+        { type: "event", session: "s", seq: 1, time: "t", kind: "host", payload },
+        "msg",
+      );
+    const folder = { kind: "read", folder: "C:\\a\\b", broad: ["C:\\"] };
+    expect(queued({ ...ask, accept_edits: true, folder })).toMatchObject({
+      event: { payload: { accept_edits: true, folder } },
+    });
+    expect(queued(ask)).toMatchObject({
+      event: { payload: { accept_edits: false, folder: null } },
+    });
+    expect(queued({ ...ask, folder: { kind: "write", folder: "C:\\a" } })).toMatchObject({
+      event: { payload: { folder: null } },
+    });
+    expect(queued({ ...ask, folder: { kind: "directory", folder: "C:\\a" } })).toMatchObject({
+      event: { payload: { folder: { kind: "directory", folder: "C:\\a", broad: [] } } },
+    });
+  });
+
   it("reads an ack without an error", () => {
     expect(parseServerMessage({ type: "ack", client_id: "c", ok: true }, "msg")).toEqual({
       type: "ack",

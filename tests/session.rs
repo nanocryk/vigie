@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use vigie2::child::{Launch, ModelSettings, Program};
+use vigie2::grant::GrantKind;
 use vigie2::protocol::{Delta, Inbound, ResultMessage, StreamEventBody};
 use vigie2::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
@@ -331,6 +332,8 @@ async fn permissions_deny_and_question_answer() {
                 request_id,
                 Answer::Allow {
                     updated_input: None,
+                    accept_edits: false,
+                    folder: None,
                     note: None,
                 }
             )
@@ -398,6 +401,8 @@ async fn interrupt_while_streaming_and_during_a_tool() {
             request_id,
             Answer::Allow {
                 updated_input: None,
+                accept_edits: false,
+                folder: None,
                 note: None,
             },
         )
@@ -454,6 +459,8 @@ async fn permission_mode_changes_are_announced_once_each() {
         .unwrap();
     let allow = Answer::Allow {
         updated_input: None,
+        accept_edits: false,
+        folder: None,
         note: None,
     };
     for expected in ["ExitPlanMode", "Write"] {
@@ -469,6 +476,130 @@ async fn permission_mode_changes_are_announced_once_each() {
     let modes = harness.modes.clone();
     harness.finish().await;
     assert_eq!(modes, ["default", "plan", "default"]);
+}
+
+/// The grants recording: a parent folder granted from a Read ask covers a
+/// sibling, Accept edits from a Write ask covers the next Write, and every
+/// outside-folder ask offers its folder in the kind the CLI suggested.
+#[tokio::test]
+async fn folder_grants_and_accept_edits_reach_the_cli() {
+    const OUTSIDE: &str = r"C:\Users\user\AppData\Local\Temp\vigie2-spike\outside";
+    let mut harness = Harness::start(&recording("grants"));
+    let deny = Answer::Deny {
+        message: "Refused by the spike driver.".into(),
+    };
+    let read = |name: &str| {
+        format!(
+            "Use the Read tool on exactly {OUTSIDE}\\{name}. Reply with its content, or refused \
+             if refused, and do not retry."
+        )
+    };
+    let tail =
+        "Reply with the result, or refused if refused, and do not retry or use another tool.";
+    /// An ask a prompt raises, what it offers, and the answer given.
+    struct Expected {
+        tool: &'static str,
+        accept_edits: bool,
+        folder: Option<(GrantKind, String)>,
+        answer: Answer,
+    }
+    let refused = |tool, kind, folder: &str| Expected {
+        tool,
+        accept_edits: false,
+        folder: Some((kind, folder.to_string())),
+        answer: deny.clone(),
+    };
+    let allow = |accept_edits, folder: Option<String>| Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits,
+        folder,
+    };
+    let script = vec![
+        (
+            read(r"a\b\one.txt"),
+            Some(Expected {
+                tool: "Read",
+                accept_edits: false,
+                folder: Some((GrantKind::Read, format!(r"{OUTSIDE}\a\b"))),
+                answer: allow(false, Some(format!(r"{OUTSIDE}\a"))),
+            }),
+        ),
+        (read(r"a\c\two.txt"), None),
+        (
+            read("other.txt"),
+            Some(refused("Read", GrantKind::Read, OUTSIDE)),
+        ),
+        (
+            "Use the Write tool to create edit1.txt containing x. Then reply done.".into(),
+            Some(Expected {
+                tool: "Write",
+                accept_edits: true,
+                folder: None,
+                answer: allow(true, None),
+            }),
+        ),
+        (
+            "Use the Write tool to create edit2.txt containing y. If refused, reply refused and \
+             do not retry."
+                .into(),
+            None,
+        ),
+        (
+            format!("Use the Write tool to create {OUTSIDE}\\w\\new.txt containing z. {tail}"),
+            Some(refused(
+                "Write",
+                GrantKind::Directory,
+                &format!(r"{OUTSIDE}\w"),
+            )),
+        ),
+        (
+            format!("Use the Glob tool to find *.txt files under {OUTSIDE}. {tail}"),
+            Some(refused("Glob", GrantKind::Read, OUTSIDE)),
+        ),
+        (
+            format!("Use the Grep tool to search for the word other under {OUTSIDE}. {tail}"),
+            Some(refused("Grep", GrantKind::Read, OUTSIDE)),
+        ),
+        (
+            format!("Use the Bash tool to run exactly: cat \"{OUTSIDE}\\other.txt\". {tail}"),
+            Some(refused("Bash", GrantKind::Read, OUTSIDE)),
+        ),
+    ];
+    for (prompt, expected) in script {
+        harness.session.send(prompt, None).await.unwrap();
+        if let Some(expected) = expected {
+            let HostEvent::AskQueued {
+                request_id,
+                tool_name,
+                accept_edits,
+                folder,
+                ..
+            } = harness
+                .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+                .await
+            else {
+                unreachable!()
+            };
+            let tool = expected.tool;
+            assert_eq!(tool_name, tool);
+            assert_eq!(accept_edits, expected.accept_edits, "{tool}");
+            assert_eq!(
+                folder.map(|offer| (offer.kind, offer.folder)),
+                expected.folder,
+                "{tool}"
+            );
+            harness
+                .session
+                .answer(request_id, expected.answer)
+                .await
+                .unwrap();
+        }
+        harness.until_result().await;
+    }
+    let modes = harness.modes.clone();
+    harness.finish().await;
+    assert!(modes.iter().any(|mode| mode == "acceptEdits"), "{modes:?}");
 }
 
 async fn assert_gate_fails(harness: &mut Harness, expected: GateFailure) {
@@ -608,6 +739,8 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
     );
     let allow = Answer::Allow {
         updated_input: None,
+        accept_edits: false,
+        folder: None,
         note: None,
     };
     assert!(
@@ -651,6 +784,8 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
 
     let allow = Answer::Allow {
         updated_input: None,
+        accept_edits: false,
+        folder: None,
         note: Some("Then run the tests.".into()),
     };
     harness
@@ -688,6 +823,8 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
     assert!(!danger.dangerous);
     let blank = Answer::Allow {
         updated_input: None,
+        accept_edits: false,
+        folder: None,
         note: Some("  ".into()),
     };
     harness.session.answer("cli-2", blank).await.unwrap();

@@ -163,6 +163,8 @@ export interface SwipeProps {
   dangerous: boolean;
   /** Called once, when the choice is confirmed. */
   onConfirm: (side: Side) => void;
+  /** Shown immediately left of the right button. */
+  beforeRight?: ReactNode;
   children: ReactNode;
 }
 
@@ -170,7 +172,7 @@ export interface SwipeProps {
  * A panel confirmed by two swipes in the same direction, or by the buttons under
  * it. Remount it (new `key`) to start over.
  */
-export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
+export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: SwipeProps) {
   const { surface, view, press } = useSwipe(
     { dangerous, sides: BOTH_SIDES, swipes: 2, presses: 1 },
     onConfirm,
@@ -219,7 +221,10 @@ export function Swipe({ labels, dangerous, onConfirm, children }: SwipeProps) {
       <div className="flex items-center justify-between gap-2">
         {sideButton("left")}
         <span className="text-muted-foreground voice-ui text-xs">swipe twice</span>
-        {sideButton("right")}
+        <div className="flex items-center gap-2">
+          {beforeRight}
+          {sideButton("right")}
+        </div>
       </div>
     </div>
   );

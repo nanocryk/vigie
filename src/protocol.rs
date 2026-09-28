@@ -750,7 +750,7 @@ pub enum PermissionResult {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        updated_permissions: Option<Vec<Value>>,
+        updated_permissions: Option<Vec<PermissionUpdate>>,
         #[serde(flatten)]
         extra: Extra,
     },
@@ -766,9 +766,14 @@ pub enum PermissionResult {
 
 impl PermissionResult {
     pub fn allow(updated_input: Value) -> Self {
+        Self::allow_with(updated_input, Vec::new())
+    }
+
+    /// An allow that also applies `updates`; none leaves `updatedPermissions` out.
+    pub fn allow_with(updated_input: Value, updates: Vec<PermissionUpdate>) -> Self {
         Self::Allow {
             updated_input,
-            updated_permissions: None,
+            updated_permissions: (!updates.is_empty()).then_some(updates),
             extra: Extra::new(),
         }
     }
@@ -779,6 +784,57 @@ impl PermissionResult {
             interrupt: None,
             extra: Extra::new(),
         }
+    }
+}
+
+/// A permission change: suggested in `can_use_tool.permission_suggestions`,
+/// applied when sent back in an allow's `updatedPermissions`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PermissionUpdate {
+    AddRules {
+        rules: Vec<PermissionRule>,
+        /// `allow`, `deny` or `ask`.
+        behavior: String,
+        /// `session`, `localSettings`, `projectSettings`, `userSettings`, ...
+        destination: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    AddDirectories {
+        directories: Vec<String>,
+        destination: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    SetMode {
+        mode: String,
+        destination: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    #[serde(untagged)]
+    Other(Value),
+}
+
+/// `Read(//c/a/**)` is `{toolName: "Read", ruleContent: "//c/a/**"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRule {
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_content: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+impl CanUseTool {
+    /// The suggestions, typed; empty when absent or not a list.
+    pub fn suggestions(&self) -> Vec<PermissionUpdate> {
+        self.permission_suggestions
+            .clone()
+            .and_then(|raw| serde_json::from_value(raw).ok())
+            .unwrap_or_default()
     }
 }
 
@@ -1355,6 +1411,49 @@ mod tests {
             .find(|command| command.name == "design")
             .unwrap();
         assert_eq!(design.argument_hint.as_deref(), Some("consent | revoke"));
+    }
+
+    #[test]
+    fn recorded_permission_updates_are_typed() {
+        let text = std::fs::read_to_string(runs_dir().join("grants.ndjson")).unwrap();
+        let mut suggestions = 0;
+        let mut sent = 0;
+        for line in text.lines() {
+            let record: Value = serde_json::from_str(line).unwrap();
+            let msg = &record["msg"];
+            let updates = match record["dir"].as_str() {
+                Some("out") => match serde_json::from_value::<Inbound>(msg.clone()).unwrap() {
+                    Inbound::ControlRequest(ControlRequest {
+                        request: CliRequest::CanUseTool(ask),
+                        ..
+                    }) => {
+                        suggestions += 1;
+                        ask.suggestions()
+                    }
+                    _ => continue,
+                },
+                _ => match serde_json::from_value::<PermissionResult>(
+                    msg["response"]["response"].clone(),
+                ) {
+                    Ok(PermissionResult::Allow {
+                        updated_permissions: Some(updates),
+                        ..
+                    }) => {
+                        sent += 1;
+                        updates
+                    }
+                    _ => continue,
+                },
+            };
+            assert!(!updates.is_empty(), "{line}");
+            assert!(
+                !updates
+                    .iter()
+                    .any(|update| matches!(update, PermissionUpdate::Other(_))),
+                "{line}"
+            );
+        }
+        assert_eq!((suggestions, sent), (7, 2));
     }
 
     #[test]

@@ -4,6 +4,7 @@ import {
   type ContentBlock,
   type ModelChoice,
   type Danger,
+  type FolderOffer,
   type GateFailure,
   type HostEvent,
   type RestartMode,
@@ -76,6 +77,9 @@ export interface PendingAsk {
   /** Undefined when the matching `can_use_tool` line was not seen. */
   input: unknown;
   danger: Danger;
+  /** An edit ask offering a switch to Accept edits. */
+  acceptEdits: boolean;
+  folder: FolderOffer | null;
 }
 
 export interface TranscriptState {
@@ -372,6 +376,8 @@ class Draft {
           toolUseId: event.tool_use_id,
           input: request?.input,
           danger: event.danger,
+          acceptEdits: event.accept_edits,
+          folder: event.folder,
         });
         return;
       }

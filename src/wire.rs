@@ -14,9 +14,13 @@
 //!   writing the text.
 //! - `interrupt {session, client_id}`
 //! - `answer {session, request_id, answer, rewarm?, client_id}`: `answer` is `allow
-//!   {updated_input?, note?}`, `deny {message}` or `questions {answers}`, tagged by
-//!   `kind`. A non-blank allow `note` is then sent as a user message queued for the
-//!   running turn, with its own `user_sent` event.
+//!   {updated_input?, note?, accept_edits?, folder?}`, `deny {message}` or
+//!   `questions {answers}`, tagged by `kind`. A non-blank allow `note` is then sent
+//!   as a user message queued for the running turn, with its own `user_sent` event.
+//!   `accept_edits: true` also sends the ask's `setMode acceptEdits` suggestion;
+//!   `folder` also grants that folder for the session, in the kind of the ask's
+//!   folder suggestion. Either is refused when the ask did not offer it, and
+//!   `folder` must be the offered folder or one of its parents.
 //! - While the discussion's cache is cold (`gauges::is_cold`), or a model or
 //!   effort change awaits its first main request (`settings_changed_at` set), a
 //!   `send` or an `answer` without `rewarm: true` is refused with the ack error
@@ -57,7 +61,11 @@
 //! Server to client:
 //! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
 //!   stdout line as JSON (a string when the line is not JSON), `host` a host
-//!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`.
+//!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`,
+//!   `accept_edits` (true on an edit ask offering Accept edits, absent otherwise)
+//!   and `folder {kind, folder, broad}` when the CLI suggests a folder to grant:
+//!   `kind` `read` or `directory`, `folder` as `C:\a\b` or `/a/b`, `broad` the
+//!   folder and parents too broad to grant (drive roots, the home folder, ...).
 //!   `catalog {models, commands}` follows each accepted `initialize`: `models
 //!   [{value, resolved_model?, display_name, description?, effort_levels}]`
 //!   (`resolved_model` the model id `value` stands for, `effort_levels` empty

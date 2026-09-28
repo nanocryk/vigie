@@ -256,6 +256,8 @@ describe("transcript from recordings", () => {
         toolUseId: "toolu_01MNqvkhhFftiww8c6Yao818",
         input: { file_path: writePath, content: "x" },
         danger: { dangerous: false, reasons: [] },
+        acceptEdits: false,
+        folder: null,
       },
     ]);
   });
