@@ -207,12 +207,40 @@ const DELIVERY_LABEL: Record<Delivery, string | null> = {
   handled: "handled locally",
 };
 
-function BubbleTime({ time, now }: { time: number | null; now: number }) {
-  if (time === null) return null;
+/** A bubble's text, rendered or as its markdown source, with the toggle and the time under it. */
+function BubbleBody({
+  text,
+  streaming,
+  time,
+  now,
+}: {
+  text: string;
+  streaming?: boolean;
+  time: number | null;
+  now: number;
+}) {
+  const [raw, setRaw] = useState(false);
   return (
-    <div className={`${STAMP} mt-1.5 text-right`}>
-      {formatStamp(time, now)}
-    </div>
+    <>
+      {raw ? (
+        <pre className="voice-code text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {text}
+        </pre>
+      ) : (
+        <Markdown text={text} streaming={streaming} />
+      )}
+      <div className={`${STAMP} mt-1.5 flex items-baseline justify-between gap-2`}>
+        <button
+          type="button"
+          aria-pressed={raw}
+          onClick={() => setRaw((on) => !on)}
+          className="hover:text-foreground cursor-pointer"
+        >
+          {raw ? "[see rendered]" : "[see raw]"}
+        </button>
+        {time !== null && <span>{formatStamp(time, now)}</span>}
+      </div>
+    </>
   );
 }
 
@@ -243,8 +271,7 @@ const ItemView = memo(function ItemView({
       return (
         <div className="space-y-1 pt-8 first:pt-0">
           <UserBubble>
-            <Markdown text={item.text} />
-            <BubbleTime time={item.time} now={now} />
+            <BubbleBody text={item.text} time={item.time} now={now} />
           </UserBubble>
           {label !== null && (
             <div
@@ -261,8 +288,7 @@ const ItemView = memo(function ItemView({
         <div
           className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none`}
         >
-          <Markdown text={item.text} streaming={item.streaming} />
-          <BubbleTime time={item.time} now={now} />
+          <BubbleBody text={item.text} streaming={item.streaming} time={item.time} now={now} />
         </div>
       );
     case "thinking":
