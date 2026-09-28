@@ -13,7 +13,15 @@ import { useSwipe } from "@/components/Swipe";
 import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo, stateLabel } from "@/format";
-import { type RowAction, actionSide, homeSections, rowAction, rowSwipeRules } from "@/home";
+import {
+  type RowAction,
+  type RowHighlight,
+  actionSide,
+  homeSections,
+  rowAction,
+  rowHighlight,
+  rowSwipeRules,
+} from "@/home";
 import { navigate } from "@/route";
 import { TAP_SLOP_PX } from "@/swipe";
 import type { SessionView } from "@/wire";
@@ -125,6 +133,19 @@ const ACTION_BUTTON: Record<RowAction, string> = {
   restore: "border-swipe-accept-strong text-swipe-accept-strong hover:bg-muted",
 };
 
+/** Border pulse per highlight; work is dimmed so it does not draw the eye. */
+const PULSE: Record<RowHighlight, string> = {
+  ask: "var(--gauge-glow)",
+  stopped: "var(--destructive)",
+  finished: "var(--gauge-ok)",
+  working: "color-mix(in oklch, var(--gauge-cold) 35%, transparent)",
+};
+
+/** A custom property, which React's style type does not list. */
+function pulseStyle(color: string): Record<string, string> {
+  return { "--row-pulse": color };
+}
+
 const REVEAL: Record<RowAction, { fill: string; latched: string }> = {
   kill: { fill: "var(--swipe-deny)", latched: "var(--swipe-deny-latched)" },
   archive: {
@@ -216,6 +237,7 @@ function ActionRow({
   const armed = view.armed !== null;
   const slidOut = action !== "kill" && view.fired !== null;
   const tap = useOpenOnTap(session.id, armed, view.fired !== null);
+  const highlight = armed ? null : rowHighlight(session);
   const status =
     action === "restore"
       ? pending
@@ -240,7 +262,11 @@ function ActionRow({
   return (
     <div className="flex items-stretch gap-2">
       {side === "left" && button}
-      <div className="relative min-w-0 flex-1 overflow-hidden rounded-[5px]">
+      {/* The pulse sits here: the clipping below would cut a shadow drawn by the row. */}
+      <div
+        className={`relative min-w-0 flex-1 overflow-hidden rounded-[5px] ${highlight !== null ? "row-pulse" : ""}`}
+        style={highlight !== null ? pulseStyle(PULSE[highlight]) : undefined}
+      >
         {coarse && (
           <div
             aria-hidden
@@ -255,7 +281,7 @@ function ActionRow({
         <div
           ref={coarse ? surface : undefined}
           {...tap}
-          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${action === "restore" ? "opacity-80" : ""}`}
+          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${highlight !== null ? "border-transparent" : ""} ${action === "restore" ? "opacity-80" : ""}`}
           style={{
             transform: slidOut
               ? `translateX(${side === "left" ? "-110%" : "110%"})`

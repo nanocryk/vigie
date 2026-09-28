@@ -19,6 +19,16 @@ export function homeSections(sessions: readonly SessionView[]): HomeSections {
   return { active, archived: archived.map((entry) => entry.session) };
 }
 
+/** What a row's border shows, strongest first: an ask, an unseen stop, an unseen finished turn, work. */
+export type RowHighlight = "ask" | "stopped" | "finished" | "working";
+
+export function rowHighlight(session: SessionView): RowHighlight | null {
+  if (session.asks > 0) return "ask";
+  if (session.unread === "stopped") return "stopped";
+  if (session.unread === "finished") return "finished";
+  return session.busy ? "working" : null;
+}
+
 /** A live discussion can be killed, a stopped one archived, an archived one restored. */
 export type RowAction = "kill" | "archive" | "restore";
 

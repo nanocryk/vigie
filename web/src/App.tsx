@@ -1,10 +1,11 @@
-import { type ReactNode, use, useEffect } from "react";
+import { type ReactNode, use, useEffect, useState } from "react";
 
 import { getClient } from "@/client";
 import { NewVersionBanner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
 import type { BootResult } from "@/pairing";
+import { watchActivity } from "@/presence";
 import { useRoute } from "@/route";
 import { trackVisualViewport } from "@/viewport";
 
@@ -26,6 +27,10 @@ function Shell({ label }: { label: string | null }) {
     client.start();
   }, [client]);
   const route = useRoute();
+  const [active, setActive] = useState(false);
+  useEffect(() => watchActivity(setActive), []);
+  const viewing = route.kind === "session" ? route.id : null;
+  useEffect(() => client.setPresence(viewing, active), [client, viewing, active]);
   return (
     <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
       <NewVersionBanner />

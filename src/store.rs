@@ -26,7 +26,7 @@ use crate::usage::units::Timestamp;
 use crate::usage::{self, SessionContext, Snapshot};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 11] = [
+const MIGRATIONS: [&str; 12] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -108,6 +108,8 @@ CREATE TABLE cli_catalog (
     // `kind = 'host'` verbatim, or SQLite does not use it.
     "CREATE INDEX events_host ON events (session_id, json_extract(payload, '$.event'), seq)
          WHERE kind = 'host';",
+    // What the user has not seen yet; NULL once seen.
+    "ALTER TABLE sessions ADD COLUMN unread TEXT CHECK (unread IN ('finished', 'stopped'));",
 ];
 
 /// The seq of the `?3`-th latest (0 for the latest) `user_sent` of `?1` below `?2`
@@ -167,6 +169,33 @@ pub enum SessionState {
     },
 }
 
+/// What happened in a discussion since the user last looked at it; a stop outranks a finished turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unread {
+    /// A turn ended and nothing runs.
+    Finished,
+    /// The child stopped without being asked to.
+    Stopped,
+}
+
+impl Unread {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Finished => "finished",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    fn parse(text: &str) -> Result<Self> {
+        match text {
+            "finished" => Ok(Self::Finished),
+            "stopped" => Ok(Self::Stopped),
+            other => bail!("unknown unread state {other}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRow {
     pub id: Uuid,
@@ -195,6 +224,8 @@ pub struct SessionRow {
     /// What the CLI last reported applying; kept once the child stops, cleared
     /// by a change of the stored settings until the next report.
     pub applied: AppliedSettings,
+    /// `None` once the user saw the discussion.
+    pub unread: Option<Unread>,
 }
 
 /// What the CLI offers every discussion, as the latest Claude start reported it;
@@ -395,6 +426,31 @@ impl Store {
                 bail!("unknown session {session}");
             }
             Ok(())
+        })
+        .await
+    }
+
+    /// Raises the unread state to `unread`, never lowering it. Resolves to whether it changed.
+    pub async fn mark_unread(&self, session: Uuid, unread: Unread) -> Result<bool> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET unread = ?2
+                 WHERE id = ?1 AND (unread IS NULL OR (unread = 'finished' AND ?2 = 'stopped'))",
+                params![session.to_string(), unread.as_str()],
+            )?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+
+    /// The user saw the discussion. Resolves to whether it was unread.
+    pub async fn mark_seen(&self, session: Uuid) -> Result<bool> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET unread = NULL WHERE id = ?1 AND unread IS NOT NULL",
+                params![session.to_string()],
+            )?;
+            Ok(changed > 0)
         })
         .await
     }
@@ -953,7 +1009,7 @@ impl RawEvent {
     }
 }
 
-const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at, applied_model, applied_effort FROM sessions";
+const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, state, exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens, context_window, context_source, context_max_tokens, context_autocompact, context_categories, claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at, applied_model, applied_effort, unread FROM sessions";
 
 struct RawSession {
     id: String,
@@ -981,6 +1037,7 @@ struct RawSession {
     settings_changed_at: Option<String>,
     applied_model: Option<String>,
     applied_effort: Option<String>,
+    unread: Option<String>,
 }
 
 impl RawSession {
@@ -1011,6 +1068,7 @@ impl RawSession {
             settings_changed_at: row.get(22)?,
             applied_model: row.get(23)?,
             applied_effort: row.get(24)?,
+            unread: row.get(25)?,
         })
     }
 
@@ -1091,6 +1149,7 @@ impl RawSession {
                 model: self.applied_model,
                 effort: self.applied_effort,
             },
+            unread: self.unread.as_deref().map(Unread::parse).transpose()?,
         })
     }
 }
@@ -1403,6 +1462,23 @@ mod tests {
         assert_eq!(context.used_tokens, 31_048);
         assert_eq!(context.max_tokens, 967_000);
         assert_eq!(context.categories[0].tokens, 31_048);
+    }
+
+    #[tokio::test]
+    async fn a_stop_outranks_a_finished_turn_until_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let unread = async || store.session(id).await.unwrap().unwrap().unread;
+        assert_eq!(unread().await, None);
+        assert!(store.mark_unread(id, Unread::Finished).await.unwrap());
+        assert!(store.mark_unread(id, Unread::Stopped).await.unwrap());
+        assert!(!store.mark_unread(id, Unread::Finished).await.unwrap());
+        assert_eq!(unread().await, Some(Unread::Stopped));
+        assert!(store.mark_seen(id).await.unwrap());
+        assert!(!store.mark_seen(id).await.unwrap());
+        assert_eq!(unread().await, None);
     }
 
     #[tokio::test]

@@ -16,8 +16,8 @@ use vigie2::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
     CANNED_DEFAULT_MODEL, Direction, Recording,
 };
-use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session};
-use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent};
+use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
+use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const ALL: u32 = 100_000;
@@ -595,6 +595,58 @@ async fn pending_asks_are_counted_and_announced() {
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
     assert_clean_exit(stored.last().unwrap());
+}
+
+/// Waits until the discussion's stored unread state is `want`.
+async fn until_unread(manager: &SessionManager, id: Uuid, want: Option<Unread>) {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let row = manager.store().session(id).await.unwrap().unwrap();
+            if row.unread == want {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("unread never became {want:?}"));
+}
+
+#[tokio::test]
+async fn a_finished_turn_is_unread_until_an_active_viewer_sees_it() {
+    let env = Env::new();
+    let manager = env.manager(&recording("basic")).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    session.send("Reply with exactly: ok", None).await.unwrap();
+    until_unread(&manager, id, Some(Unread::Finished)).await;
+
+    let viewer = Uuid::new_v4();
+    manager.set_presence(viewer, Some(id), false);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    until_unread(&manager, id, Some(Unread::Finished)).await;
+    manager.set_presence(viewer, Some(id), true);
+    until_unread(&manager, id, None).await;
+    manager.drop_presence(viewer);
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unasked_exit_is_unread_and_a_kill_is_not() {
+    let env = Env::new();
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+
+    let killed = manager.create(env.cwd.clone()).await.unwrap();
+    manager.kill(killed.id(), StopReason::Kill).await.unwrap();
+    // The fake exits on a line past the end of its script.
+    let crashed = manager.create(env.cwd.clone()).await.unwrap();
+    crashed.send("unscripted", None).await.unwrap();
+    until_unread(&manager, crashed.id(), Some(Unread::Stopped)).await;
+
+    let row = manager.store().session(killed.id()).await.unwrap().unwrap();
+    assert_eq!(row.unread, None);
+    manager.shutdown().await.unwrap();
 }
 
 /// Stores the `out` lines of the `cd` recording as the history of a stopped

@@ -183,7 +183,7 @@ use uuid::Uuid;
 use crate::agents::AgentView;
 use crate::gauges::{Cache, Context};
 use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
-use crate::store::{EventKind, SessionRow, SessionState, StoredEvent};
+use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
 
 /// Ack error of a `send` or an `answer` refused on a cold cache.
 pub const CACHE_COLD: &str = "cache_cold";
@@ -293,6 +293,12 @@ pub enum ClientMessage {
     Restore {
         session: Uuid,
         client_id: String,
+    },
+    /// The discussion on screen (`None` on Home or elsewhere) and whether the user
+    /// is there: page visible and recent input. Sent on every change; not acked.
+    Presence {
+        session: Option<Uuid>,
+        active: bool,
     },
 }
 
@@ -424,6 +430,8 @@ pub struct SessionView {
     pub applied_effort: Option<String>,
     /// Subagents of the running child, oldest first; empty when not live.
     pub agents: Vec<AgentView>,
+    /// `None` once the user saw the discussion.
+    pub unread: Option<Unread>,
 }
 
 impl SessionView {
@@ -449,6 +457,7 @@ impl SessionView {
             applied_model: row.applied.model,
             applied_effort: row.applied.effort,
             agents,
+            unread: row.unread,
         }
     }
 }

@@ -73,6 +73,7 @@ async fn run(
         manager: manager.clone(),
         out,
         subscriptions: HashMap::new(),
+        viewer: Uuid::new_v4(),
     };
     let mut devices = auth.subscribe_changes();
     let mut changes = manager.subscribe_changes();
@@ -149,6 +150,8 @@ struct Connection {
     manager: SessionManager,
     out: mpsc::Sender<ServerMessage>,
     subscriptions: HashMap<Uuid, JoinHandle<()>>,
+    /// This connection's key in the manager's presence registry.
+    viewer: Uuid,
 }
 
 impl Connection {
@@ -208,6 +211,9 @@ impl Connection {
                     task.abort();
                 }
             }
+            ClientMessage::Presence { session, active } => {
+                self.manager.set_presence(self.viewer, session, active);
+            }
             command => {
                 let manager = self.manager.clone();
                 let out = self.out.clone();
@@ -230,6 +236,7 @@ impl Connection {
         for (_, task) in self.subscriptions.drain() {
             task.abort();
         }
+        self.manager.drop_presence(self.viewer);
     }
 }
 
@@ -354,7 +361,8 @@ async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, R
         }
         ClientMessage::Subscribe { .. }
         | ClientMessage::Unsubscribe { .. }
-        | ClientMessage::History { .. } => (String::new(), Err(anyhow!("not a command"))),
+        | ClientMessage::History { .. }
+        | ClientMessage::Presence { .. } => (String::new(), Err(anyhow!("not a command"))),
     }
 }
 

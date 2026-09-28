@@ -43,7 +43,11 @@ export interface SessionView {
   applied_effort: string | null;
   /** Subagents of the running child, oldest first; empty when not live. */
   agents: AgentView[];
+  /** Null once the user saw the discussion. */
+  unread: Unread | null;
 }
+
+export type Unread = "finished" | "stopped";
 
 export type AgentState = "running" | "completed" | "stopped" | "failed";
 
@@ -164,6 +168,8 @@ export type ClientMessage =
   /** Answered by `page`. */
   | { type: "history"; session: string; before_seq: number; exchanges: number }
   | { type: "unsubscribe"; session: string }
+  /** The discussion on screen and whether the user is there; not acked. */
+  | { type: "presence"; session: string | null; active: boolean }
   | { type: "send"; session: string; text: string; rewarm?: true; client_id: string }
   | { type: "interrupt"; session: string; client_id: string }
   /** A message for subagent `task_id`, relayed by the main agent. */
@@ -477,7 +483,14 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     applied_model: optStr(value, "applied_model", label),
     applied_effort: optStr(value, "applied_effort", label),
     agents: parseAgents(value["agents"], `${label}.agents`),
+    unread: parseUnread(value["unread"], `${label}.unread`),
   };
+}
+
+function parseUnread(raw: unknown, label: string): Unread | null {
+  if (raw === null || raw === undefined) return null;
+  if (raw === "finished" || raw === "stopped") return raw;
+  throw new Error(`${label}: expected "finished", "stopped" or null: ${JSON.stringify(raw)}`);
 }
 
 const AGENT_STATES: readonly AgentState[] = ["running", "completed", "stopped", "failed"];

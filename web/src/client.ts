@@ -136,6 +136,8 @@ export class Client {
   private frame: number | null = null;
   private acks = new Map<string, PendingAck>();
   private nextId = 0;
+  /** Sent again on every open. */
+  private presence: { session: string | null; active: boolean } = { session: null, active: false };
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -168,6 +170,13 @@ export class Client {
     this.subscribed.add(id);
     if (!this.snapshot.transcripts.has(id)) this.held.add(id);
     this.send(this.subscription(id));
+  }
+
+  /** Tells the server which discussion is on screen and whether the user is there. */
+  setPresence(session: string | null, active: boolean): void {
+    if (this.presence.session === session && this.presence.active === active) return;
+    this.presence = { session, active };
+    this.send({ type: "presence", ...this.presence });
   }
 
   closeSession(id: string): void {
@@ -319,6 +328,7 @@ export class Client {
       this.attempt = 0;
       this.update({ status: "open" });
       for (const id of this.subscribed) this.send(this.subscription(id));
+      this.send({ type: "presence", ...this.presence });
       void this.refreshSessions();
       void this.refreshUsage();
       void this.refreshCatalog();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { homeSections, rowAction, rowSwipeRules } from "@/home";
+import { homeSections, rowAction, rowHighlight, rowSwipeRules } from "@/home";
 import { type SwipeInput, type SwipeState, idle, step } from "@/swipe";
 import type { SessionView } from "@/wire";
 
@@ -24,7 +24,19 @@ const session = (id: string, patch: Partial<SessionView> = {}): SessionView => (
   applied_model: null,
   applied_effort: null,
   agents: [],
+  unread: null,
   ...patch,
+});
+
+describe("rowHighlight", () => {
+  it("shows the strongest state: ask, stop, finished turn, then work", () => {
+    const all = { asks: 1, unread: "stopped", busy: true } as const;
+    expect(rowHighlight(session("s", all))).toBe("ask");
+    expect(rowHighlight(session("s", { ...all, asks: 0 }))).toBe("stopped");
+    expect(rowHighlight(session("s", { unread: "finished", busy: true }))).toBe("finished");
+    expect(rowHighlight(session("s", { busy: true }))).toBe("working");
+    expect(rowHighlight(session("s"))).toBeNull();
+  });
 });
 
 describe("homeSections", () => {

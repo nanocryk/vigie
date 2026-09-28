@@ -497,6 +497,24 @@
   }
 }
 
+/* A ring and a glow around a Home row in `--row-pulse`, fading in and out slowly; steady under reduced motion. */
+@utility row-pulse {
+  box-shadow:
+    0 0 0 1.5px var(--row-pulse),
+    0 0 12px 3px color-mix(in oklch, var(--row-pulse) 55%, transparent);
+  @media (prefers-reduced-motion: no-preference) {
+    animation: row-pulse 3s ease-in-out infinite;
+  }
+}
+
+@keyframes row-pulse {
+  50% {
+    box-shadow:
+      0 0 0 1.5px color-mix(in oklch, var(--row-pulse) 40%, transparent),
+      0 0 4px 0 transparent;
+  }
+}
+
 @keyframes thinking-dots {
   from {
     width: 1ch;

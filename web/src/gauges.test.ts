@@ -35,6 +35,7 @@ const session = (patch: Partial<SessionView>): SessionView => ({
   applied_model: null,
   applied_effort: null,
   agents: [],
+  unread: null,
   ...patch,
 });
 

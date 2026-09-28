@@ -20,7 +20,7 @@ use crate::protocol::{Inbound, System};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
-use crate::store::{SessionRow, SharedCatalog, Store, StoredEvent};
+use crate::store::{SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 use crate::usage::{SessionContext, Snapshot};
 use crate::{seed, wire};
 
@@ -51,6 +51,25 @@ struct Inner {
     usage_changes: broadcast::Sender<()>,
     catalog_changes: broadcast::Sender<()>,
     sampler: AbortHandle,
+    /// What each client connection shows, by connection.
+    presence: parking_lot::Mutex<HashMap<Uuid, Presence>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Presence {
+    session: Option<Uuid>,
+    /// Page visible and recent input.
+    active: bool,
+}
+
+impl Inner {
+    /// An active client has discussion `id` on screen.
+    fn watched(&self, id: Uuid) -> bool {
+        self.presence
+            .lock()
+            .values()
+            .any(|presence| presence.active && presence.session == Some(id))
+    }
 }
 
 /// Whether `SessionManager::probe_catalog` started a Claude.
@@ -80,12 +99,31 @@ impl SessionManager {
             usage_changes: broadcast::channel(CHANGES_CAPACITY).0,
             catalog_changes: broadcast::channel(CHANGES_CAPACITY).0,
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
+            presence: parking_lot::Mutex::new(HashMap::new()),
         });
         Ok(Self { inner })
     }
 
     pub fn store(&self) -> &Store {
         &self.inner.store
+    }
+
+    /// Records what client connection `viewer` shows. An active viewer on a
+    /// discussion marks it seen.
+    pub fn set_presence(&self, viewer: Uuid, session: Option<Uuid>, active: bool) {
+        self.inner
+            .presence
+            .lock()
+            .insert(viewer, Presence { session, active });
+        let Some(id) = session.filter(|_| active) else {
+            return;
+        };
+        let (store, changes) = (self.inner.store.clone(), self.inner.changes.clone());
+        tokio::spawn(async move { mark_seen(&store, &changes, id).await });
+    }
+
+    pub fn drop_presence(&self, viewer: Uuid) {
+        self.inner.presence.lock().remove(&viewer);
     }
 
     /// Receives the id of a session each time it is spawned, changes activity or
@@ -531,6 +569,11 @@ impl SessionManager {
             session.agents(),
             self.inner.changes.clone(),
         ));
+        tokio::spawn(track_unread(
+            id,
+            session.status(),
+            Arc::downgrade(&self.inner),
+        ));
         let (first_ask, store, changes, catalog_changes) = (
             session.clone(),
             self.inner.store.clone(),
@@ -564,6 +607,69 @@ async fn announce_changes(
         let _ = changes.send(id);
     }
     let _ = changes.send(id);
+}
+
+/// Marks the discussion unread when it goes idle after running, or when its child
+/// exits unasked, unless an active client has it on screen.
+async fn track_unread(id: Uuid, mut status: watch::Receiver<LiveStatus>, inner: Weak<Inner>) {
+    let mut busy = status.borrow().activity == Activity::Busy;
+    loop {
+        let ended = status.changed().await.is_err();
+        let unread = if ended {
+            // The final state is queued to the store before the channel closes.
+            let Some(store) = inner.upgrade().map(|inner| inner.store.clone()) else {
+                return;
+            };
+            match store.session(id).await {
+                Ok(Some(row)) => matches!(
+                    row.state,
+                    SessionState::Exited { .. } | SessionState::GateFailed { .. }
+                )
+                .then_some(Unread::Stopped),
+                Ok(None) => None,
+                Err(err) => {
+                    tracing::warn!("read session {id}: {err:#}");
+                    None
+                }
+            }
+        } else {
+            let now_busy = status.borrow_and_update().activity == Activity::Busy;
+            let finished = busy && !now_busy;
+            busy = now_busy;
+            finished.then_some(Unread::Finished)
+        };
+        if let Some(unread) = unread {
+            mark_unread(&inner, id, unread).await;
+        }
+        if ended {
+            return;
+        }
+    }
+}
+
+async fn mark_unread(inner: &Weak<Inner>, id: Uuid, unread: Unread) {
+    let Some(inner) = inner.upgrade().filter(|inner| !inner.watched(id)) else {
+        return;
+    };
+    let (store, changes) = (inner.store.clone(), inner.changes.clone());
+    drop(inner);
+    match store.mark_unread(id, unread).await {
+        Ok(true) => {
+            let _ = changes.send(id);
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!("mark session {id} unread: {err:#}"),
+    }
+}
+
+async fn mark_seen(store: &Store, changes: &broadcast::Sender<Uuid>, id: Uuid) {
+    match store.mark_seen(id).await {
+        Ok(true) => {
+            let _ = changes.send(id);
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!("mark session {id} seen: {err:#}"),
+    }
 }
 
 /// Samples usage and asks the context and the applied settings each time the session goes idle after a
