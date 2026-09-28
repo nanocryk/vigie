@@ -42,9 +42,10 @@ class Timeout(Exception):
 
 
 class Session:
-    def __init__(self, name, cwd):
+    def __init__(self, name, cwd, extra_flags=()):
         RUNS.mkdir(exist_ok=True)
         self.t0 = time.monotonic()
+        self.seen = []
         self.log = open(RUNS / f"{name}.ndjson", "w", encoding="utf-8", newline="\n")
         self.raw = open(RUNS / f"{name}.stdout.ndjson", "wb")
         self.err = open(RUNS / f"{name}.stderr.log", "wb")
@@ -52,7 +53,7 @@ class Session:
         self.next_id = 0
         env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
         self.session_id = str(uuid.uuid4())
-        argv = [shutil.which("claude"), *FLAGS, "--session-id", self.session_id]
+        argv = [shutil.which("claude"), *FLAGS, *extra_flags, "--session-id", self.session_id]
         self.note("launch", argv=argv, cwd=str(cwd),
                   stripped_env=[k for k in STRIPPED_ENV if k in os.environ])
         self.proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
@@ -93,10 +94,10 @@ class Session:
         self.proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
         self.proc.stdin.flush()
 
-    def user(self, text):
+    def user(self, text, parent_tool_use_id=None):
         print(f"[{self._ms():>6}] user {text}")
         self.send({"type": "user", "message": {"role": "user", "content": text},
-                   "parent_tool_use_id": None, "session_id": self.session_id})
+                   "parent_tool_use_id": parent_tool_use_id, "session_id": self.session_id})
 
     def request(self, subtype, **fields):
         self.next_id += 1
@@ -120,6 +121,7 @@ class Session:
                 self.note("stdout closed", code=self.proc.poll())
                 raise EOFError()
             self._show(msg)
+            self.seen.append(msg)
             if msg.get("type") == "control_request":
                 self._answer(msg, policy)
             if until(msg):
@@ -346,8 +348,53 @@ def grants(s, cwd):
                "refused, and do not retry or use another tool.", refused)
 
 
+def agent_task(s, description):
+    """The `task_started` of the background agent named `description`."""
+    for msg in s.seen:
+        if (msg.get("type") == "system" and msg.get("subtype") == "task_started"
+                and msg.get("description") == description):
+            return msg
+    return None
+
+
+def spawn_agent(s, description, prompt):
+    s.turn(f"Use the Agent tool once, with run_in_background set to true, subagent_type "
+           f"general-purpose, description '{description}', and this prompt: '{prompt}' "
+           "Do not wait for it; reply started.", allow)
+    started = agent_task(s, description)
+    s.note("agent started", description=description,
+           task=None if started is None else {k: started.get(k) for k in (
+               "task_id", "tool_use_id", "task_type", "subagent_type", "is_backgrounded",
+               "spawn_depth")})
+    return started
+
+
+def agents(s, cwd):
+    s.control("initialize", perTaskStopAffordance=True)
+    sleeper = spawn_agent(
+        s, "sleeper",
+        "Use the Bash tool to run exactly: python -c \"import time; time.sleep(20)\". "
+        "Then reply with the single word DONE, unless a message told you another word; "
+        "then reply with that word instead.")
+    if sleeper is not None:
+        s.note("message to the subagent through parent_tool_use_id")
+        s.user("Change of plan: when you finish, reply with the single word PINEAPPLE.",
+               parent_tool_use_id=sleeper.get("tool_use_id"))
+    s.drain(60, allow)
+    stopper = spawn_agent(
+        s, "stopper",
+        "Use the Bash tool to run exactly: python -c \"import time; time.sleep(60)\". "
+        "Then reply DONE.")
+    s.drain(5, allow)
+    if stopper is not None:
+        s.note("stop_task on the second agent")
+        s.control("stop_task", allow, task_id=stopper["task_id"])
+    s.drain(20, allow)
+
+
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context, grants)}
+                                     context, grants, agents)}
+FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",)}
 
 
 def main():
@@ -355,7 +402,7 @@ def main():
     cwd.mkdir(parents=True, exist_ok=True)
     for name in sys.argv[2:]:
         print(f"=== {name}")
-        s = Session(name, cwd)
+        s = Session(name, cwd, FLAGS_BY_SCENARIO.get(name, ()))
         try:
             SCENARIOS[name](s, cwd)
         except (Timeout, EOFError) as e:

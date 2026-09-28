@@ -92,6 +92,16 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - On `task_notification` the CLI starts a new turn by itself, with no user message: `system/init`, the model's reaction, `result`.
 - A foreground `sleep 60` is blocked; the model reruns it in the background.
 
+### Subagents
+
+Recording: `spike/runs/agents.ndjson`, launched with `--forward-subagent-text` and `initialize {perTaskStopAffordance: true}`.
+
+- A background Agent call gives `task_started` with `task_id`, `tool_use_id` (the Agent call), `task_type: "local_agent"`, `subagent_type`, `description`, `is_backgrounded`, `spawn_depth`. Its own tool calls also start tasks (`local_bash`).
+- `stop_task {task_id}` stops one agent: success response, `task_updated {status: "killed"}`, `task_notification {status: "stopped"}`, and the agent's running Bash task is stopped too. The CLI then starts a main turn by itself to react.
+- A user message sent with `parent_tool_use_id` set to an Agent call does not reach that agent: the CLI echoes it with `parent_tool_use_id: null` and the main agent takes it, then relays it with its `SendMessage` tool. The CLI's stdin handling drops the field.
+- No control request messages an agent. The only agent-related control subtype is `stop_task`; the TUI queues a user's message on the agent task internally (`pendingMessages`, `userInitiatedAt`), which `-p` does not expose.
+- `perTaskStopAffordance` in the SDK types: when declared, an interrupt spares running background agents; otherwise an interrupt kills them. Sent here in `initialize`; whether the CLI took it is untested.
+
 ### Slash commands
 
 - `/cd` under `-p`: "/cd isn't available in this environment.", answered locally as an `assistant` message and a `result`, no model request.
