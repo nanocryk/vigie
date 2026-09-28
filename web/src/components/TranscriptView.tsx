@@ -221,6 +221,21 @@ function BubbleBody({
   now: number;
 }) {
   const [raw, setRaw] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const rendered = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (copy === "idle") return;
+    const timer = setTimeout(() => setCopy("idle"), COPY_FEEDBACK_MS);
+    return () => clearTimeout(timer);
+  }, [copy]);
+  // The text as shown: the markdown source, or the rendered text.
+  const copyShown = () => {
+    const shown = raw ? text : (rendered.current?.innerText ?? text);
+    navigator.clipboard.writeText(shown).then(
+      () => setCopy("copied"),
+      () => setCopy("failed"),
+    );
+  };
   return (
     <>
       {raw ? (
@@ -228,22 +243,31 @@ function BubbleBody({
           {text}
         </pre>
       ) : (
-        <Markdown text={text} streaming={streaming} />
+        <div ref={rendered}>
+          <Markdown text={text} streaming={streaming} />
+        </div>
       )}
       <div className={`${STAMP} mt-1.5 flex items-baseline justify-between gap-2`}>
-        <button
-          type="button"
-          aria-pressed={raw}
-          onClick={() => setRaw((on) => !on)}
-          className="hover:text-foreground cursor-pointer"
-        >
-          {raw ? "[see rendered]" : "[see raw]"}
-        </button>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            aria-pressed={raw}
+            onClick={() => setRaw((on) => !on)}
+            className="hover:text-foreground cursor-pointer"
+          >
+            {raw ? "[see rendered]" : "[see raw]"}
+          </button>
+          <button type="button" onClick={copyShown} className="hover:text-foreground cursor-pointer">
+            {copy === "copied" ? "[copied]" : copy === "failed" ? "[copy failed]" : "[copy]"}
+          </button>
+        </div>
         {time !== null && <span>{formatStamp(time, now)}</span>}
       </div>
     </>
   );
 }
+
+const COPY_FEEDBACK_MS = 1500;
 
 // Items keep their identity until they change, so unchanged rows skip rendering.
 const ItemView = memo(function ItemView({
@@ -560,45 +584,37 @@ export function TranscriptView({
     return () => observer.disconnect();
   }, [stick]);
 
-  // Android re-places a selection handle scrolled out of the discussion from its
-  // screen position, which lands in the header: that end is put back where it was.
+  // A selection stays inside the item it started in: the others stop being
+  // selectable until it is cleared, so a handle cannot extend into them.
   useEffect(() => {
     const element = content.current;
     if (element === null) return;
-    let last: { anchor: Node; anchorOffset: number; focus: Node; focusOffset: number } | null =
-      null;
+    let scope: Element | null = null;
+    const clear = () => {
+      scope?.removeAttribute("data-selection-scope");
+      element.removeAttribute("data-selection-scoped");
+      scope = null;
+    };
     const onChange = () => {
       const selection = document.getSelection();
-      const anchor = selection?.anchorNode ?? null;
-      const focus = selection?.focusNode ?? null;
-      if (selection === null || anchor === null || focus === null) {
-        last = null;
+      if (selection === null || selection.isCollapsed || selection.anchorNode === null) {
+        clear();
         return;
       }
-      const anchorInside = element.contains(anchor);
-      const focusInside = element.contains(focus);
-      if (anchorInside && focusInside) {
-        last = {
-          anchor,
-          anchorOffset: selection.anchorOffset,
-          focus,
-          focusOffset: selection.focusOffset,
-        };
-      } else if (last !== null && anchorInside !== focusInside) {
-        const kept = last;
-        if (focusInside && element.contains(kept.anchor)) {
-          selection.setBaseAndExtent(kept.anchor, kept.anchorOffset, focus, selection.focusOffset);
-        } else if (anchorInside && element.contains(kept.focus)) {
-          selection.setBaseAndExtent(anchor, selection.anchorOffset, kept.focus, kept.focusOffset);
-        } else {
-          last = null;
-        }
-      } else {
-        last = null;
-      }
+      if (scope !== null) return;
+      const anchor = selection.anchorNode;
+      let item = anchor instanceof Element ? anchor : anchor.parentElement;
+      while (item !== null && item.parentElement !== element) item = item.parentElement;
+      if (item === null) return;
+      scope = item;
+      item.setAttribute("data-selection-scope", "");
+      element.setAttribute("data-selection-scoped", "");
     };
     document.addEventListener("selectionchange", onChange);
-    return () => document.removeEventListener("selectionchange", onChange);
+    return () => {
+      document.removeEventListener("selectionchange", onChange);
+      clear();
+    };
   }, []);
 
   const jump = () => {
@@ -617,7 +633,7 @@ export function TranscriptView({
         <div
           ref={content}
           onClickCapture={onSummaryClick}
-          className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4"
+          className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4 select-text"
         >
           {items.length === 0 && pending.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">

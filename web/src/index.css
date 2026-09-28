@@ -497,6 +497,12 @@
   }
 }
 
+/* While a selection runs in the discussion, only the item it started in selects. */
+[data-selection-scoped] > :not([data-selection-scope]) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* A ring and a glow around a Home row in `--row-pulse`, fading in and out slowly; steady under reduced motion. */
 @utility row-pulse {
   box-shadow:

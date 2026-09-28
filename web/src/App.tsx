@@ -36,8 +36,12 @@ function Shell({ label }: { label: string | null }) {
     client.setPresence(viewing, active);
     if (viewing !== null && active) void clearNotification(viewing);
   }, [client, viewing, active]);
+  // In a discussion only its text selects: Android re-places a selection handle
+  // scrolled out of view from its screen position, which must not land on the UI.
   return (
-    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden">
+    <div
+      className={`flex h-[var(--app-height,100dvh)] flex-col overflow-hidden ${viewing !== null ? "select-none" : ""}`}
+    >
       <NewVersionBanner />
       {route.kind === "session" ? (
         <SessionScreen key={route.id} client={client} id={route.id} label={label} />

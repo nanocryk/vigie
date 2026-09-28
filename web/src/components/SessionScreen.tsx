@@ -199,7 +199,7 @@ function Composer({
 
   // Send spans the bar's height at any number of lines: the row stretches its items.
   return (
-    <div className="mx-auto flex max-w-5xl items-stretch gap-2">
+    <div className="mx-auto flex max-w-5xl items-stretch gap-2 select-text">
       <textarea
         ref={area}
         rows={1}
