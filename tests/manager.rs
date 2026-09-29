@@ -519,10 +519,11 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
 
     let stored = manager.events_after(id, first_run, ALL).await.unwrap();
     assert_contiguous(&stored, first_run + 1);
+    // No message reached the first child, so the CLI has no conversation to resume.
     assert_eq!(
         host(&stored[0]),
         HostEvent::Started {
-            launch: Launch::Resume(id),
+            launch: Launch::New(id),
             cwd: env.cwd.clone(),
         }
     );
@@ -887,8 +888,9 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         }
     );
     assert_clean_exit(stored.last().unwrap());
+    // Opened without a message: the next launch still creates the Claude session.
     let row = manager.store().session(id).await.unwrap().unwrap();
-    assert_eq!(row.launch, Launch::Resume(blank_session));
+    assert_eq!(row.launch, Launch::New(blank_session));
 }
 
 #[tokio::test]

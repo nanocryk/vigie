@@ -224,7 +224,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Host
 
-- One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart.
+- One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart. A Claude session no message reached yet has no conversation to resume, so it launches again with `--session-id` until one does.
 - Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
 - History in SQLite, for queries and search.
 - Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children, so hooks can detect which host runs them.

@@ -110,8 +110,9 @@ pub struct SessionRow {
 }
 
 impl Store {
-    /// Inserts the session, or marks a known one running again, its current Claude
-    /// session now launched. A `None` mode keeps the stored one.
+    /// Inserts the session, or marks a known one running again. A `None` mode keeps
+    /// the stored one. The Claude session stays fresh until `claude_session_used`:
+    /// the CLI writes no conversation before its first message.
     pub fn session_started(
         &self,
         id: Uuid,
@@ -124,13 +125,26 @@ impl Store {
         self.write("session start", move |connection| {
             let time = format_time(time);
             connection.execute(
-                "INSERT INTO sessions (id, cwd, created_at, updated_at, state, permission_mode)
-                 VALUES (?1, ?2, ?3, ?3, 'running', ?4)
+                "INSERT INTO sessions (id, cwd, created_at, updated_at, state, permission_mode,
+                     claude_session_fresh)
+                 VALUES (?1, ?2, ?3, ?3, 'running', ?4, 1)
                  ON CONFLICT (id) DO UPDATE SET
                      updated_at = excluded.updated_at, state = 'running',
-                     exit_code = NULL, gate_failure = NULL, claude_session_fresh = 0,
+                     exit_code = NULL, gate_failure = NULL,
                      permission_mode = COALESCE(excluded.permission_mode, permission_mode)",
                 params![id.to_string(), cwd, time, permission_mode],
+            )?;
+            Ok(())
+        });
+    }
+
+    /// A message reached the current Claude session: later launches resume it.
+    pub fn claude_session_used(&self, id: Uuid) {
+        self.write("claude session used", move |connection| {
+            connection.execute(
+                "UPDATE sessions SET claude_session_fresh = 0
+                 WHERE id = ?1 AND claude_session_fresh = 1",
+                params![id.to_string()],
             )?;
             Ok(())
         });

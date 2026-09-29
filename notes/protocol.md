@@ -5,7 +5,7 @@ Facts from the Claude Code docs and the `@anthropic-ai/claude-agent-sdk` 0.3.283
 ## Launch
 
 - `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio`
-- `--session-id <uuid>` to pick the id, `--resume <id>` to continue, `--forward-subagent-text` for subagent text.
+- `--session-id <uuid>` to pick the id, `--resume <id>` to continue, `--forward-subagent-text` for subagent text. The conversation is written at the first user message: `--resume` on an id that never got one exits 1 with `No conversation found with session ID: <id>`.
 - `--replay-user-messages` echoes submitted user messages back (with their uuid).
 - Never `--bare`: it ignores OAuth and needs `ANTHROPIC_API_KEY`. Docs: `--bare` "will become the default for `-p` in a future release".
 - Any `ANTHROPIC_API_KEY` in the child env switches billing to the API.

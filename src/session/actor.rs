@@ -596,6 +596,9 @@ impl Actor {
             message = message.with_priority(priority);
         }
         self.write(Outbound::User(message)).await?;
+        if let Some(history) = &self.history {
+            history.claude_session_used(self.id);
+        }
         self.tracker.on_send();
         self.publish_status();
         Ok(())

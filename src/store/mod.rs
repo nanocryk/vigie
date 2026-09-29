@@ -29,7 +29,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 17] = [
+const MIGRATIONS: [&str; 18] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -143,6 +143,24 @@ CREATE TABLE plans (
 "#,
     // Display name of the discussion; NULL shows its folder name.
     "ALTER TABLE sessions ADD COLUMN name TEXT;",
+    // A Claude session no message reached has no conversation to resume: marks
+    // fresh the sessions with no user message, nor a continue seed, since their
+    // latest restart.
+    r#"
+UPDATE sessions SET claude_session_fresh = 1
+WHERE claude_session_fresh = 0 AND NOT EXISTS (
+    SELECT 1 FROM events used
+    WHERE used.session_id = sessions.id AND used.kind = 'host'
+        AND (json_extract(used.payload, '$.event') = 'user_sent'
+            OR (json_extract(used.payload, '$.event') = 'restarted'
+                AND json_extract(used.payload, '$.mode') = 'continue'))
+        AND used.seq >= COALESCE((
+            SELECT MAX(restart.seq) FROM events restart
+            WHERE restart.session_id = sessions.id AND restart.kind = 'host'
+                AND json_extract(restart.payload, '$.event') = 'restarted'
+        ), 0)
+);
+"#,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -384,6 +402,70 @@ mod tests {
                 "usage_slots"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_claude_session_resumes_only_once_a_message_reached_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.launch, Launch::New(id));
+        store.claude_session_used(id);
+        store.session_started(id, dir.path(), Utc::now(), None);
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.launch, Launch::Resume(id));
+    }
+
+    #[tokio::test]
+    async fn migration_marks_fresh_the_claude_sessions_no_message_reached() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let [unused, used, blank, continued] = [(); 4].map(|_| Uuid::new_v4());
+        {
+            let connection = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..17] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.pragma_update(None, "user_version", 17).unwrap();
+            let now = format_time(Utc::now());
+            for id in [unused, used, blank, continued] {
+                connection
+                    .execute(
+                        "INSERT INTO sessions (id, cwd, created_at, updated_at, state)
+                         VALUES (?1, 'C:\\p', ?2, ?2, 'stopped')",
+                        params![id.to_string(), now],
+                    )
+                    .unwrap();
+            }
+            let events = [
+                (used, 1, r#"{"event":"user_sent"}"#),
+                (blank, 1, r#"{"event":"user_sent"}"#),
+                (blank, 2, r#"{"event":"restarted","mode":"blank"}"#),
+                (continued, 1, r#"{"event":"restarted","mode":"continue"}"#),
+            ];
+            for (id, seq, payload) in events {
+                connection
+                    .execute(
+                        "INSERT INTO events (session_id, seq, time, kind, payload)
+                         VALUES (?1, ?2, ?3, 'host', ?4)",
+                        params![id.to_string(), seq, now, payload],
+                    )
+                    .unwrap();
+            }
+        }
+        let store = Store::open(&path).unwrap();
+        for (id, fresh) in [
+            (unused, true),
+            (used, false),
+            (blank, true),
+            (continued, false),
+        ] {
+            let row = store.session(id).await.unwrap().unwrap();
+            assert_eq!(matches!(row.launch, Launch::New(_)), fresh, "{id}");
+        }
     }
 
     #[tokio::test]
