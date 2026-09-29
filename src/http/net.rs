@@ -2,7 +2,8 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Declared in the order interfaces are listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IfaceKind {
     Private,
@@ -22,26 +23,24 @@ pub struct Interface {
 /// Every IPv4 address the host owns, tagged by class. Loopback is included so
 /// the UI can offer it explicitly; callers filter as needed.
 pub fn enumerate() -> Vec<Interface> {
-    let raw = match if_addrs::get_if_addrs() {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    let Ok(raw) = if_addrs::get_if_addrs() else {
+        return Vec::new();
     };
-    let mut out: Vec<Interface> = Vec::new();
-    for iface in raw {
-        let IpAddr::V4(v4) = iface.ip() else {
-            continue;
-        };
-        let kind = classify(v4);
-        out.push(Interface {
-            name: iface.name,
-            ip: IpAddr::V4(v4),
-            kind,
-        });
-    }
-    out.sort_by(|a, b| {
-        (kind_rank(a.kind), a.ip, a.name.clone()).cmp(&(kind_rank(b.kind), b.ip, b.name.clone()))
+    let mut interfaces: Vec<Interface> = raw
+        .into_iter()
+        .filter_map(|iface| match iface.ip() {
+            IpAddr::V4(v4) => Some(Interface {
+                name: iface.name,
+                ip: IpAddr::V4(v4),
+                kind: classify(v4),
+            }),
+            IpAddr::V6(_) => None,
+        })
+        .collect();
+    interfaces.sort_by(|left, right| {
+        (left.kind, left.ip, &left.name).cmp(&(right.kind, right.ip, &right.name))
     });
-    out
+    interfaces
 }
 
 /// Non-loopback IPv4 addresses this host can be reached on. Used at startup
@@ -80,16 +79,6 @@ fn classify(v4: Ipv4Addr) -> IfaceKind {
 }
 
 fn is_cgnat(v4: Ipv4Addr) -> bool {
-    let o = v4.octets();
-    o[0] == 100 && (64..=127).contains(&o[1])
-}
-
-fn kind_rank(kind: IfaceKind) -> u8 {
-    match kind {
-        IfaceKind::Private => 0,
-        IfaceKind::Cgnat => 1,
-        IfaceKind::Public => 2,
-        IfaceKind::LinkLocal => 3,
-        IfaceKind::Loopback => 4,
-    }
+    let octets = v4.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::claude::protocol::CanUseTool;
+use crate::claude::tools;
 
 const SAFETY_CHECK: &str = "safetyCheck";
 /// Words that run the command after them.
@@ -52,21 +53,13 @@ pub fn classify(ask: &CanUseTool, cwd: &Path) -> Danger {
         reasons.push("The permission classifier cannot approve this".to_string());
     }
     match ask.tool_name.as_str() {
-        "Bash" => {
+        tools::BASH => {
             if let Some(command) = ask.input.get("command").and_then(Value::as_str) {
                 reasons.extend(command_reasons(command));
             }
         }
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
-            let key = if ask.tool_name == "NotebookEdit" {
-                "notebook_path"
-            } else {
-                "file_path"
-            };
-            let target = ask
-                .input
-                .get(key)
-                .and_then(Value::as_str)
+        tool if tools::is_edit(tool) => {
+            let target = tools::file_target(ask)
                 .or_else(|| ask.blocked_path.as_ref().and_then(Value::as_str));
             if let Some(target) = target
                 && !is_inside(target, cwd)

@@ -9,15 +9,12 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::claude::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
+use crate::claude::tools;
 use crate::session::danger;
 
-pub const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const ACCEPT_EDITS: &str = "acceptEdits";
 const SESSION: &str = "session";
 const ALLOW: &str = "allow";
-const READ_TOOL: &str = "Read";
-const EDIT_TOOL: &str = "Edit";
-const NOTEBOOK_EDIT: &str = "NotebookEdit";
 
 /// First-level folders too broad to grant, on any drive or under `/`.
 const BROAD_TOP: [&str; 10] = [
@@ -84,13 +81,12 @@ pub struct FileOffer {
 impl FileOffer {
     /// Relative tool paths resolve against `cwd`, the session folder.
     pub fn of(ask: &CanUseTool, cwd: &Path) -> Option<Self> {
-        let (kind, key) = match ask.tool_name.as_str() {
-            READ_TOOL => (FileKind::Read, "file_path"),
-            NOTEBOOK_EDIT => (FileKind::Edit, "notebook_path"),
-            tool if EDIT_TOOLS.contains(&tool) => (FileKind::Edit, "file_path"),
+        let kind = match ask.tool_name.as_str() {
+            tools::READ => FileKind::Read,
+            tool if tools::is_edit(tool) => FileKind::Edit,
             _ => return None,
         };
-        let target = ask.input.get(key)?.as_str()?;
+        let target = tools::file_target(ask)?;
         let file = Folder::parse(danger::absolute(target, cwd).to_str()?)?;
         Some(Self {
             kind,
@@ -110,8 +106,8 @@ impl FileOffer {
     fn rule(&self) -> Option<PermissionUpdate> {
         let file = Folder::parse(&self.path)?;
         let tool = match self.kind {
-            FileKind::Read => READ_TOOL,
-            FileKind::Edit => EDIT_TOOL,
+            FileKind::Read => tools::READ,
+            FileKind::Edit => tools::EDIT,
         };
         Some(PermissionUpdate::AddRules {
             rules: vec![PermissionRule {
@@ -195,7 +191,7 @@ fn accept_edits_suggestion<'a>(
     ask: &CanUseTool,
     suggestions: &'a [PermissionUpdate],
 ) -> Option<&'a PermissionUpdate> {
-    if !EDIT_TOOLS.contains(&ask.tool_name.as_str()) {
+    if !tools::is_edit(&ask.tool_name) {
         return None;
     }
     suggestions.iter().find(
@@ -221,7 +217,7 @@ impl FolderSuggestion {
                     destination,
                     ..
                 } if destination == SESSION && behavior == ALLOW => match rules.as_slice() {
-                    [rule] if rule.tool_name == READ_TOOL => (
+                    [rule] if rule.tool_name == tools::READ => (
                         GrantKind::Read,
                         Folder::from_read_rule(rule.rule_content.as_deref()?)?,
                     ),

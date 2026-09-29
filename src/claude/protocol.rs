@@ -385,6 +385,8 @@ pub struct ApiMessage {
     pub content: Vec<ContentBlock>,
     #[serde(default)]
     pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
     #[serde(flatten)]
     pub extra: Extra,
 }

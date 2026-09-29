@@ -67,11 +67,8 @@ pub async fn create_session(
     }
     let created = async {
         let id = state.manager.create(request.cwd).await?.id();
-        session_views(&state.manager)
-            .await?
-            .into_iter()
-            .find(|view| view.id == id)
-            .ok_or_else(|| anyhow::anyhow!("session {id} missing from the store"))
+        let row = state.manager.store().require_session(id).await?;
+        anyhow::Ok(SessionView::new(row, state.manager.live_view(id).await))
     };
     let view = created
         .await

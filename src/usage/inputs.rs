@@ -8,7 +8,7 @@
 use chrono::DateTime;
 use serde_json::Number;
 
-use crate::claude::protocol::{AssistantMessage, GetUsageResponse, RateLimitInfo, Usage};
+use crate::claude::protocol::{AssistantMessage, GetUsageResponse, RateLimitInfo};
 use crate::usage::db::MessageTokens;
 use crate::usage::units::{Pct, Timestamp};
 use crate::usage::window::{WindowKind, WindowState};
@@ -65,7 +65,7 @@ pub fn from_rate_limit_event(info: &RateLimitInfo) -> Vec<Reading> {
 
 /// Tokens an `assistant` line reports for its message, when it names one.
 pub fn from_assistant(line: &AssistantMessage) -> Option<MessageTokens> {
-    let usage: Usage = serde_json::from_value(line.message.extra.get("usage")?.clone()).ok()?;
+    let usage = line.message.usage.as_ref()?;
     Some(MessageTokens {
         message_id: line.message.id.clone()?,
         model: line.message.model.clone()?,

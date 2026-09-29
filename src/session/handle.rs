@@ -16,7 +16,7 @@ use super::actor::{Actor, Command, Views};
 use super::agents::{AgentState, AgentView};
 use super::background::BackgroundView;
 use super::events::{Answer, Event, StopReason};
-use crate::claude::child::{Child, Effort, Launch, ModelSettings, Program};
+use crate::claude::child::{self, Child, Effort, Launch, ModelSettings, Program};
 use crate::claude::protocol::{
     AppliedSettings, ContextUsageResponse, GetUsageResponse, HostRequest, InterruptResponse,
     PermissionMode, SetPermissionModeResponse, SettingsResponse,
@@ -61,14 +61,12 @@ impl Session {
     /// Spawns the child and its actor. The returned receiver sees every event from
     /// `Started` on; later subscribers only see events sent after they subscribe.
     pub fn spawn(config: Config) -> Result<(Self, broadcast::Receiver<Arc<Event>>)> {
-        let child = Child::spawn(
-            &config.program,
-            &config.cwd,
+        let cli_args = child::args(
             config.launch,
             config.permission_mode.as_ref(),
             &config.settings,
-            config.id,
-        )?;
+        );
+        let child = Child::spawn(&config.program, cli_args, &config.cwd, config.id)?;
         if let Some(history) = &config.history {
             history.session_started(
                 config.id,

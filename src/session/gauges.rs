@@ -44,7 +44,7 @@ impl MainRequest {
 
     /// Like `from_assistant`, subagent lines included.
     pub fn from_any_assistant(line: &AssistantMessage) -> Option<Self> {
-        let usage: Usage = serde_json::from_value(line.message.extra.get("usage")?.clone()).ok()?;
+        let usage = line.message.usage.as_ref()?;
         let prompt_tokens =
             usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
         if prompt_tokens == 0 {
@@ -53,7 +53,7 @@ impl MainRequest {
         Some(Self {
             message_id: line.message.id.clone()?,
             model: line.message.model.clone(),
-            ttl_secs: written_ttl(&usage),
+            ttl_secs: written_ttl(usage),
             prompt_tokens,
         })
     }

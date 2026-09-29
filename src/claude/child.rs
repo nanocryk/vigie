@@ -73,12 +73,6 @@ impl Program {
     }
 }
 
-impl Default for Program {
-    fn default() -> Self {
-        Self::claude()
-    }
-}
-
 /// How the child picks its Claude session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "claude_session_id", rename_all = "snake_case")]
@@ -228,18 +222,18 @@ pub struct Child {
 }
 
 impl Child {
+    /// Runs `program` with `cli_args` (see `args`) in `cwd`, `host_session`
+    /// exported as `VIGIE2_SESSION_ID`.
     pub fn spawn(
         program: &Program,
+        cli_args: Vec<OsString>,
         cwd: &Path,
-        launch: Launch,
-        permission_mode: Option<&PermissionMode>,
-        settings: &ModelSettings,
         host_session: Uuid,
     ) -> Result<Self> {
         let mut command = Command::new(&program.path);
         command
             .args(&program.leading_args)
-            .args(args(launch, permission_mode, settings))
+            .args(cli_args)
             .current_dir(cwd)
             .env_clear()
             .envs(env(std::env::vars_os(), host_session))

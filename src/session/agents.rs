@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, System};
+use crate::claude::tools::{AGENT_TOOLS, SEND_MESSAGE};
 use crate::session::gauges::{Cache, FIVE_MINUTE_TTL_SECS, MainRequest};
 
-/// Tools starting a subagent.
-const AGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
-const LOCAL_AGENT: &str = "local_agent";
-const SEND_MESSAGE: &str = "SendMessage";
+/// `task_type` of a subagent's task.
+pub const LOCAL_AGENT: &str = "local_agent";
 /// The main agent's whole reply once it forwarded a relayed message.
 pub const RELAY_ACK: &str = "[Relay acknowledged]";
 
@@ -273,13 +272,16 @@ pub struct RelayVerdict {
     pub outcome: RelayOutcome,
 }
 
+/// A message relayed to a subagent through the main agent.
 #[derive(Debug, Clone)]
-struct Relay {
-    seq: u64,
-    task_id: String,
-    agent_tool_use_id: String,
-    text: String,
-    wrapped: String,
+pub struct Relay {
+    /// Seq of its `RelaySent` event.
+    pub seq: u64,
+    pub task_id: String,
+    pub agent_tool_use_id: String,
+    pub text: String,
+    /// `text` as written to the main agent, see `wrap`.
+    pub wrapped: String,
 }
 
 #[derive(Debug)]
@@ -334,21 +336,8 @@ pub struct RelayFilter {
 }
 
 impl RelayFilter {
-    pub fn sent(
-        &mut self,
-        seq: u64,
-        task_id: String,
-        agent_tool_use_id: String,
-        text: String,
-        wrapped: String,
-    ) {
-        self.sent.push_back(Relay {
-            seq,
-            task_id,
-            agent_tool_use_id,
-            text,
-            wrapped,
-        });
+    pub fn sent(&mut self, relay: Relay) {
+        self.sent.push_back(relay);
     }
 
     /// The verdicts `line` settles: those of the relays its turn took, on a `result`.
@@ -558,13 +547,13 @@ mod tests {
     #[test]
     fn the_recorded_relay_was_forwarded_without_acknowledgement() {
         let mut filter = RelayFilter::default();
-        filter.sent(
-            7,
-            SLEEPER_TASK.into(),
-            SLEEPER.into(),
-            CHANGE.into(),
-            CHANGE.into(),
-        );
+        filter.sent(Relay {
+            seq: 7,
+            task_id: SLEEPER_TASK.into(),
+            agent_tool_use_id: SLEEPER.into(),
+            text: CHANGE.into(),
+            wrapped: CHANGE.into(),
+        });
         let verdicts: Vec<RelayVerdict> = agents_lines()
             .iter()
             .flat_map(|line| filter.on_line(line))
@@ -610,6 +599,17 @@ mod tests {
         assistant(serde_json::json!([{"type": "text", "text": text}]))
     }
 
+    /// "hello" for agent `a1`, written to the main agent as `wrapped`.
+    fn hello(wrapped: &str) -> Relay {
+        Relay {
+            seq: 3,
+            task_id: "a1".into(),
+            agent_tool_use_id: "t1".into(),
+            text: "hello".into(),
+            wrapped: wrapped.into(),
+        }
+    }
+
     fn result() -> Inbound {
         serde_json::from_value(serde_json::json!({"type": "result", "subtype": "success",
             "is_error": false, "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1,
@@ -621,7 +621,7 @@ mod tests {
     fn outcome_of(lines: &[Inbound]) -> RelayOutcome {
         let wrapped = wrap("sleeper", "a1", "hello");
         let mut filter = RelayFilter::default();
-        filter.sent(3, "a1".into(), "t1".into(), "hello".into(), wrapped.clone());
+        filter.sent(hello(&wrapped));
         assert!(filter.on_line(&user(&wrapped)).is_empty());
         let mut verdicts: Vec<RelayVerdict> =
             lines.iter().flat_map(|line| filter.on_line(line)).collect();
@@ -690,7 +690,7 @@ mod tests {
     fn a_relay_not_echoed_yet_waits_for_its_own_turn() {
         let wrapped = wrap("sleeper", "a1", "hello");
         let mut filter = RelayFilter::default();
-        filter.sent(3, "a1".into(), "t1".into(), "hello".into(), wrapped.clone());
+        filter.sent(hello(&wrapped));
         assert!(filter.on_line(&text(RELAY_ACK)).is_empty());
         assert!(
             filter.on_line(&result()).is_empty(),

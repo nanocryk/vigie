@@ -5,9 +5,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::agents::LOCAL_AGENT;
 use crate::claude::protocol::{Inbound, System};
-
-const LOCAL_AGENT: &str = "local_agent";
 
 /// A background task as `GET /api/sessions` lists it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

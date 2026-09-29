@@ -14,7 +14,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::activity::{ActivityTracker, LiveStatus};
-use super::agents::{self, AgentTracker, AgentView, RelayFilter};
+use super::agents::{self, AgentTracker, AgentView, Relay, RelayFilter};
 use super::background::{BackgroundTracker, BackgroundView};
 use super::events::{
     Answer, CommandInfo, Event, EventBody, GateFailure, HostEvent, Line, ModelChoice, Resolution,
@@ -29,6 +29,7 @@ use crate::claude::protocol::{
     InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
     SetPermissionModeResponse, System, UserMessage,
 };
+use crate::claude::tools::{ASK_USER_QUESTION, EXIT_PLAN_MODE};
 use crate::store::{SessionState, Store};
 
 const STDERR_TAIL: usize = 50;
@@ -38,7 +39,6 @@ const STDERR_DRAIN: Duration = Duration::from_secs(1);
 const FIRST_PARTY: &str = "firstParty";
 /// `apiKeySource` of a claude.ai OAuth session.
 const OAUTH_KEY_SOURCE: &str = "none";
-const ASK_USER_QUESTION: &str = "AskUserQuestion";
 /// `rateLimitType` of a limit that draws on usage credits.
 const OVERAGE_LIMIT: &str = "overage";
 
@@ -523,8 +523,13 @@ impl Actor {
             wrapped: wrapped.clone(),
             mid_turn: self.tracker.turn(),
         }));
-        self.relays
-            .sent(sent.seq, task_id, agent_tool_use_id, text, wrapped.clone());
+        self.relays.sent(Relay {
+            seq: sent.seq,
+            task_id,
+            agent_tool_use_id,
+            text,
+            wrapped: wrapped.clone(),
+        });
         self.write_user(wrapped, None).await
     }
 
@@ -716,7 +721,7 @@ fn publish<T: PartialEq>(view: &watch::Sender<T>, next: T) {
 
 /// Frames an allow note so the model reads it as tied to the approval, not as a stray mid-turn message.
 fn allow_note(tool_name: &str, note: &str) -> String {
-    let what = if tool_name == "ExitPlanMode" {
+    let what = if tool_name == EXIT_PLAN_MODE {
         "plan".to_string()
     } else {
         format!("{tool_name} call")

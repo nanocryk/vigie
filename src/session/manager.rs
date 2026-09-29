@@ -150,6 +150,16 @@ pub struct LiveView {
     pub background: Vec<BackgroundView>,
 }
 
+impl LiveView {
+    fn of(session: &Session) -> Self {
+        Self {
+            status: *session.status().borrow(),
+            agents: session.agents().borrow().clone(),
+            background: session.background().borrow().clone(),
+        }
+    }
+}
+
 /// Whether `SessionManager::probe_catalog` started a Claude.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Probe {
@@ -341,15 +351,13 @@ impl SessionManager {
             .await
             .iter()
             .filter(|(_, session)| !session.is_closed())
-            .map(|(id, session)| {
-                let view = LiveView {
-                    status: *session.status().borrow(),
-                    agents: session.agents().borrow().clone(),
-                    background: session.background().borrow().clone(),
-                };
-                (*id, view)
-            })
+            .map(|(id, session)| (*id, LiveView::of(session)))
             .collect()
+    }
+
+    /// What the session's child reports; `None` when none runs.
+    pub async fn live_view(&self, id: Uuid) -> Option<LiveView> {
+        running(&*self.inner.live.lock().await, id).map(LiveView::of)
     }
 
     /// The live session, or a known ended one resumed with `--resume`.
