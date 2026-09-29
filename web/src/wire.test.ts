@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseQuestions } from "@/components/AskCard";
+import { addDraft, choiceAnswer, parseQuestions } from "@/components/AskCard";
 import { folderName } from "@/format";
 import { parseRoute, routeHash } from "@/route";
 import {
@@ -358,5 +358,30 @@ describe("parseQuestions", () => {
       { label: "blue", description: null },
     ]);
     expect(parseQuestions({ questions: [{ question: 1 }] })).toBeNull();
+  });
+});
+
+describe("choiceAnswer", () => {
+  it("answers a single choice with the picked label, else the trimmed text", () => {
+    expect(choiceAnswer({ labels: ["red"], custom: [], draft: "teal" }, false)).toBe("red");
+    expect(choiceAnswer({ labels: [], custom: [], draft: "  teal " }, false)).toBe("teal");
+    expect(choiceAnswer({ labels: [], custom: [], draft: "   " }, false)).toBe("");
+  });
+
+  it("joins a multi choice's labels, custom entries and pending draft", () => {
+    const choice = { labels: ["red"], custom: ["teal"], draft: " pink " };
+    expect(choiceAnswer(choice, true)).toBe("red, teal, pink");
+    expect(choiceAnswer({ ...choice, draft: "teal" }, true)).toBe("red, teal");
+    expect(choiceAnswer({ labels: [], custom: [], draft: "" }, true)).toBe("");
+  });
+});
+
+describe("addDraft", () => {
+  it("adds the trimmed draft once and clears it", () => {
+    const added = addDraft({ labels: ["red"], custom: [], draft: " teal " });
+    expect(added).toEqual({ labels: ["red"], custom: ["teal"], draft: "" });
+    expect(addDraft({ ...added, draft: "teal" }).custom).toEqual(["teal"]);
+    expect(addDraft({ ...added, draft: "red" }).custom).toEqual(["teal"]);
+    expect(addDraft({ ...added, draft: "  " }).custom).toEqual(["teal"]);
   });
 });

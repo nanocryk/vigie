@@ -49,24 +49,67 @@ export function parseQuestions(input: unknown): Question[] | null {
   return questions;
 }
 
+/**
+ * The answer being built for one question. Single choice: the free text is picked while no label is.
+ * Multi choice: `custom` holds the added free-text entries and `draft` the one being typed.
+ */
+export interface Choice {
+  labels: readonly string[];
+  custom: readonly string[];
+  draft: string;
+}
+
+export const NO_CHOICE: Choice = { labels: [], custom: [], draft: "" };
+
+/** The answer sent for one question, entries joined by commas; empty when unanswered. */
+export function choiceAnswer(choice: Choice, multiSelect: boolean): string {
+  const draft = choice.draft.trim();
+  if (!multiSelect) return choice.labels[0] ?? draft;
+  const pending = draft === "" || choice.custom.includes(draft) ? [] : [draft];
+  return [...choice.labels, ...choice.custom, ...pending].join(", ");
+}
+
+/** Moves the draft into the custom entries; blank or duplicate drafts are dropped. */
+export function addDraft(choice: Choice): Choice {
+  const draft = choice.draft.trim();
+  const duplicate = choice.custom.includes(draft) || choice.labels.includes(draft);
+  return {
+    ...choice,
+    custom: draft === "" || duplicate ? choice.custom : [...choice.custom, draft],
+    draft: "",
+  };
+}
+
 const BUTTON = "voice-ui rounded-[5px] px-4 py-2 text-sm disabled:opacity-50";
+
+const OPTION = "block w-full rounded-[5px] border px-3 py-1.5 text-left text-sm";
+
+const FIELD = "focus:ring-ring voice-ui rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2";
+
+function optionLook(checked: boolean): string {
+  return checked ? "border-primary bg-primary/10" : "bg-background";
+}
 
 function QuestionView({
   question,
-  selected,
+  choice,
   onChange,
   disabled,
 }: {
   question: Question;
-  selected: readonly string[];
-  onChange: (labels: string[]) => void;
+  choice: Choice;
+  onChange: (choice: Choice) => void;
   disabled: boolean;
 }) {
+  const selected = choice.labels;
   const toggle = (label: string) => {
-    if (!question.multiSelect) onChange([label]);
-    else if (selected.includes(label)) onChange(selected.filter((item) => item !== label));
-    else onChange([...selected, label]);
+    if (!question.multiSelect) onChange({ ...choice, labels: [label] });
+    else if (selected.includes(label)) {
+      onChange({ ...choice, labels: selected.filter((item) => item !== label) });
+    } else onChange({ ...choice, labels: [...selected, label] });
   };
+  const otherPicked = !question.multiSelect && selected.length === 0 && choice.draft.trim() !== "";
+  const label = `Other answer to: ${question.question}`;
   return (
     <fieldset className="space-y-1.5">
       <legend className="voice-prose mb-1 text-sm">
@@ -87,7 +130,7 @@ function QuestionView({
             disabled={disabled}
             aria-pressed={checked}
             onClick={() => toggle(option.label)}
-            className={`block w-full rounded-[5px] border px-3 py-1.5 text-left text-sm ${checked ? "border-primary bg-primary/10" : "bg-background"}`}
+            className={`${OPTION} ${optionLook(checked)}`}
           >
             <span className="voice-ui">{option.label}</span>
             {option.description !== null && (
@@ -96,6 +139,65 @@ function QuestionView({
           </button>
         );
       })}
+      {question.multiSelect ? (
+        <>
+          {choice.custom.map((entry) => (
+            <div
+              key={entry}
+              className={`${OPTION} ${optionLook(true)} flex items-center justify-between gap-2`}
+            >
+              <span className="voice-ui min-w-0 [overflow-wrap:anywhere]">{entry}</span>
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={`Remove ${entry}`}
+                onClick={() =>
+                  onChange({ ...choice, custom: choice.custom.filter((item) => item !== entry) })
+                }
+                className="text-muted-foreground hover:text-foreground shrink-0 px-1 disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="flex gap-1.5">
+            <input
+              value={choice.draft}
+              onChange={(event) => onChange({ ...choice, draft: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                onChange(addDraft(choice));
+              }}
+              disabled={disabled}
+              placeholder="Other"
+              aria-label={label}
+              className={`${FIELD} bg-background min-w-0 flex-1`}
+            />
+            <button
+              type="button"
+              disabled={disabled || choice.draft.trim() === ""}
+              aria-label="Add this answer"
+              onClick={() => onChange(addDraft(choice))}
+              className="voice-ui bg-background rounded-[5px] border px-3 text-base disabled:opacity-50"
+            >
+              +
+            </button>
+          </div>
+        </>
+      ) : (
+        <input
+          value={choice.draft}
+          onChange={(event) => onChange({ ...choice, labels: [], draft: event.target.value })}
+          onFocus={() => {
+            if (choice.draft.trim() !== "") onChange({ ...choice, labels: [] });
+          }}
+          disabled={disabled}
+          placeholder="Other"
+          aria-label={label}
+          className={`${FIELD} ${optionLook(otherPicked)} w-full`}
+        />
+      )}
     </fieldset>
   );
 }
@@ -508,7 +610,7 @@ function DecisionCard({
 }) {
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [denyMessage, setDenyMessage] = useState("");
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const [choices, setChoices] = useState<Record<string, Choice>>({});
 
   const questions = ask.toolName === "AskUserQuestion" ? parseQuestions(ask.input) : null;
 
@@ -519,13 +621,19 @@ function DecisionCard({
 
   const complete =
     questions !== null &&
-    questions.every((question) => (selections[question.question] ?? []).length > 0);
+    questions.every(
+      (question) =>
+        choiceAnswer(choices[question.question] ?? NO_CHOICE, question.multiSelect) !== "",
+    );
 
   const submitQuestions = () => {
     if (questions === null) return;
     const answers: Record<string, string> = {};
     for (const question of questions) {
-      answers[question.question] = (selections[question.question] ?? []).join(", ");
+      answers[question.question] = choiceAnswer(
+        choices[question.question] ?? NO_CHOICE,
+        question.multiSelect,
+      );
     }
     void answer({ kind: "questions", answers });
   };
@@ -540,9 +648,9 @@ function DecisionCard({
             key={question.question}
             question={question}
             disabled={sending}
-            selected={selections[question.question] ?? []}
-            onChange={(labels) =>
-              setSelections((current) => ({ ...current, [question.question]: labels }))
+            choice={choices[question.question] ?? NO_CHOICE}
+            onChange={(choice) =>
+              setChoices((current) => ({ ...current, [question.question]: choice }))
             }
           />
         ))
