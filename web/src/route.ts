@@ -80,10 +80,17 @@ export function navigate(route: Route): void {
   else pushEntry({}, routeHash(route));
 }
 
-/** Back to the Home entry, dropping every screen above it; replaces the entry when none is behind. */
+/**
+ * Back to the Home entry, dropping every screen above it. Replaces the entry
+ * when none is behind, or when the browser dropped it: history keeps a bounded
+ * number of entries (50 in Chrome), and going back further does nothing.
+ */
 export function goHome(): void {
   const distance = homeDistance();
   if (distance === 0) return;
-  if (distance === null) location.replace(routeHash({ kind: "list" }));
-  else history.go(-distance);
+  if (distance === null || distance >= history.length) {
+    location.replace(routeHash({ kind: "list" }));
+  } else {
+    history.go(-distance);
+  }
 }
