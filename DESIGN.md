@@ -167,11 +167,23 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Free tabs: one or more; the last one cannot be closed. Home's "File explorer" button opens the free tab used last.
   - Session tabs: one per session, opened by the session's "Project folder" button, where it was left, or at the session's folder the first time. A session tab can browse anywhere; its header has a Project button returning to the session's folder and a Discussion button opening the session. Closing it only forgets its location; archiving the session removes it.
 - A tab switcher menu, opened from the explorer header where the current tab's name shows, lists free tabs (folder icon, folder name, path) then session tabs (discussion icon, session name, current folder), each with a close button, and a "New tab" entry.
+- One toolbar stays above every view of a tab (folder, diff, file): the tab switcher, then on the right Hidden in the folder view, Discussion and Project on a session tab, and Diff when inside a repository (pressed while the diff shows, closing it). Hidden comes first so the others keep their places when it is absent. Under it, each view's own bar: the breadcrumb, or a back button and a title. Every bar and body shares one content width.
 - Places, where a new tab starts and the breadcrumb's first segment leads: the drives, the folders of current sessions, and common folders (home, Documents, Desktop, Downloads).
 - The system back button goes up a level: it closes the open file, then goes to the parent folder, then from a drive root to Places; from Places it leaves the explorer. The top bar's Home icon leaves it at once. A tab reopens as it was left.
 - A folder lists subfolders then files, case-insensitively, each with its modification time, and files with their size. Dotfiles are hidden behind a toggle persisted per device. A breadcrumb leads back up; every segment is tappable.
 - New folder: a name typed in place in the list; separators, `..` and existing names are refused.
 - File viewer: text highlighted by language, up to 2 MiB (marked truncated beyond), with a rendered and raw toggle for Markdown; images (png, jpg, gif, webp, avif, bmp, ico, up to 16 MiB) fitted to the screen with their dimensions and size. Other files show that they cannot be displayed.
+
+## Diff view
+
+- Pending changes of a git repository: HEAD against the working tree, staged, unstaged and untracked merged into one view. Read through the `git` command line.
+- A view of an explorer tab, like a folder or a file; the system back button leaves it the same way. Opened by a Diff button in the explorer header when the current folder is inside a repository, and by a Diff button in a session's thin bar when its folder is, which opens the session tab on it. Both buttons show their label on wide screens and only their icon on narrow ones, like Project folder.
+- Top: a summary (files, lines added and removed), Refresh, and Collapse all or Expand all. Then the changed files grouped by folder, each with its status color and counts, tapping one scrolling to its diff.
+- Then each file's diff, rendered by vigie2 itself: a header with status, path (old and new for a rename) and counts, tapping it collapsing or expanding the diff. Files over 200 changed lines and lockfiles start collapsed. Deleted and binary files show a one-line note instead of lines.
+- Tapping a line number on the new side opens the file view at that line; the back button returns to the diff.
+- Refreshed when opened, when the app returns to the foreground, and by Refresh; no file watcher.
+- File view of a file with pending changes: its line-number column marks added lines green and modified lines orange (a block that both removes and adds), and draws a red rule between two line numbers where lines were removed. Opened from the diff, it scrolls to the line and flashes it.
+- Folder view: a changed row has a colored left border, orange for a modified file, green for a new or untracked one. A folder is green when everything changed inside is new, orange otherwise, including when files inside are deleted. A folder with deleted files directly inside ends with a muted line, "− N files pending deletion", the "−" red; tapping it opens the diff at the first of them. Red never marks a folder, which would read as the folder being deleted.
 
 ## Scratch discussions
 

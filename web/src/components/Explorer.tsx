@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import type { Client } from "@/client";
+import { DiffView, PANEL } from "@/components/DiffView";
 import { Markdown } from "@/components/Markdown";
 import { ConnectionDot } from "@/components/SessionList";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
@@ -43,6 +44,7 @@ import {
   useExplorer,
 } from "@/files";
 import { folderName, formatAgo } from "@/format";
+import { repoRoot } from "@/git";
 import { highlightLines, languageFromPath } from "@/highlight";
 import { goHome, navigate, pushEntry, routeHash } from "@/route";
 import type { SessionView } from "@/wire";
@@ -69,14 +71,14 @@ function Icon({ children, className = "" }: { children: ReactNode; className?: s
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
-      className={`size-5 shrink-0 ${className}`}
+      className={`shrink-0 ${/\bsize-/.test(className) ? "" : "size-5"} ${className}`}
     >
       {children}
     </svg>
   );
 }
 
-const FolderIcon = ({ className }: { className?: string }) => (
+export const FolderIcon = ({ className }: { className?: string }) => (
   <Icon className={className}>
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   </Icon>
@@ -125,6 +127,13 @@ const CloseIcon = ({ className }: { className?: string }) => (
 const ChevronIcon = ({ className }: { className?: string }) => (
   <Icon className={className}>
     <path d="m6 9 6 6 6-6" />
+  </Icon>
+);
+export const DiffIcon = ({ className }: { className?: string }) => (
+  <Icon className={className}>
+    <path d="M12 4v7M8.5 7.5h7" />
+    <path d="M8.5 17h7" />
+    <path d="M5 21h14" />
   </Icon>
 );
 const EyeIcon = ({ className }: { className?: string }) => (
@@ -352,7 +361,7 @@ function PlacesView({
   const fromSessions = useMemo(() => sessionPlaces(sessions ?? []), [sessions]);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-3">
+    <div className={`${PANEL} space-y-5 p-3`}>
       {error !== null && <p className="text-destructive voice-ui text-sm">{error}</p>}
       {places !== null && places.drives.length > 0 && (
         <section className="space-y-1">
@@ -627,7 +636,7 @@ function FolderView({
       }}
       className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
     >
-      <div className="mx-auto max-w-3xl p-3">
+      <div className={`${PANEL} p-3`}>
         {error !== null && (
           <div className="space-y-2 rounded-[5px] border p-3">
             <p className="text-destructive voice-ui text-sm">{error}</p>
@@ -743,7 +752,16 @@ function ImageBody({ path, size }: { path: string; size: number }) {
   );
 }
 
-function FileViewer({ path, close }: { path: string; close: () => void }) {
+function FileViewer({
+  path,
+  backTo,
+  close,
+}: {
+  path: string;
+  /** Where closing leads: `Folder` or `Diff`. */
+  backTo: string;
+  close: () => void;
+}) {
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [raw, setRaw] = useState(false);
@@ -766,65 +784,69 @@ function FileViewer({ path, close }: { path: string; close: () => void }) {
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
-        <button
-          type="button"
-          onClick={close}
-          aria-label="Back to the folder"
-          className="text-primary hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 py-1 text-sm"
-        >
-          &lsaquo; Folder
-        </button>
-        <span className="voice-ui min-w-0 flex-1 truncate text-sm font-medium" title={path}>
-          {folderName(path)}
-        </span>
-        {markdown && (
-          <div className="flex shrink-0 overflow-hidden rounded-[5px] border text-xs">
-            {(["Rendered", "Raw"] as const).map((choice) => {
-              const on = (choice === "Raw") === raw;
-              return (
-                <button
-                  key={choice}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => setRaw(choice === "Raw")}
-                  className={`voice-ui px-2.5 py-1 ${on ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-                >
-                  {choice}
-                </button>
-              );
-            })}
-          </div>
-        )}
+      <div className="shrink-0 border-b px-3 py-1.5">
+        <div className={`${PANEL} flex items-center gap-2`}>
+          <button
+            type="button"
+            onClick={close}
+            aria-label={`Back to the ${backTo.toLowerCase()}`}
+            className="text-primary hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 py-1 text-sm"
+          >
+            &lsaquo; {backTo}
+          </button>
+          <span className="voice-ui min-w-0 flex-1 truncate text-sm font-medium" title={path}>
+            {folderName(path)}
+          </span>
+          {markdown && (
+            <div className="flex shrink-0 overflow-hidden rounded-[5px] border text-xs">
+              {(["Rendered", "Raw"] as const).map((choice) => {
+                const on = (choice === "Raw") === raw;
+                return (
+                  <button
+                    key={choice}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setRaw(choice === "Raw")}
+                    className={`voice-ui px-2.5 py-1 ${on ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  >
+                    {choice}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-        {error !== null && <p className="text-destructive voice-ui p-3 text-sm">{error}</p>}
-        {view === null && error === null && (
-          <p className="text-muted-foreground voice-ui p-3 text-sm">Loading...</p>
-        )}
-        {view?.kind === "text" && view.truncated && (
-          <p className="bg-gauge-glow/15 voice-ui px-3 py-1.5 text-xs">
-            Showing the first 2 MB of {formatSize(view.size)}.
-          </p>
-        )}
-        {view?.kind === "text" &&
-          (markdown && !raw ? (
-            <div className="mx-auto max-w-3xl p-4">
-              <Markdown text={view.text} />
+        <div className={PANEL}>
+          {error !== null && <p className="text-destructive voice-ui p-3 text-sm">{error}</p>}
+          {view === null && error === null && (
+            <p className="text-muted-foreground voice-ui p-3 text-sm">Loading...</p>
+          )}
+          {view?.kind === "text" && view.truncated && (
+            <p className="bg-gauge-glow/15 voice-ui px-3 py-1.5 text-xs">
+              Showing the first 2 MB of {formatSize(view.size)}.
+            </p>
+          )}
+          {view?.kind === "text" &&
+            (markdown && !raw ? (
+              <div className="p-4">
+                <Markdown text={view.text} />
+              </div>
+            ) : (
+              <div className="py-2">
+                <TextBody path={view.path} text={view.text} />
+              </div>
+            ))}
+          {view?.kind === "image" && <ImageBody path={view.path} size={view.size} />}
+          {view?.kind === "binary" && (
+            <div className="text-muted-foreground voice-ui flex flex-col items-center gap-2 p-8 text-center text-sm">
+              <FileIcon className="size-8" />
+              <p>This file cannot be displayed.</p>
+              <p className="text-xs">{formatSize(view.size)}</p>
             </div>
-          ) : (
-            <div className="py-2">
-              <TextBody path={view.path} text={view.text} />
-            </div>
-          ))}
-        {view?.kind === "image" && <ImageBody path={view.path} size={view.size} />}
-        {view?.kind === "binary" && (
-          <div className="text-muted-foreground voice-ui flex flex-col items-center gap-2 p-8 text-center text-sm">
-            <FileIcon className="size-8" />
-            <p>This file cannot be displayed.</p>
-            <p className="text-xs">{formatSize(view.size)}</p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </>
   );
@@ -898,11 +920,35 @@ export function Explorer({ client }: { client: Client }) {
     setStartError(null);
   }, [tab.id, tab.folder]);
 
+  const [repo, setRepo] = useState<string | null>(null);
+  useEffect(() => {
+    setRepo(null);
+    if (tab.folder === null) return;
+    let alive = true;
+    repoRoot(tab.folder)
+      .then((root) => {
+        if (alive) setRepo(root);
+      })
+      .catch(() => {
+        if (alive) setRepo(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tab.folder]);
+
   const go = (folder: string | null) =>
-    changeExplorer((current) => updateTab(current, tab.id, { folder, file: null, scroll: 0 }));
+    changeExplorer((current) =>
+      updateTab(current, tab.id, { folder, diff: null, file: null, scroll: 0 }),
+    );
   const openFile = (file: string) =>
     changeExplorer((current) => updateTab(current, tab.id, { file }));
   const closeFile = () => changeExplorer((current) => updateTab(current, tab.id, { file: null }));
+  const openDiff = (root: string) =>
+    changeExplorer((current) => updateTab(current, tab.id, { diff: root }));
+  const closeDiff = () =>
+    changeExplorer((current) => updateTab(current, tab.id, { diff: null, file: null }));
+  const view = tab.file !== null ? "file" : tab.diff !== null ? "diff" : "folder";
 
   const start = async (folder: string) => {
     setStarting(true);
@@ -925,54 +971,78 @@ export function Explorer({ client }: { client: Client }) {
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={<span className="voice-heading">File explorer</span>}
       />
-      {tab.file !== null ? (
-        <FileViewer key={`${tab.id}:${tab.file}`} path={tab.file} close={closeFile} />
-      ) : (
-        <>
-          <div className="shrink-0 space-y-2 border-b px-3 py-2">
-            <div className="mx-auto flex max-w-3xl items-center gap-2">
-              <TabSwitcher tabs={state.tabs} active={tab} />
-              <div className="ml-auto flex shrink-0 gap-2">
-                {owner !== null && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => navigate({ kind: "session", id: owner.session })}
-                      title="Open the session's discussion"
-                      className={TOOL}
-                    >
-                      <ChatIcon className="text-mode-plan size-4" />
-                      <span className="text-xs">Discussion</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => go(owner.root)}
-                      title="Back to the session's folder"
-                      className={TOOL}
-                    >
-                      <FolderIcon className="text-mode-plan size-4" />
-                      <span className="text-xs">Project</span>
-                    </button>
-                  </>
-                )}
+      <div className="shrink-0 space-y-2 border-b px-3 py-2">
+        <div className={`${PANEL} flex items-center gap-2`}>
+          <TabSwitcher tabs={state.tabs} active={tab} />
+          <div className="ml-auto flex shrink-0 gap-2">
+            {/* Leftmost, so the buttons after it keep their places when it hides. */}
+            {view === "folder" && (
+              <button
+                type="button"
+                aria-pressed={state.showHidden}
+                onClick={() =>
+                  changeExplorer((current) => ({ ...current, showHidden: !current.showHidden }))
+                }
+                title={state.showHidden ? "Hide hidden files" : "Show hidden files"}
+                className={`${TOOL} ${state.showHidden ? "border-primary text-primary bg-primary/10" : "text-muted-foreground"}`}
+              >
+                <EyeIcon className="size-4" />
+                <span className="text-xs max-sm:hidden">Hidden</span>
+              </button>
+            )}
+            {owner !== null && (
+              <>
                 <button
                   type="button"
-                  aria-pressed={state.showHidden}
-                  onClick={() =>
-                    changeExplorer((current) => ({ ...current, showHidden: !current.showHidden }))
-                  }
-                  title={state.showHidden ? "Hide hidden files" : "Show hidden files"}
-                  className={`${TOOL} ${state.showHidden ? "border-primary text-primary bg-primary/10" : "text-muted-foreground"}`}
+                  onClick={() => navigate({ kind: "session", id: owner.session })}
+                  title="Open the session's discussion"
+                  className={TOOL}
                 >
-                  <EyeIcon className="size-4" />
-                  <span className="text-xs">Hidden</span>
+                  <ChatIcon className="text-mode-plan size-4" />
+                  <span className="text-xs max-sm:hidden">Discussion</span>
                 </button>
-              </div>
-            </div>
-            <div className="mx-auto max-w-3xl">
-              <Breadcrumb folder={folder} go={go} />
-            </div>
+                <button
+                  type="button"
+                  onClick={() => go(owner.root)}
+                  title="Back to the session's folder"
+                  className={TOOL}
+                >
+                  <FolderIcon className="text-mode-plan size-4" />
+                  <span className="text-xs max-sm:hidden">Project</span>
+                </button>
+              </>
+            )}
+            {(repo !== null || tab.diff !== null) && (
+              <button
+                type="button"
+                aria-pressed={tab.diff !== null}
+                onClick={() => (tab.diff !== null ? closeDiff() : repo !== null && openDiff(repo))}
+                title={tab.diff !== null ? "Close the diff" : "Pending changes"}
+                className={`${TOOL} ${tab.diff !== null ? "border-git-modified bg-git-modified/10" : ""}`}
+              >
+                <DiffIcon className="text-git-modified size-4" />
+                <span className="text-xs max-sm:hidden">Diff</span>
+              </button>
+            )}
           </div>
+        </div>
+        {view === "folder" && (
+          <div className={PANEL}>
+            <Breadcrumb folder={folder} go={go} />
+          </div>
+        )}
+      </div>
+      {tab.file !== null ? (
+        <FileViewer
+          key={`${tab.id}:${tab.file}`}
+          path={tab.file}
+          backTo={tab.diff !== null ? "Diff" : "Folder"}
+          close={closeFile}
+        />
+      ) : tab.diff !== null ? (
+        <DiffView key={`${tab.id}:${tab.diff}`} root={tab.diff} close={closeDiff} openFile={openFile} />
+      ) : (
+        <>
           {folder === null ? (
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <PlacesView sessions={sessions} go={go} />
@@ -990,7 +1060,7 @@ export function Explorer({ client }: { client: Client }) {
           )}
           {folder !== null && (
             <footer className="shrink-0 border-t px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-              <div className="mx-auto max-w-3xl space-y-1.5">
+              <div className={`${PANEL} space-y-1.5`}>
                 {startError !== null && (
                   <p className="text-destructive voice-ui text-xs">{startError}</p>
                 )}

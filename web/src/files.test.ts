@@ -131,6 +131,16 @@ describe("tabs", () => {
     expect(steps).toEqual(["C:\\a\\b", "C:\\a", "C:\\", null]);
   });
 
+  it("closes the file, then the diff, before leaving the folder", () => {
+    const start = initialState();
+    let state = updateTab(start, start.active, { folder: "C:\\a", diff: "C:\\a", file: "C:\\a\\f" });
+    expect(upSteps(state)).toBe(4);
+    state = goUp(state);
+    expect(activeTab(state)).toMatchObject({ file: null, diff: "C:\\a", folder: "C:\\a" });
+    state = goUp(state);
+    expect(activeTab(state)).toMatchObject({ diff: null, folder: "C:\\a" });
+  });
+
   it("round-trips through storage and recovers from garbage", () => {
     const state = openSessionTab(updateTab(withTwoFree(), "x", {}), "s1", "/p");
     expect(parseStoredState(JSON.stringify(state))).toEqual(state);

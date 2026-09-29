@@ -5,6 +5,7 @@ pub mod child;
 pub mod danger;
 pub mod files;
 pub mod gauges;
+pub mod git;
 pub mod grant;
 pub mod manager;
 pub mod net;

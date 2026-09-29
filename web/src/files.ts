@@ -284,7 +284,9 @@ export interface ExplorerTab {
   owner: TabOwner;
   /** Null at Places. */
   folder: string | null;
-  /** The open file, shown over the folder. */
+  /** The repository root whose pending changes show over the folder. */
+  diff: string | null;
+  /** The open file, shown over the diff and the folder. */
   file: string | null;
   scroll: number;
 }
@@ -304,7 +306,7 @@ function newId(): string {
 }
 
 function freeTab(): ExplorerTab {
-  return { id: newId(), owner: { kind: "free" }, folder: null, file: null, scroll: 0 };
+  return { id: newId(), owner: { kind: "free" }, folder: null, diff: null, file: null, scroll: 0 };
 }
 
 export function initialState(): ExplorerState {
@@ -363,7 +365,7 @@ export function closeTab(state: ExplorerState, id: string): ExplorerState {
 export function updateTab(
   state: ExplorerState,
   id: string,
-  patch: Partial<Pick<ExplorerTab, "folder" | "file" | "scroll">>,
+  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "scroll">>,
 ): ExplorerState {
   return {
     ...state,
@@ -381,10 +383,22 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
     id: newId(),
     owner: { kind: "session", session, root },
     folder: root,
+    diff: null,
     file: null,
     scroll: 0,
   };
   return selectTab({ ...state, tabs: [...state.tabs, tab] }, tab.id);
+}
+
+/** Activates the session's tab on the pending changes of `repo`. */
+export function openSessionDiff(
+  state: ExplorerState,
+  session: string,
+  root: string,
+  repo: string,
+): ExplorerState {
+  const next = openSessionTab(state, session, root);
+  return updateTab(next, next.active, { diff: repo, file: null });
 }
 
 /** Drops the tabs of sessions not in `live` (archived or gone). */
@@ -409,13 +423,14 @@ function parseOwner(raw: unknown): TabOwner | null {
 
 function parseTab(raw: unknown): ExplorerTab | null {
   if (!isRecord(raw)) return null;
-  const { id, folder, file, scroll } = raw;
+  const { id, folder, diff, file, scroll } = raw;
   const owner = parseOwner(raw["owner"]);
   if (typeof id !== "string" || owner === null) return null;
   return {
     id,
     owner,
     folder: typeof folder === "string" ? folder : null,
+    diff: typeof diff === "string" ? diff : null,
     file: typeof file === "string" ? file : null,
     scroll: typeof scroll === "number" && Number.isFinite(scroll) ? scroll : 0,
   };
@@ -490,26 +505,30 @@ export function explorerState(): ExplorerState {
   return snapshot();
 }
 
-/** One level up: the open file closes, else the folder's parent, else Places. */
+/** One level up: the open file closes, else the diff, else the folder's parent, else Places. */
 export function goUp(state: ExplorerState): ExplorerState {
   const tab = activeTab(state);
   if (tab.file !== null) return updateTab(state, tab.id, { file: null });
+  if (tab.diff !== null) return updateTab(state, tab.id, { diff: null });
   if (tab.folder === null) return state;
   const path = crumbs(tab.folder);
   const parent = path.length >= 2 ? (path[path.length - 2]?.path ?? null) : null;
   return updateTab(state, tab.id, { folder: parent, scroll: 0 });
 }
 
-/** The active tab shows a folder or a file, so going up has somewhere to go. */
+/** The active tab shows a folder, a diff or a file, so going up has somewhere to go. */
 export function canGoUp(state: ExplorerState): boolean {
-  const tab = activeTab(state);
-  return tab.file !== null || tab.folder !== null;
+  return upSteps(state) > 0;
 }
 
-/** How many times going up leads somewhere: the open file, then each folder to Places. */
+/** How many times going up leads somewhere: the file, the diff, then each folder to Places. */
 export function upSteps(state: ExplorerState): number {
   const tab = activeTab(state);
-  return (tab.file === null ? 0 : 1) + (tab.folder === null ? 0 : crumbs(tab.folder).length);
+  return (
+    (tab.file === null ? 0 : 1) +
+    (tab.diff === null ? 0 : 1) +
+    (tab.folder === null ? 0 : crumbs(tab.folder).length)
+  );
 }
 
 export function useExplorer(): ExplorerState {

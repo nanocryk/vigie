@@ -56,7 +56,9 @@ import {
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
-import { changeExplorer, openSessionTab } from "@/files";
+import { DiffIcon, FolderIcon } from "@/components/Explorer";
+import { changeExplorer, openSessionDiff, openSessionTab } from "@/files";
+import { repoRoot } from "@/git";
 import { folderName, stateLabel } from "@/format";
 import { navigate } from "@/route";
 import type { SendAction } from "@/sendGesture";
@@ -233,12 +235,35 @@ function Composer({
   );
 }
 
+const THIN_BUTTON =
+  "text-primary hover:bg-muted flex shrink-0 items-center gap-1 rounded-[5px] border px-1.5 leading-5 whitespace-nowrap";
+
+/** The repository containing `path`, null while unknown or when none does. */
+function useRepoRoot(path: string | null): string | null {
+  const [root, setRoot] = useState<string | null>(null);
+  useEffect(() => {
+    setRoot(null);
+    if (path === null) return;
+    let alive = true;
+    repoRoot(path)
+      .then((found) => {
+        if (alive) setRoot(found);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return root;
+}
+
 export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const snapshot = useSnapshot(client);
   const transcript = snapshot.transcripts.get(id) ?? emptyTranscript;
   const history = snapshot.histories.get(id);
   const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
+  const repo = useRepoRoot(view?.cwd ?? null);
   const serverError = snapshot.sessionErrors.get(id) ?? null;
   const [pending, setPending] = useState<ScopedSend[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -775,29 +800,34 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         }
         end={
           view !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                changeExplorer((state) => openSessionTab(state, view.id, view.cwd));
-                navigate({ kind: "files" });
-              }}
-              title={view.cwd}
-              className="text-primary hover:bg-muted flex shrink-0 items-center gap-1 rounded-[5px] border px-1.5 leading-5 whitespace-nowrap"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.8}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-                className="size-3.5"
+            <>
+              {repo !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeExplorer((state) => openSessionDiff(state, view.id, view.cwd, repo));
+                    navigate({ kind: "files" });
+                  }}
+                  title={`Pending changes in ${folderName(repo)}`}
+                  className={THIN_BUTTON}
+                >
+                  <DiffIcon className="text-git-modified size-3.5" />
+                  <span className="max-sm:hidden">Diff</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  changeExplorer((state) => openSessionTab(state, view.id, view.cwd));
+                  navigate({ kind: "files" });
+                }}
+                title={view.cwd}
+                className={THIN_BUTTON}
               >
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              </svg>
-              Project folder
-            </button>
+                <FolderIcon className="size-3.5" />
+                <span className="max-sm:hidden">Project folder</span>
+              </button>
+            </>
           )
         }
       />
