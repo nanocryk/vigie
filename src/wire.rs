@@ -182,7 +182,9 @@ use uuid::Uuid;
 
 use crate::agents::AgentView;
 use crate::background::BackgroundView;
+use crate::child::Effort;
 use crate::gauges::{Cache, Context};
+use crate::protocol::PermissionMode;
 use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
 
@@ -254,7 +256,7 @@ pub enum ClientMessage {
     },
     SetPermissionMode {
         session: Uuid,
-        mode: String,
+        mode: PermissionMode,
         client_id: String,
     },
     /// An absent field keeps its setting; `null` goes back to the CLI's default.
@@ -413,7 +415,7 @@ pub struct SessionView {
     /// Asks of the running child waiting for an answer; 0 when not live.
     pub asks: usize,
     /// Stored permission mode, passed at the next launch; `None` when never recorded.
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     /// Prompt cache of the main conversation; clients count the TTL down themselves.
     pub cache: Option<Cache>,
     pub context: Option<Context>,
@@ -421,7 +423,7 @@ pub struct SessionView {
     pub archived_at: Option<DateTime<Utc>>,
     /// Stored model and effort, passed at every launch; `None` lets the CLI pick.
     pub model: Option<String>,
-    pub effort: Option<String>,
+    pub effort: Option<Effort>,
     /// When a model or effort change made the cache count cold; `None` once a
     /// main request or a restart followed.
     pub settings_changed_at: Option<DateTime<Utc>>,

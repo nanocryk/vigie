@@ -3,13 +3,16 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+use crate::protocol::PermissionMode;
 
 /// Set on every child so hooks can tell which vigie2 session runs them.
 pub const SESSION_ENV: &str = "VIGIE2_SESSION_ID";
@@ -94,18 +97,56 @@ impl Launch {
     }
 }
 
+/// A level `--effort` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl FromStr for Effort {
+    type Err = anyhow::Error;
+
+    fn from_str(level: &str) -> Result<Self> {
+        Ok(match level {
+            "low" => Self::Low,
+            "medium" => Self::Medium,
+            "high" => Self::High,
+            "xhigh" => Self::XHigh,
+            "max" => Self::Max,
+            _ => bail!("unknown effort level {level}"),
+        })
+    }
+}
+
 /// The model and the effort level a discussion runs on; `None` lets the CLI pick.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelSettings {
     pub model: Option<String>,
-    pub effort: Option<String>,
+    pub effort: Option<Effort>,
 }
 
 /// The CLI arguments after `Program::leading_args`; `permission_mode`, the model
 /// and the effort become `--permission-mode`, `--model` and `--effort` when known.
 pub fn args(
     launch: Launch,
-    permission_mode: Option<&str>,
+    permission_mode: Option<&PermissionMode>,
     settings: &ModelSettings,
 ) -> Vec<OsString> {
     let (flag, id) = match launch {
@@ -113,9 +154,12 @@ pub fn args(
         Launch::Resume(id) => ("--resume", id),
     };
     let optional = [
-        ("--permission-mode", permission_mode),
+        (
+            "--permission-mode",
+            permission_mode.map(PermissionMode::as_str),
+        ),
         ("--model", settings.model.as_deref()),
-        ("--effort", settings.effort.as_deref()),
+        ("--effort", settings.effort.map(Effort::as_str)),
     ];
     let known = optional.into_iter().flat_map(|(name, value)| {
         value
@@ -188,7 +232,7 @@ impl Child {
         program: &Program,
         cwd: &Path,
         launch: Launch,
-        permission_mode: Option<&str>,
+        permission_mode: Option<&PermissionMode>,
         settings: &ModelSettings,
         host_session: Uuid,
     ) -> Result<Self> {
@@ -359,7 +403,11 @@ mod tests {
     #[test]
     fn args_carry_a_known_permission_mode() {
         let id = Uuid::new_v4();
-        let resume = args(Launch::Resume(id), Some("plan"), &ModelSettings::default());
+        let resume = args(
+            Launch::Resume(id),
+            Some(&PermissionMode::Plan),
+            &ModelSettings::default(),
+        );
         let flag = resume
             .iter()
             .position(|arg| arg == "--permission-mode")
@@ -376,7 +424,7 @@ mod tests {
         let id = Uuid::new_v4();
         let settings = ModelSettings {
             model: Some("sonnet".into()),
-            effort: Some("max".into()),
+            effort: Some(Effort::Max),
         };
         let resume = args(Launch::Resume(id), None, &settings);
         let value = |name: &str| {

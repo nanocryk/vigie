@@ -20,14 +20,14 @@ use uuid::Uuid;
 
 use crate::agents::{self, AgentState, AgentTracker, AgentView, RelayFilter, RelayOutcome};
 use crate::background::{BackgroundTracker, BackgroundView};
-use crate::child::{Child, Launch, ModelSettings, Program};
+use crate::child::{Child, Effort, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
 use crate::grant::{self, FileOffer, FolderOffer};
 use crate::protocol::{
     AppliedSettings, CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse,
     Extra, GetUsageResponse, HostRequest, Inbound, InitCommand, InitModel, InitializeResponse,
-    InterruptResponse, Outbound, PermissionResult, Priority, SetPermissionModeResponse,
-    SettingsResponse, System, UserMessage,
+    InterruptResponse, Outbound, PermissionMode, PermissionResult, Priority,
+    SetPermissionModeResponse, SettingsResponse, System, UserMessage,
 };
 use crate::store::{SessionState, Store};
 
@@ -56,7 +56,7 @@ pub struct Config {
     /// Seq of the session's latest event; the next one gets `last_seq + 1`.
     pub last_seq: u64,
     /// `--permission-mode` for the child; `None` lets the CLI pick its default.
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     /// `--model` and `--effort` for the child.
     pub settings: ModelSettings,
 }
@@ -154,7 +154,7 @@ pub enum HostEvent {
     /// The CLI's permission mode changed, as reported by `initialize`, `system/init`,
     /// `system/status` or a successful `set_permission_mode`.
     PermissionMode {
-        mode: String,
+        mode: PermissionMode,
     },
     /// The child was killed; the session ends with the following `ChildExited`.
     AuthGateFailed {
@@ -430,7 +430,7 @@ impl Session {
             &config.program,
             &config.cwd,
             config.launch,
-            config.permission_mode.as_deref(),
+            config.permission_mode.as_ref(),
             &config.settings,
             config.id,
         )?;
@@ -600,7 +600,7 @@ impl Session {
 
     pub async fn set_permission_mode(
         &self,
-        mode: impl Into<String>,
+        mode: impl Into<PermissionMode>,
     ) -> Result<SetPermissionModeResponse> {
         self.control(HostRequest::SetPermissionMode {
             mode: mode.into(),
@@ -620,10 +620,10 @@ impl Session {
         Ok(())
     }
 
-    pub async fn set_effort(&self, effort: String) -> Result<()> {
+    pub async fn set_effort(&self, effort: Effort) -> Result<()> {
         self.retuned.store(true, Ordering::Relaxed);
         self.control::<Value>(HostRequest::ApplyFlagSettings {
-            settings: serde_json::json!({ "effortLevel": effort }),
+            settings: serde_json::json!({ "effortLevel": effort.as_str() }),
             extra: Extra::new(),
         })
         .await?;
@@ -767,7 +767,7 @@ struct Actor {
     /// Ids among `requests` whose reply line is kept out of the events.
     unrecorded_requests: HashSet<String>,
     /// Last mode announced with `HostEvent::PermissionMode`.
-    permission_mode: Option<String>,
+    permission_mode: Option<PermissionMode>,
     next_request: u64,
     state: State,
     kill_at: Option<Instant>,
@@ -975,14 +975,12 @@ impl Actor {
     }
 
     /// Announces `mode` when it differs from the last one announced.
-    fn set_mode(&mut self, mode: &str) {
-        if self.permission_mode.as_deref() == Some(mode) {
+    fn set_mode(&mut self, mode: &PermissionMode) {
+        if self.permission_mode.as_ref() == Some(mode) {
             return;
         }
-        self.permission_mode = Some(mode.to_string());
-        self.emit_host(HostEvent::PermissionMode {
-            mode: mode.to_string(),
-        });
+        self.permission_mode = Some(mode.clone());
+        self.emit_host(HostEvent::PermissionMode { mode: mode.clone() });
     }
 
     fn check_initialize(&mut self, response: &ControlResponse) {

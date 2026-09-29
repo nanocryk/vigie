@@ -23,8 +23,9 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vigie2::auth::{self, Auth, Device, Registry};
-use vigie2::child::Launch;
+use vigie2::child::{Effort, Launch};
 use vigie2::manager::SessionManager;
+use vigie2::protocol::PermissionMode;
 use vigie2::push::{Pusher, Vapid};
 use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::server::{AppState, build_app};
@@ -790,7 +791,7 @@ async fn a_stopped_session_stores_its_mode_and_the_next_send_launches_with_it() 
     let (status, body) = server.rest(Method::GET, None).await;
     assert_eq!(status, StatusCode::OK);
     let list: SessionList = serde_json::from_value(body).unwrap();
-    assert_eq!(list.sessions[0].permission_mode.as_deref(), Some("plan"));
+    assert_eq!(list.sessions[0].permission_mode, Some(PermissionMode::Plan));
     assert!(!list.sessions[0].live);
 
     let stopped_at = list.sessions[0].last_seq;
@@ -1243,7 +1244,7 @@ async fn a_settings_change_interrupts_the_running_turn() {
     client
         .until(|event| result_line(event, "error_during_execution"))
         .await;
-    assert_eq!(server.view(id).await.effort.as_deref(), Some("max"));
+    assert_eq!(server.view(id).await.effort, Some(Effort::Max));
 }
 
 #[tokio::test]
@@ -1290,7 +1291,7 @@ async fn stored_settings_are_passed_at_launch() {
     assert!(args.contains("--model sonnet --effort max"), "{args}");
     let view = server.view(id).await;
     assert_eq!(view.model.as_deref(), Some("sonnet"));
-    assert_eq!(view.effort.as_deref(), Some("max"));
+    assert_eq!(view.effort, Some(Effort::Max));
 }
 
 #[tokio::test]

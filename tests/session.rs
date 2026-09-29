@@ -10,9 +10,9 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vigie2::child::{Launch, ModelSettings};
+use vigie2::child::{Effort, Launch, ModelSettings};
 use vigie2::grant::GrantKind;
-use vigie2::protocol::{Delta, Inbound, ResultMessage, StreamEventBody};
+use vigie2::protocol::{Delta, Inbound, PermissionMode, ResultMessage, StreamEventBody};
 use vigie2::replay::Recording;
 use vigie2::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
@@ -82,7 +82,7 @@ impl Harness {
         assert_eq!(event.seq, self.last_seq + 1, "sequence gap");
         self.last_seq = event.seq;
         if let EventBody::Host(HostEvent::PermissionMode { mode }) = &event.body {
-            self.modes.push(mode.clone());
+            self.modes.push(mode.to_string());
         }
         if let EventBody::Line(line) = &event.body {
             let parsed = line.parsed.as_ref().expect("line parses");
@@ -240,7 +240,7 @@ async fn basic_turns_and_usage() {
         .set_model(Some("sonnet".into()))
         .await
         .unwrap();
-    harness.session.set_effort("low".into()).await.unwrap();
+    harness.session.set_effort(Effort::Low).await.unwrap();
     let applied = harness.session.applied_settings().await.unwrap();
     assert_eq!(applied.model.as_deref(), Some("claude-sonnet-5"));
     assert_eq!(applied.effort.as_deref(), Some("low"));
@@ -449,7 +449,7 @@ async fn background_task_starts_its_own_turn() {
 async fn permission_mode_changes_are_announced_once_each() {
     let mut harness = Harness::start(&Recording::path("plan"));
     let changed = harness.session.set_permission_mode("plan").await.unwrap();
-    assert_eq!(changed.mode, "plan");
+    assert_eq!(changed.mode, PermissionMode::Plan);
     harness
         .session
         .send(

@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::child::{Launch, ModelSettings};
+use crate::child::{Effort, Launch, ModelSettings};
 use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
-use crate::protocol::{AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound};
+use crate::protocol::{
+    AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound, PermissionMode,
+};
 use crate::push::{PushKeys, PushSubscription};
 use crate::session::{
     CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice, StopReason,
@@ -218,7 +220,7 @@ pub struct SessionRow {
     pub last_seq: u64,
     pub state: SessionState,
     /// Last known CLI permission mode; `None` for sessions from before it was stored.
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     /// `None` until a main request reported the TTL of its cache write.
     pub cache: Option<Cache>,
     /// `None` until a `get_context_usage` reply, or a main request and a
@@ -386,9 +388,10 @@ impl Store {
         id: Uuid,
         cwd: &Path,
         time: DateTime<Utc>,
-        permission_mode: Option<String>,
+        permission_mode: Option<PermissionMode>,
     ) {
         let cwd = cwd.to_string_lossy().into_owned();
+        let permission_mode = permission_mode.map(String::from);
         self.write("session start", move |connection| {
             let time = format_time(time);
             connection.execute(
@@ -555,11 +558,11 @@ impl Store {
     }
 
     /// Resolves once stored; fails for an unknown session.
-    pub async fn set_permission_mode(&self, session: Uuid, mode: String) -> Result<()> {
+    pub async fn set_permission_mode(&self, session: Uuid, mode: PermissionMode) -> Result<()> {
         self.call(move |connection| {
             let changed = connection.execute(
                 "UPDATE sessions SET permission_mode = ?2 WHERE id = ?1",
-                params![session.to_string(), mode],
+                params![session.to_string(), mode.as_str()],
             )?;
             if changed == 0 {
                 bail!("unknown session {session}");
@@ -584,7 +587,12 @@ impl Store {
                 "UPDATE sessions SET model = ?2, effort = ?3, settings_changed_at = ?4,
                      applied_model = NULL, applied_effort = NULL
                  WHERE id = ?1 AND (model IS NOT ?2 OR effort IS NOT ?3)",
-                params![id, settings.model, settings.effort, format_time(at)],
+                params![
+                    id,
+                    settings.model,
+                    settings.effort.map(Effort::as_str),
+                    format_time(at)
+                ],
             )?;
             if changed > 0 {
                 return Ok(true);
@@ -604,7 +612,7 @@ impl Store {
         let seq = event.seq;
         let time = format_time(event.time);
         let permission_mode = match &event.body {
-            EventBody::Host(HostEvent::PermissionMode { mode }) => Some(mode.clone()),
+            EventBody::Host(HostEvent::PermissionMode { mode }) => Some(String::from(mode.clone())),
             _ => None,
         };
         let (kind, payload) = match &event.body {
@@ -1276,14 +1284,14 @@ impl RawSession {
             updated_at: parse_time(&self.updated_at)?,
             last_seq: self.last_seq,
             state,
-            permission_mode: self.permission_mode,
+            permission_mode: self.permission_mode.map(PermissionMode::from),
             cache,
             context,
             launch,
             archived_at: self.archived_at.as_deref().map(parse_time).transpose()?,
             settings: ModelSettings {
                 model: self.model,
-                effort: self.effort,
+                effort: self.effort.as_deref().map(str::parse).transpose()?,
             },
             settings_changed_at: self
                 .settings_changed_at
@@ -1642,7 +1650,7 @@ mod tests {
         assert_eq!(row.permission_mode, None);
         store.set_permission_mode(id, "plan".into()).await.unwrap();
         let row = store.session(id).await.unwrap().unwrap();
-        assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(row.permission_mode, Some(PermissionMode::Plan));
         assert_eq!(row.archived_at, None);
         let at = parse_time(&format_time(Utc::now())).unwrap();
         store.set_archived(id, Some(at)).await.unwrap();
@@ -1668,7 +1676,7 @@ mod tests {
 
         let settings = ModelSettings {
             model: Some("sonnet".into()),
-            effort: Some("high".into()),
+            effort: Some(Effort::High),
         };
         let at = parse_time("2026-09-28T10:00:00Z").unwrap();
         assert!(
@@ -1704,7 +1712,7 @@ mod tests {
         assert_eq!(row.settings, settings);
 
         let effort_only = ModelSettings {
-            effort: Some("low".into()),
+            effort: Some(Effort::Low),
             ..settings.clone()
         };
         assert!(store.set_model_settings(id, effort_only, at).await.unwrap());
@@ -1714,7 +1722,7 @@ mod tests {
             .unwrap();
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.settings_changed_at, None, "a restart followed");
-        assert_eq!(row.settings.effort.as_deref(), Some("low"));
+        assert_eq!(row.settings.effort, Some(Effort::Low));
     }
 
     #[tokio::test]
@@ -1858,7 +1866,7 @@ mod tests {
         assert_eq!(row.last_seq, 3);
         assert_eq!(row.state, SessionState::GateFailed { reason });
         assert_eq!(sessions[0].state, SessionState::Exited { code: Some(3) });
-        assert_eq!(row.permission_mode.as_deref(), Some("default"));
+        assert_eq!(row.permission_mode, Some(PermissionMode::Default));
         assert_eq!(sessions[0].permission_mode, None);
         assert_eq!(store.session(Uuid::new_v4()).await.unwrap(), None);
 
@@ -1902,13 +1910,13 @@ mod tests {
         let row = store.session(first).await.unwrap().unwrap();
         assert_eq!(row.state, SessionState::Stopped);
         assert_eq!(row.last_seq, 4);
-        assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(row.permission_mode, Some(PermissionMode::Plan));
         store
             .set_permission_mode(first, "acceptEdits".into())
             .await
             .unwrap();
         let row = store.session(first).await.unwrap().unwrap();
-        assert_eq!(row.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(row.permission_mode, Some(PermissionMode::AcceptEdits));
         assert!(
             store
                 .set_permission_mode(Uuid::new_v4(), "plan".into())

@@ -15,9 +15,9 @@ use uuid::Uuid;
 
 use crate::agents::AgentView;
 use crate::background::BackgroundView;
-use crate::child::{Launch, ModelSettings, Program};
+use crate::child::{Effort, Launch, ModelSettings, Program};
 use crate::gauges::{self, MainRequest};
-use crate::protocol::{Inbound, System};
+use crate::protocol::{Inbound, PermissionMode, System};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
@@ -28,12 +28,6 @@ use crate::{seed, wire};
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CHANGES_CAPACITY: usize = 256;
-/// Permission mode of a new session.
-const DEFAULT_MODE: &str = "default";
-/// Modes a stopped session accepts; any other would only fail at the next launch.
-const STORED_MODES: [&str; 3] = [DEFAULT_MODE, "acceptEdits", "plan"];
-/// Values `--effort` accepts.
-const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// Time the catalog probe gets to initialize and answer `get_settings`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -256,7 +250,7 @@ impl SessionManager {
             cwd,
             Launch::New(id),
             0,
-            Some(DEFAULT_MODE.into()),
+            Some(PermissionMode::Default),
             ModelSettings::default(),
         )?;
         live.insert(id, session.clone());
@@ -266,7 +260,7 @@ impl SessionManager {
 
     /// Changes the permission mode: through the CLI when the child runs, else in
     /// the stored row, without spawning, for the next launch to pass.
-    pub async fn set_permission_mode(&self, id: Uuid, mode: String) -> Result<()> {
+    pub async fn set_permission_mode(&self, id: Uuid, mode: PermissionMode) -> Result<()> {
         let live = self.inner.live.lock().await;
         if let Some(session) = live.get(&id).filter(|session| !session.is_closed()) {
             let session = session.clone();
@@ -274,7 +268,7 @@ impl SessionManager {
             session.set_permission_mode(mode).await?;
             return Ok(());
         }
-        if !STORED_MODES.contains(&mode.as_str()) {
+        if !mode.is_storable() {
             bail!("permission mode {mode} cannot be set on a stopped session");
         }
         // Held while storing, so a concurrent `open` launches with the new mode.
@@ -383,11 +377,9 @@ impl SessionManager {
         model: Option<Option<String>>,
         effort: Option<Option<String>>,
     ) -> Result<()> {
-        if let Some(Some(level)) = &effort
-            && !EFFORT_LEVELS.contains(&level.as_str())
-        {
-            bail!("unknown effort level {level}");
-        }
+        let effort = effort
+            .map(|level| level.as_deref().map(str::parse::<Effort>).transpose())
+            .transpose()?;
         if let Some(Some(name)) = &model
             && name.trim().is_empty()
         {
@@ -402,7 +394,7 @@ impl SessionManager {
             .with_context(|| format!("unknown session {id}"))?;
         let settings = ModelSettings {
             model: model.unwrap_or(row.settings.model.clone()),
-            effort: effort.unwrap_or(row.settings.effort.clone()),
+            effort: effort.unwrap_or(row.settings.effort),
         };
         // Held while storing, so a concurrent `open` launches with the new settings.
         let changed = self
@@ -594,7 +586,7 @@ impl SessionManager {
         cwd: PathBuf,
         launch: Launch,
         last_seq: u64,
-        permission_mode: Option<String>,
+        permission_mode: Option<PermissionMode>,
         settings: ModelSettings,
     ) -> Result<Session> {
         let (session, events) = Session::spawn(Config {

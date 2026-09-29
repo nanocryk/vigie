@@ -13,7 +13,7 @@ use uuid::Uuid;
 use vigie2::child::Launch;
 use vigie2::gauges::ContextSource;
 use vigie2::manager::{Notice, NoticeKind, Probe, SessionManager};
-use vigie2::protocol::{AppliedSettings, Inbound};
+use vigie2::protocol::{AppliedSettings, Inbound, PermissionMode};
 use vigie2::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
     CANNED_DEFAULT_MODEL, Direction, Recording,
@@ -437,7 +437,7 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, SessionState::Stopped);
     // A new session launches in default mode, which the CLI reports back.
-    assert_eq!(rows[0].permission_mode.as_deref(), Some("default"));
+    assert_eq!(rows[0].permission_mode, Some(PermissionMode::Default));
     let first_run = rows[0].last_seq;
     assert_eq!(first_run, 4);
 
@@ -450,7 +450,7 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
     assert_eq!(changes.recv().await.unwrap(), id);
     assert!(manager.live(id).await.is_none(), "setting the mode spawned");
     let row = manager.store().session(id).await.unwrap().unwrap();
-    assert_eq!(row.permission_mode.as_deref(), Some("plan"));
+    assert_eq!(row.permission_mode, Some(PermissionMode::Plan));
     assert_eq!(row.last_seq, first_run);
     assert!(
         manager
@@ -519,7 +519,7 @@ async fn the_row_follows_the_mode_of_a_live_session() {
     assert!(manager.live(id).await.is_some());
     manager.store().flush().await.unwrap();
     let row = manager.store().session(id).await.unwrap().unwrap();
-    assert_eq!(row.permission_mode.as_deref(), Some("acceptEdits"));
+    assert_eq!(row.permission_mode, Some(PermissionMode::AcceptEdits));
     stop(&session).await;
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();

@@ -23,6 +23,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::protocol::PermissionMode;
 use crate::usage::db::UsageDb;
 use crate::usage::estimate::Confidence;
 use crate::usage::facts::{Fact, Moment};
@@ -34,9 +35,6 @@ use crate::usage::window::{WindowKind, WindowState};
 
 /// Days of raw readings kept; the profile ages by decay instead.
 pub const RETENTION_DAYS: u32 = 14;
-
-/// Permission mode that skips every prompt.
-const BYPASS_MODE: &str = "bypassPermissions";
 
 /// Body of `GET /api/usage`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -125,7 +123,7 @@ pub struct SessionContext {
     pub id: Uuid,
     pub cwd: PathBuf,
     pub created_at: DateTime<Utc>,
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
 }
 
 /// Fold what has elapsed, prune old readings, and project both windows.
@@ -256,7 +254,7 @@ fn session_report(
     };
     Ok(SessionReport {
         id: context.id,
-        bypass: context.permission_mode.as_deref() == Some(BYPASS_MODE),
+        bypass: context.permission_mode == Some(PermissionMode::BypassPermissions),
         model_mix: mix
             .shares
             .iter()

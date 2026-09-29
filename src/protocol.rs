@@ -14,6 +14,69 @@ use serde_json::{Map, Number, Value};
 
 pub type Extra = Map<String, Value>;
 
+/// The CLI's permission mode. `Other` keeps a mode vigie2 does not know as it
+/// was written, so any mode the CLI accepts or reports goes through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum PermissionMode {
+    Default,
+    AcceptEdits,
+    Plan,
+    BypassPermissions,
+    Other(String),
+}
+
+impl PermissionMode {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Default => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::Plan => "plan",
+            Self::BypassPermissions => "bypassPermissions",
+            Self::Other(mode) => mode,
+        }
+    }
+
+    /// Whether a stopped session accepts the mode; any other would only fail
+    /// at the next launch.
+    pub fn is_storable(&self) -> bool {
+        matches!(self, Self::Default | Self::AcceptEdits | Self::Plan)
+    }
+}
+
+impl From<String> for PermissionMode {
+    fn from(mode: String) -> Self {
+        match mode.as_str() {
+            "default" => Self::Default,
+            "acceptEdits" => Self::AcceptEdits,
+            "plan" => Self::Plan,
+            "bypassPermissions" => Self::BypassPermissions,
+            _ => Self::Other(mode),
+        }
+    }
+}
+
+impl From<&str> for PermissionMode {
+    fn from(mode: &str) -> Self {
+        Self::from(mode.to_string())
+    }
+}
+
+impl From<PermissionMode> for String {
+    fn from(mode: PermissionMode) -> Self {
+        match mode {
+            PermissionMode::Other(mode) => mode,
+            known => known.as_str().to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for PermissionMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Inbound {
@@ -63,7 +126,7 @@ pub struct Init {
     pub cwd: String,
     pub model: String,
     #[serde(rename = "permissionMode")]
-    pub permission_mode: String,
+    pub permission_mode: PermissionMode,
     /// `"none"` for claude.ai OAuth; any other value means API key billing.
     #[serde(rename = "apiKeySource")]
     pub api_key_source: String,
@@ -89,7 +152,7 @@ pub struct Status {
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
     pub session_id: String,
     pub uuid: String,
     #[serde(flatten)]
@@ -641,7 +704,7 @@ pub enum HostRequest {
         extra: Extra,
     },
     SetPermissionMode {
-        mode: String,
+        mode: PermissionMode,
         #[serde(flatten)]
         extra: Extra,
     },
@@ -872,7 +935,7 @@ pub struct InitializeResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<Account>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_permission_mode: Option<String>,
+    pub current_permission_mode: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     /// Slash commands and skills.
@@ -947,7 +1010,7 @@ pub struct InterruptResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetPermissionModeResponse {
-    pub mode: String,
+    pub mode: PermissionMode,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -1067,6 +1130,24 @@ mod tests {
 
     use super::*;
     use crate::replay::runs_dir;
+
+    #[test]
+    fn permission_modes_keep_their_wire_string() {
+        for (text, mode) in [
+            ("default", PermissionMode::Default),
+            ("acceptEdits", PermissionMode::AcceptEdits),
+            ("plan", PermissionMode::Plan),
+            ("bypassPermissions", PermissionMode::BypassPermissions),
+            ("dontAsk", PermissionMode::Other("dontAsk".into())),
+        ] {
+            let json = Value::String(text.into());
+            assert_eq!(
+                serde_json::from_value::<PermissionMode>(json.clone()).unwrap(),
+                mode
+            );
+            assert_eq!(serde_json::to_value(&mode).unwrap(), json);
+        }
+    }
 
     fn recordings(suffix: &str) -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = std::fs::read_dir(runs_dir())
