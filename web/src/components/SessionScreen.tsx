@@ -746,7 +746,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   return (
     <>
       <Header
-        left={<HomeButton />}
+        left={<HomeButton sessions={snapshot.sessions} onScreen={id} />}
         right={
           <>
             <ConnectionDot status={snapshot.status} />

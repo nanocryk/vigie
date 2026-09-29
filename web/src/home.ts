@@ -29,6 +29,24 @@ export function rowHighlight(session: SessionView): RowHighlight | null {
   return session.busy ? "working" : null;
 }
 
+const HIGHLIGHT_RANK: readonly RowHighlight[] = ["ask", "stopped", "finished", "working"];
+
+/** The strongest highlight among `sessions`, leaving out the one on screen. */
+export function strongestHighlight(
+  sessions: readonly SessionView[],
+  onScreen: string | null = null,
+): RowHighlight | null {
+  let best: number | null = null;
+  for (const session of sessions) {
+    if (session.id === onScreen) continue;
+    const highlight = rowHighlight(session);
+    if (highlight === null) continue;
+    const rank = HIGHLIGHT_RANK.indexOf(highlight);
+    if (best === null || rank < best) best = rank;
+  }
+  return best === null ? null : (HIGHLIGHT_RANK[best] ?? null);
+}
+
 /** A live discussion can be killed, a stopped one archived, an archived one restored. */
 export type RowAction = "kill" | "archive" | "restore";
 

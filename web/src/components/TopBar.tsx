@@ -16,6 +16,7 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
+import { type RowHighlight, strongestHighlight } from "@/home";
 import { goHome, navigate } from "@/route";
 import type {
   CacheView,
@@ -26,15 +27,44 @@ import type {
   WindowReport,
 } from "@/wire";
 
-/** The top bar's left slot on every screen but Home: back to Home. */
-export function HomeButton({ onClick = goHome }: { onClick?: () => void }) {
+/** Border pulse per highlight; work is dimmed so it does not draw the eye. */
+export const PULSE: Record<RowHighlight, string> = {
+  ask: "var(--gauge-glow)",
+  stopped: "var(--destructive)",
+  finished: "var(--gauge-ok)",
+  working: "color-mix(in oklch, var(--gauge-cold) 35%, transparent)",
+};
+
+/** A custom property, which React's style type does not list. */
+export function pulseStyle(color: string): Record<string, string> {
+  return { "--row-pulse": color };
+}
+
+/**
+ * The top bar's left slot on every screen but Home: back to Home. It pulses
+ * like a Home row, in the strongest state among the sessions not on screen, work aside.
+ */
+export function HomeButton({
+  sessions,
+  onScreen = null,
+  onClick = goHome,
+}: {
+  sessions: readonly SessionView[] | null;
+  /** The session this screen shows, left out of the pulse. */
+  onScreen?: string | null;
+  onClick?: () => void;
+}) {
+  const strongest = sessions === null ? null : strongestHighlight(sessions, onScreen);
+  // Work in progress wants nothing from the user, so only the other states light it.
+  const highlight = strongest === "working" ? null : strongest;
   return (
     <button
       type="button"
       onClick={() => onClick()}
       aria-label="Home"
       title="Home"
-      className="text-primary hover:bg-muted shrink-0 rounded-[5px] p-1.5"
+      style={highlight === null ? undefined : pulseStyle(PULSE[highlight])}
+      className={`text-primary hover:bg-muted shrink-0 rounded-[5px] p-1.5 ${highlight === null ? "" : "row-pulse"}`}
     >
       <svg
         viewBox="0 0 24 24"
@@ -353,12 +383,13 @@ export function Header({
   return (
     <header className="shrink-0">
       <div className="flex items-start gap-4 border-b px-2 py-1.5">
-        <div className="flex w-24 shrink-0 items-center self-center overflow-hidden whitespace-nowrap">
+        {/* Not clipped: the Home button's pulse glows past it. */}
+        <div className="flex w-24 shrink-0 items-center self-center whitespace-nowrap">
           {left}
         </div>
         <div
           aria-label="Usage, context and cache"
-          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2"
+          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
         >
           <AccountColumn usage={usage} now={now} />
           {column}

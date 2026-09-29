@@ -102,7 +102,7 @@ export function DeviceSettings({ client }: { client: Client }) {
   return (
     <>
       <Header
-        left={<HomeButton />}
+        left={<HomeButton sessions={snapshot.sessions} />}
         right={<ConnectionDot status={snapshot.status} />}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}

@@ -1169,7 +1169,7 @@ export function Explorer({ client }: { client: Client }) {
   return (
     <>
       <Header
-        left={<HomeButton onClick={leave} />}
+        left={<HomeButton sessions={snapshot.sessions} onClick={leave} />}
         right={<ConnectionDot status={snapshot.status} />}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}

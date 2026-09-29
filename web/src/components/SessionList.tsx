@@ -10,12 +10,11 @@ import {
 import type { Client, ConnectionStatus } from "@/client";
 import { useSwipe } from "@/components/Swipe";
 import { changeExplorer, selectLastFree } from "@/files";
-import { Header, NeedsYouColumn } from "@/components/TopBar";
+import { Header, NeedsYouColumn, PULSE, pulseStyle } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo } from "@/format";
 import {
   type RowAction,
-  type RowHighlight,
   actionSide,
   homeSections,
   rowAction,
@@ -115,19 +114,6 @@ const ACTION_BUTTON: Record<RowAction, string> = {
   archive: "border-gauge-cold text-gauge-cold hover:bg-muted",
   restore: "border-swipe-accept-strong text-swipe-accept-strong hover:bg-muted",
 };
-
-/** Border pulse per highlight; work is dimmed so it does not draw the eye. */
-const PULSE: Record<RowHighlight, string> = {
-  ask: "var(--gauge-glow)",
-  stopped: "var(--destructive)",
-  finished: "var(--gauge-ok)",
-  working: "color-mix(in oklch, var(--gauge-cold) 35%, transparent)",
-};
-
-/** A custom property, which React's style type does not list. */
-function pulseStyle(color: string): Record<string, string> {
-  return { "--row-pulse": color };
-}
 
 const REVEAL: Record<RowAction, { fill: string; latched: string }> = {
   kill: { fill: "var(--swipe-deny)", latched: "var(--swipe-deny-latched)" },

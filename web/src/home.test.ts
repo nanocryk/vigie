@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { homeSections, rowAction, rowHighlight, rowSwipeRules } from "@/home";
+import {
+  homeSections,
+  rowAction,
+  rowHighlight,
+  rowSwipeRules,
+  strongestHighlight,
+} from "@/home";
 import { type SwipeInput, type SwipeState, idle, step } from "@/swipe";
 import type { SessionView } from "@/wire";
 
@@ -36,6 +42,19 @@ describe("rowHighlight", () => {
     expect(rowHighlight(session("s", { unread: "finished", busy: true }))).toBe("finished");
     expect(rowHighlight(session("s", { busy: true }))).toBe("working");
     expect(rowHighlight(session("s"))).toBeNull();
+  });
+});
+
+describe("strongestHighlight", () => {
+  it("picks the strongest state, leaving out the session on screen", () => {
+    const sessions = [
+      session("a", { busy: true }),
+      session("b", { unread: "finished" }),
+      session("c", { asks: 2 }),
+    ];
+    expect(strongestHighlight(sessions)).toBe("ask");
+    expect(strongestHighlight(sessions, "c")).toBe("finished");
+    expect(strongestHighlight([session("d")])).toBeNull();
   });
 });
 
