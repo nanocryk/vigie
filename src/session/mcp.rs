@@ -14,7 +14,7 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-const SET_ATTACHMENTS_DESCRIPTION: &str = "Attach files to your reply. The user sees them as chips under your last message of this turn and can open them. Use it for files the user should look at, such as images, documents or generated output, when showing them helps more than naming them. Each call replaces the whole list for the current turn: call again without a file to drop it, or with an empty list to attach nothing. The chips appear when the turn ends.";
+const SET_ATTACHMENTS_DESCRIPTION: &str = "Attach files to your reply as chips the user can open, under your last message of this turn. Use it when this turn produced a file meant to be viewed rather than read as code: a generated image, a rendered document, an export, a report. Call it before ending the turn, without being asked. Do not attach source or config files you edited: the user reviews those as diffs. Attach them only if the user asks for the file itself. Each call replaces the whole list for the current turn: call again without a file to drop it, or with an empty list to attach nothing. The chips appear when the turn ends.";
 
 /// What one message asks of the session besides its reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +100,8 @@ fn set_attachments_tool() -> Value {
             },
             "required": ["paths"],
         },
+        // Loaded up front instead of behind the CLI's tool search, so the tool is used unprompted.
+        "_meta": {"anthropic/alwaysLoad": true},
     })
 }
 
@@ -194,6 +196,10 @@ mod tests {
             cwd,
         );
         assert_eq!(list.reply["result"]["tools"][0]["name"], SET_ATTACHMENTS);
+        assert_eq!(
+            list.reply["result"]["tools"][0]["_meta"]["anthropic/alwaysLoad"],
+            true
+        );
         assert_eq!(
             SET_ATTACHMENTS_TOOL,
             format!("mcp__{SERVER_NAME}__{SET_ATTACHMENTS}")
