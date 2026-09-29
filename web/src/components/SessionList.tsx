@@ -17,6 +17,7 @@ import {
   type RowAction,
   actionSide,
   homeSections,
+  keepOrder,
   rowAction,
   rowHighlight,
   rowSwipeRules,
@@ -321,7 +322,27 @@ function Sessions({
   now: number;
 }) {
   const [showArchived, setShowArchived] = useState(false);
-  const { active, archived } = homeSections(sessions);
+  const sections = homeSections(sessions);
+  // Rows keep their order while Home is visible, so none moves under a tap.
+  const activeOrder = useRef<string[]>([]);
+  const archivedOrder = useRef<string[]>([]);
+  const [, setHidden] = useState(0);
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") setHidden((count) => count + 1);
+    };
+    document.addEventListener("visibilitychange", onHide, { passive: true });
+    window.addEventListener("pagehide", onHide, { passive: true });
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+    };
+  }, []);
+  const frozen = document.visibilityState === "visible";
+  const active = frozen ? keepOrder(activeOrder.current, sections.active) : sections.active;
+  const archived = frozen ? keepOrder(archivedOrder.current, sections.archived) : sections.archived;
+  activeOrder.current = active.map((session) => session.id);
+  archivedOrder.current = archived.map((session) => session.id);
   return (
     <>
       {active.length === 0 ? (

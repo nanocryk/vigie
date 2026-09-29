@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   homeSections,
+  keepOrder,
   rowAction,
   rowHighlight,
   rowSwipeRules,
@@ -69,6 +70,14 @@ describe("homeSections", () => {
     ]);
     expect(sections.active.map((entry) => entry.id)).toEqual(["a", "b"]);
     expect(sections.archived.map((entry) => entry.id)).toEqual(["new", "old"]);
+  });
+});
+
+describe("keepOrder", () => {
+  it("keeps the previous order, puts new sessions on top and drops gone ones", () => {
+    const sessions = [session("c"), session("new"), session("a"), session("b")];
+    const ordered = keepOrder(["a", "gone", "b", "c"], sessions);
+    expect(ordered.map((entry) => entry.id)).toEqual(["new", "a", "b", "c"]);
   });
 });
 

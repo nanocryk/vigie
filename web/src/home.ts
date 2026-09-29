@@ -19,6 +19,16 @@ export function homeSections(sessions: readonly SessionView[]): HomeSections {
   return { active, archived: archived.map((entry) => entry.session) };
 }
 
+/** `sessions` in the order of the ids in `previous`, with ids not in it first, in their given order. */
+export function keepOrder(previous: readonly string[], sessions: readonly SessionView[]): SessionView[] {
+  const rank = new Map(previous.map((id, index) => [id, index]));
+  const fresh = sessions.filter((session) => !rank.has(session.id));
+  const known = sessions
+    .filter((session) => rank.has(session.id))
+    .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+  return [...fresh, ...known];
+}
+
 /** What a row's border shows, strongest first: an ask, an unseen stop, an unseen finished turn, work. */
 export type RowHighlight = "ask" | "stopped" | "finished" | "working";
 
