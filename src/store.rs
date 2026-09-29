@@ -1008,6 +1008,41 @@ impl Store {
     }
 }
 
+#[cfg(test)]
+impl Store {
+    /// Stores the CLI stdout lines of recording `name` as events of `session`,
+    /// numbered from `after_seq + 1`, each at `start` plus its recorded offset.
+    /// Returns the last seq.
+    pub fn record_recording(
+        &self,
+        session: Uuid,
+        name: &str,
+        after_seq: u64,
+        start: DateTime<Utc>,
+    ) -> u64 {
+        use crate::replay::{Direction, Recording};
+        use crate::session::Line;
+
+        let recording = Recording::named(name).expect("recording");
+        let mut seq = after_seq;
+        for step in recording
+            .steps
+            .iter()
+            .filter(|step| step.dir == Direction::Out)
+        {
+            seq += 1;
+            let raw = step.msg.to_string();
+            let body = EventBody::Line(Box::new(Line {
+                parsed: serde_json::from_str(&raw).ok(),
+                raw,
+            }));
+            let time = start + chrono::Duration::milliseconds(step.t as i64);
+            self.record_event(session, &Event { seq, time, body });
+        }
+        seq
+    }
+}
+
 fn run_writer(connection: Connection, queue: mpsc::Receiver<Job>) {
     while let Ok(first) = queue.recv() {
         let batch: Vec<Job> = std::iter::once(first)
@@ -1300,7 +1335,30 @@ fn json_error(err: serde_json::Error) -> rusqlite::Error {
 mod tests {
     use super::*;
     use crate::child::Launch;
+    use crate::replay::Recording;
     use crate::session::{HostEvent, Line, RestartMode};
+
+    /// A store in a fresh folder, with one session started in that folder.
+    struct Fixture {
+        dir: tempfile::TempDir,
+        path: PathBuf,
+        store: Store,
+        id: Uuid,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let store = Store::open(&path).unwrap();
+        let id = Uuid::new_v4();
+        store.session_started(id, dir.path(), Utc::now(), None);
+        Fixture {
+            dir,
+            path,
+            store,
+            id,
+        }
+    }
 
     fn event(seq: u64, body: EventBody) -> Event {
         Event {
@@ -1356,21 +1414,12 @@ mod tests {
 
     /// The `out` lines of the `basic` recording, and its `get_usage` answer.
     fn basic_recording() -> (Vec<String>, String) {
-        let recording = crate::replay::Recording::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("spike/runs/basic.ndjson"),
-        )
-        .unwrap();
-        let lines: Vec<String> = recording
-            .steps
-            .iter()
-            .filter(|step| step.dir == crate::replay::Direction::Out)
-            .map(|step| step.msg.to_string())
-            .collect();
+        let recording = Recording::named("basic").unwrap();
+        let lines = recording.out().map(serde_json::Value::to_string).collect();
         let usage = recording
-            .steps
-            .iter()
-            .find(|step| step.msg["response"]["response"]["rate_limits_available"] == true)
-            .map(|step| step.msg["response"]["response"].to_string())
+            .out()
+            .find(|msg| msg["response"]["response"]["rate_limits_available"] == true)
+            .map(|msg| msg["response"]["response"].to_string())
             .unwrap();
         (lines, usage)
     }
@@ -1419,44 +1468,16 @@ mod tests {
         assert_eq!(session.model_mix[0].share, 1.0);
     }
 
-    /// Stores the `out` lines of a recording for `id`, each at `start` plus its offset.
-    fn record_recording(store: &Store, id: Uuid, name: &str, start: DateTime<Utc>) {
-        let recording = crate::replay::Recording::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("spike/runs")
-                .join(format!("{name}.ndjson")),
-        )
-        .unwrap();
-        let outs = recording
-            .steps
-            .iter()
-            .filter(|step| step.dir == crate::replay::Direction::Out);
-        for (seq, step) in outs.enumerate() {
-            let raw = step.msg.to_string();
-            let body = EventBody::Line(Box::new(Line {
-                parsed: serde_json::from_str(&raw).ok(),
-                raw,
-            }));
-            store.record_event(
-                id,
-                &Event {
-                    seq: seq as u64 + 1,
-                    time: start + chrono::Duration::milliseconds(step.t as i64),
-                    body,
-                },
-            );
-        }
-    }
-
     #[tokio::test]
     async fn gauges_follow_the_main_conversation_and_survive_a_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.db");
-        let store = Store::open(&path).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture {
+            dir: _dir,
+            path,
+            store,
+            id,
+        } = fixture();
         let start = parse_time("2026-09-27T10:00:00Z").unwrap();
-        record_recording(&store, id, "cd", start);
+        store.record_recording(id, "cd", 0, start);
         let row = store.session(id).await.unwrap().unwrap();
         // The last response streams two lines, at 7557 and 7579 ms.
         assert_eq!(
@@ -1515,11 +1536,12 @@ mod tests {
 
     #[tokio::test]
     async fn cli_context_until_the_next_request_and_across_a_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.db");
-        let store = Store::open(&path).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture {
+            dir: _dir,
+            path,
+            store,
+            id,
+        } = fixture();
         assert!(
             store
                 .record_context_usage(id, context_reply(12_000))
@@ -1547,7 +1569,7 @@ mod tests {
         );
 
         // The `cd` recording ends on a prompt of 31048 over a 1000000 window.
-        record_recording(&store, id, "cd", Utc::now());
+        store.record_recording(id, "cd", 0, Utc::now());
         let context = store.session(id).await.unwrap().unwrap().context.unwrap();
         assert_eq!(context.source, ContextSource::Estimate);
         assert_eq!(context.used_tokens, 31_048);
@@ -1577,10 +1599,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_stop_outranks_a_finished_turn_until_seen() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("history.db")).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture { store, id, .. } = fixture();
         let unread = async || store.session(id).await.unwrap().unwrap().unread;
         assert_eq!(unread().await, None);
         assert!(store.mark_unread(id, Unread::Finished).await.unwrap());
@@ -1594,10 +1613,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_without_requests_has_no_gauges() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("history.db")).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture { store, id, .. } = fixture();
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.cache, None);
         assert_eq!(row.context, None);
@@ -1640,11 +1656,12 @@ mod tests {
 
     #[tokio::test]
     async fn model_settings_mark_a_change_until_the_next_request_and_survive_a_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.db");
-        let store = Store::open(&path).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture {
+            dir: _dir,
+            path,
+            store,
+            id,
+        } = fixture();
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.settings, ModelSettings::default());
         assert_eq!(row.settings_changed_at, None);
@@ -1681,7 +1698,7 @@ mod tests {
         assert_eq!(row.settings, settings);
         assert_eq!(row.settings_changed_at, Some(at));
 
-        record_recording(&store, id, "cd", Utc::now());
+        store.record_recording(id, "cd", 0, Utc::now());
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.settings_changed_at, None, "a main request followed");
         assert_eq!(row.settings, settings);
@@ -1702,11 +1719,12 @@ mod tests {
 
     #[tokio::test]
     async fn applied_settings_survive_a_reopen_and_clear_on_a_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.db");
-        let store = Store::open(&path).unwrap();
-        let id = Uuid::new_v4();
-        store.session_started(id, dir.path(), Utc::now(), None);
+        let Fixture {
+            dir: _dir,
+            path,
+            store,
+            id,
+        } = fixture();
         assert_eq!(
             store.session(id).await.unwrap().unwrap().applied,
             AppliedSettings::default()

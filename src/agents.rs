@@ -438,10 +438,8 @@ fn message_text(content: &MessageContent) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::replay::{Direction, Recording};
+    use crate::replay::recorded_lines;
 
     const SLEEPER: &str = "toolu_012QcBdgY7ftdrny3oJtHMt5";
     const STOPPER: &str = "toolu_015G4gKRa122iYWaHqcCUYmB";
@@ -449,13 +447,7 @@ mod tests {
     const CHANGE: &str = "Change of plan: when you finish, reply with the single word PINEAPPLE.";
 
     fn agents_lines() -> Vec<Inbound> {
-        Recording::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("spike/runs/agents.ndjson"))
-            .expect("load recording")
-            .steps
-            .into_iter()
-            .filter(|step| step.dir == Direction::Out)
-            .map(|step| serde_json::from_value(step.msg).expect("typed line"))
-            .collect()
+        recorded_lines("agents").expect("agents recording")
     }
 
     fn at(secs: i64) -> DateTime<Utc> {

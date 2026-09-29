@@ -1063,13 +1063,10 @@ pub struct UsageLimit {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use super::*;
-
-    fn runs_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("spike/runs")
-    }
+    use crate::replay::runs_dir;
 
     fn recordings(suffix: &str) -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = std::fs::read_dir(runs_dir())

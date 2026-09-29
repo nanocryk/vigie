@@ -9,13 +9,15 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Lines};
+
+use crate::protocol::Inbound;
 
 /// Keys whose values legitimately differ between a recorded run and a replay.
 const RUN_SPECIFIC_KEYS: [&str; 3] = ["session_id", "uuid", "timestamp"];
@@ -45,7 +47,37 @@ pub struct Recording {
     pub steps: Vec<Step>,
 }
 
+/// The folder of the spike driver's recordings.
+pub fn runs_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("spike/runs")
+}
+
+/// The CLI stdout lines of recording `name`, typed.
+pub fn recorded_lines(name: &str) -> anyhow::Result<Vec<Inbound>> {
+    Recording::named(name)?
+        .out()
+        .map(|msg| Ok(serde_json::from_value(msg.clone())?))
+        .collect()
+}
+
 impl Recording {
+    /// `spike/runs/<name>.ndjson`.
+    pub fn path(name: &str) -> PathBuf {
+        runs_dir().join(format!("{name}.ndjson"))
+    }
+
+    pub fn named(name: &str) -> anyhow::Result<Self> {
+        Self::load(&Self::path(name))
+    }
+
+    /// The CLI stdout lines, in order.
+    pub fn out(&self) -> impl Iterator<Item = &Value> {
+        self.steps
+            .iter()
+            .filter(|step| step.dir == Direction::Out)
+            .map(|step| &step.msg)
+    }
+
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -588,10 +620,7 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(20);
 
     fn recording(name: &str) -> Recording {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("spike/runs")
-            .join(format!("{name}.ndjson"));
-        Recording::load(&path).expect("load recording")
+        Recording::named(name).expect("load recording")
     }
 
     struct Host {

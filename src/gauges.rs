@@ -185,11 +185,9 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
     use crate::protocol::Inbound;
-    use crate::replay::{Direction, Recording};
+    use crate::replay::recorded_lines;
 
     const RECORDINGS: [&str; 6] = [
         "basic",
@@ -200,22 +198,9 @@ mod tests {
         "plan",
     ];
 
-    fn lines(name: &str) -> Vec<Inbound> {
-        Recording::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("spike/runs")
-                .join(format!("{name}.ndjson")),
-        )
-        .expect("load recording")
-        .steps
-        .into_iter()
-        .filter(|step| step.dir == Direction::Out)
-        .map(|step| serde_json::from_value(step.msg).expect("typed line"))
-        .collect()
-    }
-
     fn requests(name: &str) -> Vec<MainRequest> {
-        lines(name)
+        recorded_lines(name)
+            .expect("recording")
             .iter()
             .filter_map(|line| match line {
                 Inbound::Assistant(message) => MainRequest::from_assistant(message),
@@ -294,7 +279,8 @@ mod tests {
     #[test]
     fn results_report_the_main_model_s_window() {
         for name in RECORDINGS {
-            let windows: Vec<Option<u64>> = lines(name)
+            let windows: Vec<Option<u64>> = recorded_lines(name)
+                .expect("recording")
                 .iter()
                 .filter_map(|line| match line {
                     Inbound::Result(result) => {

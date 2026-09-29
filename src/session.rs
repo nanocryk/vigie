@@ -1385,22 +1385,11 @@ fn permission_result(ask: &CanUseTool, answer: &Answer, cwd: &Path) -> Result<Pe
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::replay::{Direction, Recording};
+    use crate::replay;
 
     fn recorded_lines(name: &str) -> Vec<Inbound> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("spike/runs")
-            .join(format!("{name}.ndjson"));
-        Recording::load(&path)
-            .expect("load recording")
-            .steps
-            .into_iter()
-            .filter(|step| step.dir == Direction::Out)
-            .map(|step| serde_json::from_value(step.msg).expect("typed line"))
-            .collect()
+        replay::recorded_lines(name).expect("recording")
     }
 
     /// The background recording: a turn starts the task and ends, the task

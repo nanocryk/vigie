@@ -1,8 +1,10 @@
 //! Drives the real router over TCP with WebSocket clients, against the fake claude.
 
+mod common;
+
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +23,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vigie2::auth::{self, Auth, Device, Registry};
-use vigie2::child::{Launch, Program};
+use vigie2::child::Launch;
 use vigie2::manager::SessionManager;
 use vigie2::push::{Pusher, Vapid};
 use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
@@ -32,7 +34,8 @@ use vigie2::wire::{
     CACHE_COLD, ClientMessage, SESSION_LIVE, ServerMessage, SessionList, SessionView, WireEvent,
 };
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+use common::{TIMEOUT, fake};
+
 const DEVICE: &str = "test-device";
 
 /// A turn with an ask, a permission mode change, and an interrupted turn.
@@ -72,16 +75,8 @@ impl Server {
         std::fs::create_dir_all(&cwd).unwrap();
 
         let registry = Registry::load(dir.path().join("devices.json")).unwrap();
-        let now = chrono::Utc::now();
         registry
-            .insert(Device {
-                id: DEVICE.into(),
-                label: "test".into(),
-                issued_at: now,
-                last_seen: now,
-                revoked: false,
-                last_ip: None,
-            })
+            .insert(Device::new(DEVICE.into(), "test".into(), Utc::now()))
             .unwrap();
         let auth = Arc::new(Auth::new(registry, false));
         let store = Store::open(&dir.path().join("history.db")).unwrap();
@@ -211,13 +206,6 @@ impl Server {
 
 fn origin(addr: SocketAddr) -> String {
     format!("http://{addr}")
-}
-
-fn fake(script: &Path) -> Program {
-    Program {
-        path: env!("CARGO_BIN_EXE_fake-claude").into(),
-        leading_args: vec![script.into()],
-    }
 }
 
 fn upgrade_status(result: Result<Client, tungstenite::Error>) -> StatusCode {

@@ -279,8 +279,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::replay::{Direction, Recording};
-    use crate::session::{Event, EventBody, Line, RestartMode};
+    use crate::session::RestartMode;
     use crate::store::Store;
 
     fn date() -> NaiveDate {
@@ -296,32 +295,7 @@ mod tests {
         store.session_started(id, dir.path(), Utc::now(), None);
         let mut seq = 0;
         for name in names {
-            let recording = Recording::load(
-                &Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("spike/runs")
-                    .join(format!("{name}.ndjson")),
-            )
-            .unwrap();
-            for step in recording
-                .steps
-                .iter()
-                .filter(|step| step.dir == Direction::Out)
-            {
-                seq += 1;
-                let raw = step.msg.to_string();
-                let body = EventBody::Line(Box::new(Line {
-                    parsed: serde_json::from_str(&raw).ok(),
-                    raw,
-                }));
-                store.record_event(
-                    id,
-                    &Event {
-                        seq,
-                        time: Utc::now(),
-                        body,
-                    },
-                );
-            }
+            seq = store.record_recording(id, name, seq, Utc::now());
         }
         store.events_after(id, 0, u32::MAX).await.unwrap()
     }

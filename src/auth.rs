@@ -48,6 +48,20 @@ pub struct Device {
     pub last_ip: Option<String>,
 }
 
+impl Device {
+    /// An active device issued and last seen at `now`, with no known address.
+    pub fn new(id: String, label: String, now: DateTime<Utc>) -> Self {
+        Self {
+            id,
+            label,
+            issued_at: now,
+            last_seen: now,
+            revoked: false,
+            last_ip: None,
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct RegistryFile {
     devices: Vec<Device>,
@@ -590,15 +604,10 @@ pub async fn exchange(
     }
 
     let id = mint_device_id();
-    let now = Utc::now();
     let label = auth.registry.next_label();
     let device = Device {
-        id: id.clone(),
-        label: label.clone(),
-        issued_at: now,
-        last_seen: now,
-        revoked: false,
         last_ip: Some(ip.to_string()),
+        ..Device::new(id.clone(), label.clone(), Utc::now())
     };
     if let Err(err) = auth.registry.insert(device) {
         warn!(%err, "registry insert failed");
@@ -1014,15 +1023,7 @@ mod tests {
     }
 
     fn device(id: &str) -> Device {
-        let now = Utc::now();
-        Device {
-            id: id.to_string(),
-            label: id.to_string(),
-            issued_at: now,
-            last_seen: now,
-            revoked: false,
-            last_ip: None,
-        }
+        Device::new(id.to_string(), id.to_string(), Utc::now())
     }
 
     fn revoke_all_from_another_process(path: &Path) {

@@ -179,16 +179,12 @@ mod auth_gate_tests {
         let dir = tmp.path().to_path_buf();
         let registry = Registry::load(dir.join("devices.json")).expect("registry load");
         let device_cookie = "test-device-cookie".to_string();
-        let now = chrono::Utc::now();
         registry
-            .insert(auth::Device {
-                id: device_cookie.clone(),
-                label: "test".into(),
-                issued_at: now,
-                last_seen: now,
-                revoked: false,
-                last_ip: None,
-            })
+            .insert(auth::Device::new(
+                device_cookie.clone(),
+                "test".into(),
+                chrono::Utc::now(),
+            ))
             .expect("insert device");
         let web_dir = dir.join("web");
         std::fs::create_dir_all(web_dir.join("assets")).expect("mkdir web");

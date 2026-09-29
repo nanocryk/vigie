@@ -89,13 +89,11 @@ fn reading(kind: WindowKind, percent: f64, resets_at: f64) -> Reading {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use serde_json::Value;
 
     use super::{Reading, from_assistant, from_get_usage, from_rate_limit_event};
     use crate::protocol::{GetUsageResponse, Inbound};
-    use crate::replay::{Direction, Recording};
+    use crate::replay::{self, Recording};
     use crate::usage::mix::{Family, Mix};
     use crate::usage::window::WindowKind;
 
@@ -103,22 +101,8 @@ mod tests {
     const FIVE_HOUR_RESET: f64 = 1_790_514_000.0;
     const SEVEN_DAY_RESET: f64 = 1_790_611_200.0;
 
-    fn recording(name: &str) -> Recording {
-        Recording::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("spike/runs")
-                .join(format!("{name}.ndjson")),
-        )
-        .expect("load recording")
-    }
-
     fn lines(name: &str) -> Vec<Inbound> {
-        recording(name)
-            .steps
-            .into_iter()
-            .filter(|step| step.dir == Direction::Out)
-            .map(|step| serde_json::from_value(step.msg).expect("typed line"))
-            .collect()
+        replay::recorded_lines(name).expect("recording")
     }
 
     fn summary(readings: &[Reading]) -> Vec<(WindowKind, f64, f64)> {
@@ -175,13 +159,11 @@ mod tests {
 
     #[test]
     fn a_get_usage_answer_agrees_with_the_event_of_the_same_moment() {
-        let recording = recording("basic");
+        let recording = Recording::named("basic").expect("recording");
         let response: Value = recording
-            .steps
-            .iter()
-            .filter(|step| step.dir == Direction::Out)
-            .find(|step| step.msg["response"]["response"]["rate_limits_available"] == true)
-            .map(|step| step.msg["response"]["response"].clone())
+            .out()
+            .find(|msg| msg["response"]["response"]["rate_limits_available"] == true)
+            .map(|msg| msg["response"]["response"].clone())
             .expect("a get_usage answer");
         let response: GetUsageResponse = serde_json::from_value(response).expect("typed answer");
         assert_eq!(

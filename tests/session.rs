@@ -1,32 +1,28 @@
 //! Drives a real `Session` against the fake claude replaying the spike recordings.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vigie2::child::{Launch, ModelSettings, Program};
+use vigie2::child::{Launch, ModelSettings};
 use vigie2::grant::GrantKind;
 use vigie2::protocol::{Delta, Inbound, ResultMessage, StreamEventBody};
+use vigie2::replay::Recording;
 use vigie2::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
 };
 
-const TIMEOUT: Duration = Duration::from_secs(20);
-
-fn recording(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("spike/runs")
-        .join(format!("{name}.ndjson"))
-}
+use common::{TIMEOUT, fake};
 
 /// Copies a recording into `dir` with `edit` applied to every CLI stdout line.
 fn doctored(dir: &TempDir, name: &str, edit: impl Fn(&mut Value)) -> PathBuf {
-    let text = std::fs::read_to_string(recording(name)).expect("read recording");
+    let text = std::fs::read_to_string(Recording::path(name)).expect("read recording");
     let lines: Vec<String> = text
         .lines()
         .map(|line| {
@@ -60,10 +56,7 @@ impl Harness {
             id: Uuid::new_v4(),
             cwd: cwd.path().to_path_buf(),
             launch: Launch::New(claude_session),
-            program: Program {
-                path: env!("CARGO_BIN_EXE_fake-claude").into(),
-                leading_args: vec![recording.into()],
-            },
+            program: fake(recording),
             history: None,
             last_seq: 0,
             permission_mode: None,
@@ -183,7 +176,7 @@ fn is_text_delta(event: &Event) -> bool {
 
 #[tokio::test]
 async fn basic_turns_and_usage() {
-    let mut harness = Harness::start(&recording("basic"));
+    let mut harness = Harness::start(&Recording::path("basic"));
     let started = harness.next().await;
     assert_eq!(started.seq, 1);
     assert!(matches!(
@@ -269,7 +262,7 @@ async fn basic_turns_and_usage() {
 
 #[tokio::test]
 async fn settings_and_context_replies_are_not_emitted() {
-    let mut harness = Harness::start(&recording("basic"));
+    let mut harness = Harness::start(&Recording::path("basic"));
     harness
         .until_host(|host| matches!(host, HostEvent::Catalog { .. }))
         .await;
@@ -290,7 +283,7 @@ async fn settings_and_context_replies_are_not_emitted() {
 
 #[tokio::test]
 async fn permissions_deny_and_question_answer() {
-    let mut harness = Harness::start(&recording("permissions"));
+    let mut harness = Harness::start(&Recording::path("permissions"));
     harness
         .session
         .send(
@@ -373,7 +366,7 @@ async fn permissions_deny_and_question_answer() {
 
 #[tokio::test]
 async fn interrupt_while_streaming_and_during_a_tool() {
-    let mut harness = Harness::start(&recording("interrupt"));
+    let mut harness = Harness::start(&Recording::path("interrupt"));
     harness
         .session
         .send(
@@ -431,7 +424,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
 
 #[tokio::test]
 async fn background_task_starts_its_own_turn() {
-    let mut harness = Harness::start(&recording("background"));
+    let mut harness = Harness::start(&Recording::path("background"));
     harness
         .session
         .send(
@@ -454,7 +447,7 @@ async fn background_task_starts_its_own_turn() {
 /// approving the plan moves the CLI back to default (a `system/status`).
 #[tokio::test]
 async fn permission_mode_changes_are_announced_once_each() {
-    let mut harness = Harness::start(&recording("plan"));
+    let mut harness = Harness::start(&Recording::path("plan"));
     let changed = harness.session.set_permission_mode("plan").await.unwrap();
     assert_eq!(changed.mode, "plan");
     harness
@@ -494,7 +487,7 @@ async fn permission_mode_changes_are_announced_once_each() {
 #[tokio::test]
 async fn folder_grants_and_accept_edits_reach_the_cli() {
     const OUTSIDE: &str = r"C:\Users\user\AppData\Local\Temp\vigie2-spike\outside";
-    let mut harness = Harness::start(&recording("grants"));
+    let mut harness = Harness::start(&Recording::path("grants"));
     let deny = Answer::Deny {
         message: "Refused by the spike driver.".into(),
     };

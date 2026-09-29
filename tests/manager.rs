@@ -1,5 +1,7 @@
 //! Drives `SessionManager` against the fake claude and checks what history keeps.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +10,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
-use vigie2::child::{Launch, Program};
+use vigie2::child::Launch;
 use vigie2::gauges::ContextSource;
 use vigie2::manager::{Notice, NoticeKind, Probe, SessionManager};
 use vigie2::protocol::{AppliedSettings, Inbound};
@@ -19,7 +21,8 @@ use vigie2::replay::{
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
 use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+use common::{TIMEOUT, fake};
+
 const ALL: u32 = 100_000;
 
 /// Initialization only; the fake then waits for stdin to close.
@@ -27,19 +30,6 @@ const INIT_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
 "#;
-
-fn recording(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("spike/runs")
-        .join(format!("{name}.ndjson"))
-}
-
-fn fake(recording: &Path) -> Program {
-    Program {
-        path: env!("CARGO_BIN_EXE_fake-claude").into(),
-        leading_args: vec![recording.into()],
-    }
-}
 
 struct Env {
     dir: TempDir,
@@ -122,7 +112,7 @@ fn is_usage_answer(line: &Value) -> bool {
 /// must appear byte for byte and in order among `stored`; the only other lines
 /// allowed are answers to unscripted `get_usage` requests.
 fn assert_lines_match_recording(stored: &[StoredEvent], name: &str, session: Uuid) {
-    let recorded: Vec<Value> = Recording::load(&recording(name))
+    let recorded: Vec<Value> = Recording::named(name)
         .unwrap()
         .steps
         .into_iter()
@@ -162,7 +152,7 @@ fn assert_lines_match_recording(stored: &[StoredEvent], name: &str, session: Uui
 #[tokio::test]
 async fn basic_run_is_persisted_with_usage_samples() {
     let env = Env::new();
-    let manager = env.manager(&recording("basic")).await;
+    let manager = env.manager(&Recording::path("basic")).await;
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let id = session.id();
     let mut events = session.subscribe();
@@ -627,7 +617,7 @@ async fn until_unread(manager: &SessionManager, id: Uuid, want: Option<Unread>) 
 #[tokio::test]
 async fn a_finished_turn_is_unread_until_an_active_viewer_sees_it() {
     let env = Env::new();
-    let manager = env.manager(&recording("basic")).await;
+    let manager = env.manager(&Recording::path("basic")).await;
     let mut notices = manager.subscribe_notices();
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let id = session.id();
@@ -686,7 +676,7 @@ async fn discussion_from_cd(env: &Env) -> (Uuid, u64) {
     let store = Store::open(&env.db).unwrap();
     let id = Uuid::new_v4();
     store.session_started(id, &env.cwd, chrono::Utc::now(), Some("plan".into()));
-    let lines = Recording::load(&recording("cd"))
+    let lines = Recording::named("cd")
         .unwrap()
         .steps
         .into_iter()
@@ -1030,7 +1020,7 @@ async fn a_start_without_a_pick_updates_the_shared_catalog_and_a_pick_does_not()
 #[tokio::test]
 async fn a_start_stores_the_terminal_only_commands_of_its_init() {
     let env = Env::new();
-    let manager = env.manager(&recording("basic")).await;
+    let manager = env.manager(&Recording::path("basic")).await;
     let mut catalog_changes = manager.subscribe_catalog();
     let session = manager.create(env.cwd.clone()).await.unwrap();
     let mut events = session.subscribe();
