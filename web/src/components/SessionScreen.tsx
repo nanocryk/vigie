@@ -147,12 +147,15 @@ function Composer({
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
   const area = useRef<HTMLTextAreaElement>(null);
+  const measure = useRef<HTMLTextAreaElement>(null);
 
+  // Measured on an out-of-flow copy: collapsing the input itself would resize
+  // the transcript for a moment and move its scroll position.
   useLayoutEffect(() => {
     const element = area.current;
-    if (element === null) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
+    const copy = measure.current;
+    if (element === null || copy === null) return;
+    element.style.height = `${copy.scrollHeight}px`;
   }, [text]);
 
   const change = (value: string) => {
@@ -204,16 +207,27 @@ function Composer({
   // The buttons keep a one-line input's height and sit at the bottom as the input grows.
   return (
     <div className="mx-auto flex max-w-5xl items-end gap-2 select-text">
-      <textarea
-        ref={area}
-        rows={1}
-        value={text}
-        onChange={(event) => change(event.target.value)}
-        onKeyDown={onKeyDown}
-        enterKeyHint={coarse ? "enter" : "send"}
-        placeholder={placeholder}
-        className="bg-card focus:ring-ring voice-prose max-h-[35dvh] min-h-14 min-w-0 flex-1 resize-none rounded-[5px] border px-3 py-4 text-sm outline-none focus:ring-2"
-      />
+      <div className="relative flex min-w-0 flex-1">
+        <textarea
+          ref={measure}
+          rows={1}
+          value={text}
+          readOnly
+          tabIndex={-1}
+          aria-hidden
+          className={`${COMPOSER_INPUT} pointer-events-none invisible absolute inset-x-0 bottom-0`}
+        />
+        <textarea
+          ref={area}
+          rows={1}
+          value={text}
+          onChange={(event) => change(event.target.value)}
+          onKeyDown={onKeyDown}
+          enterKeyHint={coarse ? "enter" : "send"}
+          placeholder={placeholder}
+          className={`${COMPOSER_INPUT} focus:ring-ring max-h-[35dvh] flex-1 outline-none focus:ring-2`}
+        />
+      </div>
       {coarse ? (
         <TouchSend
           ready={ready}
@@ -235,6 +249,10 @@ function Composer({
     </div>
   );
 }
+
+/** Shared by the composer input and its measuring copy, so both wrap alike. */
+const COMPOSER_INPUT =
+  "bg-card voice-prose min-h-14 min-w-0 resize-none rounded-[5px] border px-3 py-4 text-sm";
 
 /** How long stops of background tasks gather before one message wakes Claude. */
 const WAKE_DELAY_MS = 5000;
