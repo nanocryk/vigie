@@ -305,6 +305,36 @@ pub struct Auth {
     pair_tokens: Mutex<Vec<PairToken>>,
     rate_limiter: RateLimiter,
     devices_changed: broadcast::Sender<()>,
+    /// Open app connections per device id. A device with no entry is offline.
+    connections: Mutex<HashMap<String, usize>>,
+}
+
+/// Holds one open connection of a device; dropping it closes the connection.
+pub struct ConnectionGuard {
+    auth: std::sync::Arc<Auth>,
+    device_id: String,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        let went_offline = {
+            let mut connections = self.auth.connections.lock();
+            match connections.get_mut(&self.device_id) {
+                Some(count) if *count > 1 => {
+                    *count -= 1;
+                    false
+                }
+                Some(_) => {
+                    connections.remove(&self.device_id);
+                    true
+                }
+                None => false,
+            }
+        };
+        if went_offline {
+            self.auth.notify_changed();
+        }
+    }
 }
 
 impl Auth {
@@ -318,7 +348,29 @@ impl Auth {
             pair_tokens: Mutex::new(Vec::new()),
             rate_limiter: RateLimiter::new(),
             devices_changed: tx,
+            connections: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Count an open connection of `device_id` until the guard drops.
+    pub fn track_connection(self: &std::sync::Arc<Self>, device_id: &str) -> ConnectionGuard {
+        let went_online = {
+            let mut connections = self.connections.lock();
+            let count = connections.entry(device_id.to_string()).or_insert(0);
+            *count += 1;
+            *count == 1
+        };
+        if went_online {
+            self.notify_changed();
+        }
+        ConnectionGuard {
+            auth: std::sync::Arc::clone(self),
+            device_id: device_id.to_string(),
+        }
+    }
+
+    pub fn is_connected(&self, device_id: &str) -> bool {
+        self.connections.lock().contains_key(device_id)
     }
 
     pub fn subscribe_changes(&self) -> broadcast::Receiver<()> {
@@ -586,6 +638,7 @@ pub struct DeviceView {
     last_seen: DateTime<Utc>,
     revoked: bool,
     is_you: bool,
+    is_connected: bool,
     last_ip: Option<String>,
 }
 
@@ -606,6 +659,7 @@ pub async fn devices_list(
         .into_iter()
         .map(|d| DeviceView {
             is_you: you.as_deref() == Some(d.id.as_str()),
+            is_connected: state.auth.is_connected(&d.id),
             last_ip: d.last_ip.clone(),
             id: d.id,
             label: d.label,
@@ -1046,6 +1100,33 @@ mod tests {
         // The tempdir guard drops here; the registry only touches the file on
         // mutation, and these cases never mutate.
         Auth::new(registry, false)
+    }
+
+    #[test]
+    fn connection_count_notifies_only_on_online_and_offline() {
+        let auth = std::sync::Arc::new(empty_auth());
+        let mut changes = auth.subscribe_changes();
+        assert!(!auth.is_connected("phone"));
+
+        let first = auth.track_connection("phone");
+        let second = auth.track_connection("phone");
+        assert!(auth.is_connected("phone"));
+        assert!(changes.try_recv().is_ok(), "going online must notify");
+        assert!(
+            changes.try_recv().is_err(),
+            "a second socket must not notify"
+        );
+
+        drop(first);
+        assert!(auth.is_connected("phone"));
+        assert!(
+            changes.try_recv().is_err(),
+            "closing one of two sockets must not notify"
+        );
+
+        drop(second);
+        assert!(!auth.is_connected("phone"));
+        assert!(changes.try_recv().is_ok(), "going offline must notify");
     }
 
     #[test]

@@ -53,10 +53,16 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Push notification at 50 minutes of the 1 hour TTL, warning the cache will soon be cold. Not after a kill from Home: killing is how the user lets a discussion go for now. A crash, a revoke or a server stop still warns.
 - Push notification when the user is not looking at a discussion and their intervention is needed: an ask is queued (main agent or subagent), the main agent finished answering with no tool use and no background task pending, or the child stopped unexpectedly.
 
+## Devices
+
+- The device settings screen lists paired devices as cards: label, a "this device" badge, last IP, and "Connected" while the device has an app open (at least one WebSocket), otherwise when it was last seen. Revoked devices are dimmed with a "Revoked" tag.
+- Active devices can be renamed in place and revoked after a confirmation; revoked devices can be removed. The list updates live on any change, including a device connecting or disconnecting.
+- Pairing a new device: pick the network address the link points at (LAN, tailnet, public, or a configured host), then generate. A card shows a QR code, the link with a copy button, and a countdown over the 5-minute single-use token. It closes when a new device pairs; once expired, the button offers a new link.
+
 ## Notifications
 
 - Web Push (VAPID), keys generated on first start in the state directory. Subscription endpoints must be public HTTPS hostnames, checked at subscribe and at send; the sender does not follow redirects.
-- Opt-in per device, in the device settings screen, opened from a large cogwheel button at the far right of the top bar, on every screen. The screen holds only notifications for now.
+- Opt-in per device, in the device settings screen, opened from a large cogwheel button at the far right of the top bar, on every screen. The screen holds notifications and devices (see Devices).
 - No push for a discussion an active client has on screen (see Seen, under Projects and Home).
 - One notification per discussion: each push replaces the previous one of that discussion. Once the discussion is seen on any device, every device that got a push for it since it was last seen receives a silent push closing that notification, so they never pile up. Tapping one opens the discussion.
 - Cold cache: sending and approving are blocked until the user picks one of:
@@ -238,7 +244,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - MCP server: tool list and schemas, routing calls to their session, pre-allowing vigie2's own tools, how skills or CLAUDE.md tell Claude when to use them.
 - Sensory features (sound, music, animation): opt-in per device, global mute, reduced motion.
 - Which commands get a custom presentation beyond commits, and how one is defined.
-- Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, rename and auto-title, Mermaid rendering, QR code pairing.
+- Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, rename and auto-title, Mermaid rendering.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).
 - How checks are registered per project.
 - Claude Code version check at startup (`claude --version`, `system/init.capabilities`), and how features degrade on an unsupported version.

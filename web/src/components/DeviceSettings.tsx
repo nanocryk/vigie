@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Client } from "@/client";
+import { Devices } from "@/components/Devices";
 import { ConnectionDot } from "@/components/SessionList";
 import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -120,6 +121,7 @@ export function DeviceSettings({ client, label }: { client: Client; label: strin
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-4 p-4">
           <Notifications />
+          <Devices />
         </div>
       </main>
     </>

@@ -68,6 +68,7 @@ async fn run(
     auth: Arc<Auth>,
     device: AuthedDevice,
 ) -> Result<()> {
+    let _online = auth.track_connection(&device.id);
     let (out, mut outgoing) = mpsc::channel(OUTGOING_CAPACITY);
     let mut connection = Connection {
         manager: manager.clone(),
