@@ -61,8 +61,14 @@ import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
-import { DiffIcon, FolderIcon, PaperclipIcon } from "@/components/Explorer";
-import { changeExplorer, openSessionDiff, openSessionFolder } from "@/files";
+import { DiffIcon, FolderIcon, PaperclipIcon, navigateBackLeaves } from "@/components/Explorer";
+import {
+  changeExplorer,
+  openFileInLastFree,
+  openSessionDiff,
+  openSessionFile,
+  openSessionFolder,
+} from "@/files";
 import { repoRoot } from "@/git";
 import { folderName, sessionTitle, stateLabel } from "@/format";
 import { navigate } from "@/route";
@@ -1082,6 +1088,14 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
+        onOpenAttachment={(path) => {
+          changeExplorer((state) =>
+            view === null
+              ? openFileInLastFree(state, path)
+              : openSessionFile(state, view.id, view.cwd, path),
+          );
+          navigateBackLeaves();
+        }}
         background={viewing === null ? (view?.background ?? []) : []}
         onStopTask={stopBackground}
         bottomRequest={bottomRequest}

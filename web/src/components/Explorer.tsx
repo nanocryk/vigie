@@ -43,8 +43,7 @@ import {
   upSteps,
   useExplorer,
 } from "@/files";
-import { uploadsSession } from "@/attachments";
-import { folderName, formatAgo } from "@/format";
+import { folderName, formatAgo, sessionTitle } from "@/format";
 import {
   type FolderMarks,
   type GutterMarks,
@@ -184,8 +183,12 @@ export function formatSize(bytes: number): string {
 
 // ---- Tabs ----
 
-function tabTitle(tab: ExplorerTab): string {
-  if (tab.owner.kind === "session") return folderName(tab.owner.root);
+function tabTitle(tab: ExplorerTab, sessions: readonly SessionView[] | null): string {
+  const owner = tab.owner;
+  if (owner.kind === "session") {
+    const session = sessions?.find((candidate) => candidate.id === owner.session);
+    return session === undefined ? folderName(owner.root) : sessionTitle(session);
+  }
   return tab.folder === null ? "Places" : folderName(tab.folder);
 }
 
@@ -202,7 +205,15 @@ function TabIcon({ tab, className }: { tab: ExplorerTab; className?: string }) {
   );
 }
 
-function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTab }) {
+function TabSwitcher({
+  tabs,
+  active,
+  sessions,
+}: {
+  tabs: ExplorerTab[];
+  active: ExplorerTab;
+  sessions: readonly SessionView[] | null;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -223,7 +234,7 @@ function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTa
   }, [open]);
 
   const free = tabs.filter((tab) => tab.owner.kind === "free");
-  const sessions = tabs.filter((tab) => tab.owner.kind === "session");
+  const sessionTabs = tabs.filter((tab) => tab.owner.kind === "session");
   const entry = (tab: ExplorerTab, closable: boolean) => {
     const current = tab.id === active.id;
     return (
@@ -247,7 +258,7 @@ function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTa
             }
           />
           <span className="min-w-0 flex-1">
-            <span className="voice-ui block truncate text-sm">{tabTitle(tab)}</span>
+            <span className="voice-ui block truncate text-sm">{tabTitle(tab, sessions)}</span>
             <span className="text-muted-foreground voice-code block truncate text-xs">
               {tabDetail(tab)}
             </span>
@@ -256,7 +267,7 @@ function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTa
         <button
           type="button"
           disabled={!closable}
-          aria-label={`Close ${tabTitle(tab)}`}
+          aria-label={`Close ${tabTitle(tab, sessions)}`}
           onClick={() => changeExplorer((state) => closeTab(state, tab.id))}
           className="text-muted-foreground hover:bg-muted hover:text-foreground px-3 disabled:invisible"
         >
@@ -279,7 +290,7 @@ function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTa
           tab={active}
           className={active.owner.kind === "session" ? "text-mode-plan" : "text-primary"}
         />
-        <span className="truncate">{tabTitle(active)}</span>
+        <span className="truncate">{tabTitle(active, sessions)}</span>
         {tabs.length > 1 && (
           <span className="bg-muted text-muted-foreground rounded-full px-1.5 text-[11px]">
             {tabs.length}
@@ -294,12 +305,12 @@ function TabSwitcher({ tabs, active }: { tabs: ExplorerTab[]; active: ExplorerTa
         >
           <p className="voice-ui text-muted-foreground px-3 pt-2 pb-1 text-xs">Tabs</p>
           <ul>{free.map((tab) => entry(tab, free.length > 1))}</ul>
-          {sessions.length > 0 && (
+          {sessionTabs.length > 0 && (
             <>
               <p className="voice-ui text-muted-foreground border-t px-3 pt-2 pb-1 text-xs">
                 Session tabs
               </p>
-              <ul>{sessions.map((tab) => entry(tab, true))}</ul>
+              <ul>{sessionTabs.map((tab) => entry(tab, true))}</ul>
             </>
           )}
           <button
@@ -1055,6 +1066,18 @@ function FileViewer({
 // ---- Page ----
 
 const UP_ENTRY = "vigie2-explorer-up";
+/** Marks an explorer entry whose back leaves the explorer until the user moves inside it. */
+const BACK_LEAVES = "vigie2-explorer-back-leaves";
+
+/** Opens the explorer so that back returns to the screen before, as for an attachment. */
+export function navigateBackLeaves(): void {
+  pushEntry({ [BACK_LEAVES]: true }, routeHash({ kind: "files" }));
+}
+
+function entryBackLeaves(): boolean {
+  const state: unknown = history.state;
+  return typeof state === "object" && state !== null && Reflect.get(state, BACK_LEAVES) === true;
+}
 
 /** How many up entries stand on top of the explorer's own history entry. */
 function upEntries(): number {
@@ -1073,7 +1096,11 @@ function upEntries(): number {
  */
 function useBackGoesUp(steps: number): () => void {
   const leaving = useRef(false);
+  const backLeaves = useRef(entryBackLeaves());
+  const arrival = useRef(steps);
   useEffect(() => {
+    if (steps !== arrival.current) backLeaves.current = false;
+    if (backLeaves.current) return;
     for (let count = upEntries(); count < steps; count++) {
       pushEntry({ [UP_ENTRY]: count + 1 });
     }
@@ -1171,11 +1198,6 @@ export function Explorer({ client }: { client: Client }) {
 
   const folder = tab.folder;
   const owner = tab.owner.kind === "session" ? tab.owner : null;
-  // A message's attachment, opened from its bubble, leads back to the discussion too.
-  const uploadsOf = owner === null ? uploadsSession(tab.file ?? folder ?? "") : null;
-  const discussion =
-    owner?.session ??
-    (snapshot.sessions?.some((session) => session.id === uploadsOf) === true ? uploadsOf : null);
 
   return (
     <>
@@ -1188,7 +1210,7 @@ export function Explorer({ client }: { client: Client }) {
       />
       <div className="shrink-0 space-y-2 border-b px-3 py-2">
         <div className={`${PANEL} flex items-center gap-2`}>
-          <TabSwitcher tabs={state.tabs} active={tab} />
+          <TabSwitcher tabs={state.tabs} active={tab} sessions={snapshot.sessions} />
           <div className="ml-auto flex shrink-0 gap-2">
             {/* Leftmost, so the buttons after it keep their places when it hides. */}
             {view === "folder" && (
@@ -1205,19 +1227,17 @@ export function Explorer({ client }: { client: Client }) {
                 <span className="text-xs max-sm:hidden">Hidden</span>
               </button>
             )}
-            {discussion !== null && (
-              <button
-                type="button"
-                onClick={() => navigate({ kind: "session", id: discussion })}
-                title="Open the session's discussion"
-                className={TOOL}
-              >
-                <ChatIcon className="text-mode-plan size-4" />
-                <span className="text-xs max-sm:hidden">Discussion</span>
-              </button>
-            )}
             {owner !== null && (
               <>
+                <button
+                  type="button"
+                  onClick={() => navigate({ kind: "session", id: owner.session })}
+                  title="Open the session's discussion"
+                  className={TOOL}
+                >
+                  <ChatIcon className="text-mode-plan size-4" />
+                  <span className="text-xs max-sm:hidden">Discussion</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => go(owner.root)}

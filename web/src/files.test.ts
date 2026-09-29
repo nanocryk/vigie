@@ -13,6 +13,7 @@ import {
   newFreeTab,
   openFileInLastFree,
   openSessionDiff,
+  openSessionFile,
   openSessionFolder,
   openSessionTab,
   parseFileView,
@@ -127,6 +128,22 @@ describe("tabs", () => {
       owner: { kind: "free" },
       folder: "C:\\t",
       file: "C:\\t\\b1.output",
+    });
+  });
+
+  it("opens a file in the session's tab, its folder behind it, the diff closed", () => {
+    const state = openSessionFile(
+      openSessionDiff(initialState(), "s1", "C:\\p", "C:\\p"),
+      "s1",
+      "C:\\p",
+      "C:\\t\\shot.png",
+    );
+    expect(state.tabs).toHaveLength(2);
+    expect(activeTab(state)).toMatchObject({
+      owner: { kind: "session", session: "s1", root: "C:\\p" },
+      folder: "C:\\t",
+      diff: null,
+      file: "C:\\t\\shot.png",
     });
   });
 

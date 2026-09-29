@@ -1,8 +1,10 @@
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -433,16 +435,14 @@ function BubbleBody({
   );
 }
 
-function openAttachment(path: string): void {
-  changeExplorer((state) => openFileInLastFree(state, path));
-  navigate({ kind: "files" });
-}
+const OpenAttachment = createContext<(path: string) => void>(() => {});
 
 /**
  * A bubble's files, as a row of chips hanging over its bottom edge. The bubble
  * leaves `BUBBLE_FILES_ROOM` below it for the overhang.
  */
 function BubbleFiles({ paths, side }: { paths: readonly string[]; side: "user" | "claude" }) {
+  const openAttachment = useContext(OpenAttachment);
   if (paths.length === 0) return null;
   return (
     <div
@@ -698,6 +698,7 @@ export function TranscriptView({
   awaiting,
   turnOpen,
   onOpen,
+  onOpenAttachment,
   background,
   onStopTask,
   bottomRequest,
@@ -723,6 +724,8 @@ export function TranscriptView({
   turnOpen: boolean;
   /** Switches to an agent's discussion, or to the main one with null; kept stable. */
   onOpen: (toolUseId: string | null) => void;
+  /** Opens the file of a bubble's attachment chip. */
+  onOpenAttachment: (path: string) => void;
   /** Background tasks, listed at the end with a Stop button each. */
   background: readonly BackgroundView[];
   onStopTask: (taskId: string) => Promise<void>;
@@ -886,21 +889,23 @@ export function TranscriptView({
                   : null}
             </div>
           )}
-          {items.map((item, index) => (
-            <ItemView
-              key={item.key}
-              item={item}
-              onOpen={onOpen}
-              last={index === lastUser && pending.length === 0}
-              now={now}
-              toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
-              awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
-              thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
-            />
-          ))}
-          {pending.map((send) => (
-            <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
-          ))}
+          <OpenAttachment.Provider value={onOpenAttachment}>
+            {items.map((item, index) => (
+              <ItemView
+                key={item.key}
+                item={item}
+                onOpen={onOpen}
+                last={index === lastUser && pending.length === 0}
+                now={now}
+                toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
+                awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
+                thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
+              />
+            ))}
+            {pending.map((send) => (
+              <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
+            ))}
+          </OpenAttachment.Provider>
           {pending.length === 0 && quietWork(items, turnOpen) && (
             <div
               aria-label="Claude is working"
