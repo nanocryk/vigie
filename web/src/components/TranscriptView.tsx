@@ -29,6 +29,7 @@ import {
   relayFailureText,
   restartLabel,
   toolTimeVisible,
+  wakeStops,
 } from "@/transcript";
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
@@ -248,6 +249,21 @@ function ToolRow({
   );
 }
 
+/** The message that woke Claude after background tasks were stopped, shown as a tool row. */
+function WakeRow({ stops, pending }: { stops: readonly string[]; pending: boolean }) {
+  return (
+    <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>
+      <span className="voice-code text-primary w-7 shrink-0 text-xs">
+        {pending ? <Dots /> : "↻"}
+      </span>
+      <span className="voice-ui shrink-0">Wake</span>
+      <span className="voice-code text-muted-foreground min-w-0 truncate">
+        Stopped: {stops.join("; ")}
+      </span>
+    </div>
+  );
+}
+
 const TASK_END_MARK: Record<TaskEndStatus, { text: string; className: string }> = {
   ok: { text: "ok", className: "text-muted-foreground" },
   stopped: { text: "--", className: "text-muted-foreground" },
@@ -413,6 +429,8 @@ const ItemView = memo(function ItemView({
 }) {
   switch (item.kind) {
     case "user": {
+      const stops = wakeStops(item.text);
+      if (stops !== null) return <WakeRow stops={stops} pending={false} />;
       const label = last ? DELIVERY_LABEL[item.delivery] : null;
       // The room above opens each exchange; the first one sits at the top.
       return (
@@ -555,6 +573,8 @@ function PendingView({
   onRetry: (pending: PendingSend) => void;
   onDismiss: (pending: PendingSend) => void;
 }) {
+  const stops = wakeStops(pending.text);
+  if (stops !== null && pending.status !== "failed") return <WakeRow stops={stops} pending />;
   return (
     <div className="space-y-1 pt-8 first:pt-0">
       <UserBubble dim>

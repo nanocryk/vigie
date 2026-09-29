@@ -21,6 +21,24 @@ export type ToolStatus = "running" | "ok" | "error" | "unfinished";
 
 export type TaskEndStatus = "ok" | "stopped" | "error";
 
+const WAKE_ONE = "Stopped background task: ";
+const WAKE_MANY = "Stopped background tasks: ";
+const WAKE_SEPARATOR = "; ";
+
+/** The message vigie2 sends to wake Claude after stopping background tasks. */
+export function wakeText(names: readonly string[]): string {
+  return names.length === 1
+    ? `${WAKE_ONE}${names[0] ?? ""}`
+    : `${WAKE_MANY}${names.join(WAKE_SEPARATOR)}`;
+}
+
+/** The stopped tasks a `wakeText` message names, or null for any other message. */
+export function wakeStops(text: string): string[] | null {
+  if (text.startsWith(WAKE_ONE)) return [text.slice(WAKE_ONE.length)];
+  if (text.startsWith(WAKE_MANY)) return text.slice(WAKE_MANY.length).split(WAKE_SEPARATOR);
+  return null;
+}
+
 const TASK_NOTIFICATION = "task-notification";
 
 /** The fields of a `<task-notification>` message, or null when it is not one. */

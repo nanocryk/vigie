@@ -27,6 +27,8 @@ import {
   restartLabel,
   toolSummary,
   toolTimeVisible,
+  wakeStops,
+  wakeText,
 } from "@/transcript";
 import { type WireEvent, isRecord, parseHostEvent } from "@/wire";
 
@@ -1097,6 +1099,12 @@ describe("task notifications", () => {
       line(1, "<task-notification>garbled", { kind: "task-notification" }),
     ]);
     expect(state.items.map(shape)).toEqual([["notice", "System message"]]);
+  });
+
+  it("reads back the stopped tasks a wake message names", () => {
+    expect(wakeStops(wakeText(["a"]))).toEqual(["a"]);
+    expect(wakeStops(wakeText(["a", "b c"]))).toEqual(["a", "b c"]);
+    expect(wakeStops("Stopped the build")).toBeNull();
   });
 
   it("maps failures to errors", () => {

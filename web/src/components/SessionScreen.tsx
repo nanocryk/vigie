@@ -80,7 +80,7 @@ import {
   settingsPlan,
   shownEffort,
 } from "@/settings";
-import { type TranscriptState, emptyTranscript, parseTime } from "@/transcript";
+import { type TranscriptState, emptyTranscript, parseTime, wakeText } from "@/transcript";
 
 /** Unsent composer text per discussion (`draftKey`), kept while the app stays open. */
 const drafts = new Map<string, string>();
@@ -234,6 +234,9 @@ function Composer({
     </div>
   );
 }
+
+/** How long stops of background tasks gather before one message wakes Claude. */
+const WAKE_DELAY_MS = 5000;
 
 /** The thin bar's background pill, or null with none running. */
 function backgroundLabel(count: number): string | null {
@@ -661,6 +664,40 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const [bottomRequest, setBottomRequest] = useState(0);
   const stopAgent = (taskId: string) =>
     client.command({ type: "stop_task", session: id, task_id: taskId, client_id: client.newClientId() });
+
+  // A stopped background task does not wake Claude. Stops made while it waits for
+  // them are gathered for a while, then one message wakes it, on a warm cache only.
+  const wakeUp = useRef<{ names: string[]; timer: ReturnType<typeof setTimeout> | null }>({
+    names: [],
+    timer: null,
+  });
+  const latest = useRef({ warm: false, turnOpen: false, sendTo });
+  useEffect(() => {
+    latest.current = { warm: gauge.kind === "warm" && refusedAt === null, turnOpen, sendTo };
+  });
+  useEffect(
+    () => () => {
+      if (wakeUp.current.timer !== null) clearTimeout(wakeUp.current.timer);
+    },
+    [],
+  );
+  const stopBackground = async (taskId: string) => {
+    const waiting = !latest.current.turnOpen;
+    const task = view?.background.find((candidate) => candidate.task_id === taskId);
+    await stopAgent(taskId);
+    if (!waiting) return;
+    const pending = wakeUp.current;
+    pending.names.push(task?.description ?? taskId);
+    if (pending.timer !== null) clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      const names = pending.names;
+      pending.names = [];
+      pending.timer = null;
+      const now = latest.current;
+      if (!now.warm || now.turnOpen) return;
+      now.sendTo(null, wakeText(names), {});
+    }, WAKE_DELAY_MS);
+  };
   const openAgents = () => {
     setMenu(closedMenu);
     setPanel(closedPanel);
@@ -863,9 +900,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
         background={viewing === null ? (view?.background ?? []) : []}
-        onStopTask={async (taskId) => {
-          await stopAgent(taskId);
-        }}
+        onStopTask={stopBackground}
         bottomRequest={bottomRequest}
         panel={
           panel.kind !== "closed" ? (
