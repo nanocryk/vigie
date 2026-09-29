@@ -17,7 +17,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::auth::{self, Auth};
 use crate::manager::SessionManager;
 use crate::push::{self, Pusher};
-use crate::{api, ws};
+use crate::{api, files, ws};
 
 /// Path prefix everything is served under. Android builds a WebAPK's intent
 /// filter from scheme, host and path, never the port, so two apps behind one
@@ -57,6 +57,11 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/usage", get(api::usage))
         .route("/api/catalog", get(api::catalog))
+        .route("/api/fs/list", get(files::list_route))
+        .route("/api/fs/places", get(files::places_route))
+        .route("/api/fs/file", get(files::file_route))
+        .route("/api/fs/raw", get(files::raw_route))
+        .route("/api/fs/mkdir", post(files::mkdir_route))
         .route("/api/ws", get(ws::handler))
         .route("/api/version", get(api::version))
         .route("/api/push/config", get(push::config))
@@ -133,6 +138,11 @@ mod auth_gate_tests {
             (Method::POST, "/api/sessions"),
             (Method::GET, "/api/usage"),
             (Method::GET, "/api/catalog"),
+            (Method::GET, "/api/fs/list"),
+            (Method::GET, "/api/fs/places"),
+            (Method::GET, "/api/fs/file"),
+            (Method::GET, "/api/fs/raw"),
+            (Method::POST, "/api/fs/mkdir"),
             (Method::GET, "/api/ws"),
             (Method::GET, "/api/version"),
             (Method::GET, "/api/push/config"),

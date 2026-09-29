@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { Client } from "@/client";
 import { Devices } from "@/components/Devices";
 import { ConnectionDot } from "@/components/SessionList";
-import { Header, NeedsYouColumn } from "@/components/TopBar";
+import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import {
   type PushConfig,
@@ -13,7 +13,6 @@ import {
   pushSupported,
   sendTestPush,
 } from "@/push";
-import { backToList } from "@/route";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -103,15 +102,7 @@ export function DeviceSettings({ client, label }: { client: Client; label: strin
   return (
     <>
       <Header
-        left={
-          <button
-            type="button"
-            onClick={backToList}
-            className="text-primary voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-1 text-sm"
-          >
-            &lsaquo; Sessions
-          </button>
-        }
+        left={<HomeButton />}
         right={<ConnectionDot status={snapshot.status} />}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}

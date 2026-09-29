@@ -53,11 +53,10 @@ import {
   SessionMenu,
   closedMenu,
 } from "@/components/SessionMenu";
-import { Header, SessionColumn } from "@/components/TopBar";
+import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, stateLabel } from "@/format";
-import { backToList } from "@/route";
 import type { SendAction } from "@/sendGesture";
 import {
   DEFAULT_MODEL,
@@ -728,15 +727,7 @@ export function SessionScreen({
   return (
     <>
       <Header
-        left={
-          <button
-            type="button"
-            onClick={backToList}
-            className="text-primary voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-1 text-sm"
-          >
-            &lsaquo; Sessions
-          </button>
-        }
+        left={<HomeButton />}
         right={
           <>
             <ConnectionDot status={snapshot.status} />

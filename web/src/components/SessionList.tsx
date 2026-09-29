@@ -1,5 +1,4 @@
 import {
-  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
@@ -10,6 +9,7 @@ import {
 
 import type { Client, ConnectionStatus } from "@/client";
 import { useSwipe } from "@/components/Swipe";
+import { changeExplorer, selectLastFree } from "@/files";
 import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { folderName, formatAgo } from "@/format";
@@ -59,53 +59,36 @@ export function BusyDot({ busy }: { busy: boolean }) {
   );
 }
 
-function NewSession({ client }: { client: Client }) {
-  const [cwd, setCwd] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const path = cwd.trim();
-    if (path === "" || pending) return;
-    setPending(true);
-    setError(null);
-    const result = await client.createSession(path);
-    setPending(false);
-    if (result.ok) {
-      setCwd("");
-      navigate({ kind: "session", id: result.session.id });
-    } else {
-      setError(result.error);
-    }
-  };
-
+function OpenExplorer() {
   return (
-    <form onSubmit={(event) => void submit(event)} className="space-y-2">
-      <label className="voice-ui text-muted-foreground block text-xs" htmlFor="new-cwd">
-        New session in folder (absolute path)
-      </label>
-      <div className="flex gap-2">
-        <input
-          id="new-cwd"
-          value={cwd}
-          onChange={(event) => setCwd(event.target.value)}
-          placeholder="C:\path\to\project"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          className="bg-card focus:ring-ring voice-code min-w-0 flex-1 rounded-[5px] border px-3 py-2 text-base outline-none focus:ring-2"
-        />
-        <button
-          type="submit"
-          disabled={pending || cwd.trim() === ""}
-          className="bg-primary text-primary-foreground voice-ui shrink-0 rounded-[5px] px-4 py-2 text-sm disabled:opacity-50"
-        >
-          {pending ? "Starting..." : "Start"}
-        </button>
-      </div>
-      {error !== null && <p className="text-destructive text-sm">{error}</p>}
-    </form>
+    <button
+      type="button"
+      onClick={() => {
+        changeExplorer(selectLastFree);
+        navigate({ kind: "files" });
+      }}
+      className="bg-card hover:bg-muted voice-ui flex w-full items-center gap-3 rounded-[5px] border px-4 py-3 text-left"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+        className="text-primary size-6 shrink-0"
+      >
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      </svg>
+      <span className="min-w-0 flex-1">
+        <span className="block">File explorer</span>
+        <span className="text-muted-foreground block text-xs">
+          Browse files and start a session in a folder
+        </span>
+      </span>
+      <span className="text-muted-foreground">&rsaquo;</span>
+    </button>
   );
 }
 
@@ -413,7 +396,7 @@ export function SessionList({ client, label }: { client: Client; label: string |
       />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-6 p-4">
-          <NewSession client={client} />
+          <OpenExplorer />
           {snapshot.sessionsError !== null && (
             <p className="text-destructive text-sm">{snapshot.sessionsError}</p>
           )}

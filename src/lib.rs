@@ -3,6 +3,7 @@ pub mod api;
 pub mod auth;
 pub mod child;
 pub mod danger;
+pub mod files;
 pub mod gauges;
 pub mod grant;
 pub mod manager;

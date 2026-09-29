@@ -43,7 +43,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has three slots: a fixed-width left slot (the back button in a session, the vigie2 mark on Home), the gauges in the middle, and a fixed-width right slot with the connection status and the device settings cogwheel. The account column sits at exactly the same place on Home and in a session.
+- The top bar has three slots: a fixed-width left slot (the vigie2 mark on Home, a Home icon on every other screen), the gauges in the middle, and a fixed-width right slot with the connection status and the device settings cogwheel. The account column sits at exactly the same place on Home and in a session.
 - The gauges have two columns: the account usage windows (see Account usage), then the session: a context bar and a cache bar of the same length, the cache bar draining over the TTL. Side by side from about 600 px wide (unfolded phone, desktop), stacked below.
 - On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
 - A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and the device label and the reload button on the right.
@@ -146,8 +146,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Projects Home designed anew. Vigie's Home (file explorer, favorites, discussions per project) is "a bit messy".
 - No workspace concept: commands reach the whole machine anyway. Projects are the folders sessions were started in.
 - Home lists projects and scratch discussions as two kinds of entries.
-- Full directory explorer, built on a tree library unless a fitting file manager component exists. Folders can be opened from discussions.
-- Tabs or similar for multitasking over files and folders. Discussions stay separate from them.
+- A full-screen file explorer (see File explorer), opened from a "File explorer" button on Home. Sessions start from it; there is no path field.
 - Buttons switch between a session and its related folder or file, "so it becomes more fluid to switch between them".
 - Opening a file or folder lands where expected. Vigie often lands in the wrong directory; the navigation logic is designed anew.
 - Handoffs are detected and give their project a special status. Opening the session suggests starting from the handoff. The handoff, clear, read-handoff sequence is integrated as a workflow.
@@ -159,6 +158,19 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Seen is shared across devices: a session is seen once any device has it on screen with an active user, the page visible and some input (pointer, touch, key, wheel) within the last 2 minutes. Scrolling is not input: the discussion scrolls itself as replies stream in. A window left open while away does not count.
 - Archived sessions sit in their own collapsed section of Home. Opening one shows it read-only, with the cold-cache panel (rewarm, continue, blank) in place of the composer; any choice unarchives it.
 - No terminal support.
+
+## File explorer
+
+- A full-screen page browsing the whole machine: into and out of folders, opening files a phone can display (text, images), creating folders, and "Start session here", which starts a new session in the current folder.
+- Tabs, each remembering its folder, its open file and its scroll position, stored per device. Discussions stay separate from them.
+  - Free tabs: one or more; the last one cannot be closed. Home's "File explorer" button opens the free tab used last.
+  - Session tabs: one per session, opened by a folder button in the session, where it was left, or at the session's folder the first time. A session tab can browse anywhere; a project root button in its header returns to the session's folder. Closing it only forgets its location; archiving the session removes it.
+- A tab switcher menu, opened from the explorer header where the current tab's name shows, lists free tabs (folder icon, folder name, path) then session tabs (discussion icon, session name, current folder), each with a close button, and a "New tab" entry.
+- Places, where a new tab starts and the breadcrumb's first segment leads: the drives, the folders of current sessions, and common folders (home, Documents, Desktop, Downloads).
+- The system back button goes up a level: it closes the open file, then goes to the parent folder, then from a drive root to Places; from Places it leaves the explorer. The top bar's Home icon leaves it at once. A tab reopens as it was left.
+- A folder lists subfolders then files, case-insensitively, each with its modification time, and files with their size. Dotfiles are hidden behind a toggle persisted per device. A breadcrumb leads back up; every segment is tappable.
+- New folder: a name typed in place in the list; separators, `..` and existing names are refused.
+- File viewer: text highlighted by language, up to 2 MiB (marked truncated beyond), with a rendered and raw toggle for Markdown; images (png, jpg, gif, webp, avif, bmp, ico, up to 16 MiB) fitted to the screen with their dimensions and size. Other files show that they cannot be displayed.
 
 ## Scratch discussions
 
@@ -237,7 +249,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
 - Projects Home design, including how projects and scratch discussions are laid out.
-- Multitasking tabs: how they work on the phone.
 - Which folder or file counts as related to a session (its cwd, the last file referenced, files it edited).
 - Terminals for non-Claude tasks: approach undecided (ideas: fixed size, piping output and showing text instead of a terminal emulator, named run configurations such as canif scripts with live text output).
 - Per-session and per-project notification and visibility settings: which settings.

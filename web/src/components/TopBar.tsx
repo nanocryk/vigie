@@ -17,7 +17,7 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
-import { navigate } from "@/route";
+import { backToList, navigate } from "@/route";
 import type {
   CacheView,
   Confidence,
@@ -26,6 +26,33 @@ import type {
   UsageSnapshot,
   WindowReport,
 } from "@/wire";
+
+/** The top bar's left slot on every screen but Home: back to Home. */
+export function HomeButton({ onClick = backToList }: { onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onClick()}
+      aria-label="Home"
+      title="Home"
+      className="text-primary hover:bg-muted shrink-0 rounded-[5px] p-1.5"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+        className="size-6"
+      >
+        <path d="M3 11 12 4l9 7" />
+        <path d="M5 10v10h14V10" />
+      </svg>
+    </button>
+  );
+}
 
 const TWEEN_MS = 700;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";

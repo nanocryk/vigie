@@ -2,6 +2,7 @@ import { type ReactNode, use, useEffect, useState } from "react";
 
 import { getClient } from "@/client";
 import { DeviceSettings } from "@/components/DeviceSettings";
+import { Explorer } from "@/components/Explorer";
 import { NewVersionBanner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
@@ -47,6 +48,8 @@ function Shell({ label }: { label: string | null }) {
         <SessionScreen key={route.id} client={client} id={route.id} label={label} />
       ) : route.kind === "settings" ? (
         <DeviceSettings client={client} label={label} />
+      ) : route.kind === "files" ? (
+        <Explorer client={client} label={label} />
       ) : (
         <SessionList client={client} label={label} />
       )}

@@ -1,12 +1,18 @@
 import { useSyncExternalStore } from "react";
 
-export type Route = { kind: "list" } | { kind: "session"; id: string } | { kind: "settings" };
+export type Route =
+  | { kind: "list" }
+  | { kind: "session"; id: string }
+  | { kind: "settings" }
+  | { kind: "files" };
 
 const SESSION_HASH = /^#\/s\/([^/?#]+)$/;
 const SETTINGS_HASH = "#/settings";
+const FILES_HASH = "#/files";
 
 export function parseRoute(hash: string): Route {
   if (hash === SETTINGS_HASH) return { kind: "settings" };
+  if (hash === FILES_HASH) return { kind: "files" };
   const id = SESSION_HASH.exec(hash)?.[1];
   return id === undefined ? { kind: "list" } : { kind: "session", id: decodeURIComponent(id) };
 }
@@ -19,6 +25,8 @@ export function routeHash(route: Route): string {
       return `#/s/${encodeURIComponent(route.id)}`;
     case "settings":
       return SETTINGS_HASH;
+    case "files":
+      return FILES_HASH;
   }
 }
 
@@ -45,6 +53,11 @@ export function navigate(route: Route): void {
 
 /** Pops back to the list when the app pushed the current entry, else replaces it. */
 export function backToList(): void {
-  if (navigatedInApp) history.back();
+  backToListPast(0);
+}
+
+/** `backToList` from a screen that pushed `extraEntries` history entries on top of its own. */
+export function backToListPast(extraEntries: number): void {
+  if (navigatedInApp) history.go(-1 - extraEntries);
   else location.replace(routeHash({ kind: "list" }));
 }
