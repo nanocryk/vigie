@@ -145,6 +145,12 @@ export function formatTokens(value: number): string {
   return `${millions}M`;
 }
 
+/** The cache bar's notch spacing, in percent: every 10 minutes of a long TTL, every minute of a short one. */
+export function cacheTickStep(ttlMs: number): number {
+  const section = ttlMs >= 30 * 60_000 ? 10 * 60_000 : 60_000;
+  return (section / ttlMs) * 100;
+}
+
 export function formatTtl(ttlMs: number): string {
   return ttlMs % 3_600_000 === 0 ? `${ttlMs / 3_600_000} h` : `${Math.round(ttlMs / 60_000)} min`;
 }

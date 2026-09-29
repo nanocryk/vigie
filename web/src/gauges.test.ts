@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cacheGauge,
+  cacheTickStep,
   contextTone,
   formatPercent,
   formatSpan,
@@ -184,6 +185,13 @@ describe("contextTone", () => {
     expect(contextTone(context(50))).toBe("high");
     expect(contextTone(context(69))).toBe("high");
     expect(contextTone(context(70))).toBe("full");
+  });
+});
+
+describe("cacheTickStep", () => {
+  it("notches a long TTL every 10 minutes and a short one every minute", () => {
+    expect(cacheTickStep(3_600_000)).toBeCloseTo(100 / 6);
+    expect(cacheTickStep(300_000)).toBeCloseTo(20);
   });
 });
 

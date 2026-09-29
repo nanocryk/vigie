@@ -4,6 +4,7 @@ import { useClock } from "@/components/useNow";
 import {
   type CacheGauge,
   cacheGauge,
+  cacheTickStep,
   contextTone,
   formatPercent,
   formatSpan,
@@ -86,11 +87,16 @@ export function HomeButton({
 const TWEEN_MS = 700;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const TRACK_SHAPE = "relative h-2 min-w-0 flex-1 overflow-hidden rounded-[3px]";
-const TRACK = `${TRACK_SHAPE} bg-muted`;
+const TRACK = `${TRACK_SHAPE} bg-muted bar-ticks`;
 /** An empty track: nothing known, so nothing that could read as a value. */
 const EMPTY_TRACK = `${TRACK_SHAPE} border border-dashed`;
 const CONTEXT_FILL = { ok: "bg-foreground", high: "bg-gauge-glow", full: "bg-destructive" };
-const CONTEXT_TEXT = { ok: "", high: "text-gauge-glow", full: "text-destructive" };
+/** A track's notch spacing, a custom property React's style type does not list. */
+function tickStyle(percent: number): Record<string, string> {
+  return { "--tick-step": `${percent}%` };
+}
+
+const CONTEXT_TEXT ={ ok: "", high: "text-gauge-glow", full: "text-destructive" };
 const TONE_FILL: Record<Tone, string> = {
   ok: "bg-gauge-ok",
   warning: "bg-gauge-glow",
@@ -298,7 +304,7 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
     case "warm":
       return (
         <Row label="cache">
-          <div className={TRACK}>
+          <div className={TRACK} style={tickStyle(cacheTickStep(gauge.ttlMs))}>
             <div
               className={`absolute inset-y-0 left-0 transition-[width] duration-1000 ease-linear motion-reduce:transition-none ${gauge.low ? "bg-gauge-glow" : "bg-foreground"}`}
               style={{ width: `${gauge.fraction * 100}%` }}
