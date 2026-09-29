@@ -32,7 +32,8 @@ use vigie2::server::{AppState, build_app};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
 use vigie2::store::{EventKind, SessionState, Store};
 use vigie2::wire::{
-    CACHE_COLD, ClientMessage, SESSION_LIVE, ServerMessage, SessionList, SessionView, WireEvent,
+    Action, CACHE_COLD, ClientMessage, Command, SESSION_LIVE, ServerMessage, SessionList,
+    SessionView, Subscription, WireEvent,
 };
 
 use common::{TIMEOUT, fake};
@@ -359,53 +360,69 @@ fn result_line(event: &WireEvent, subtype: &str) -> bool {
 }
 
 fn subscribe(session: Uuid, after_seq: u64) -> ClientMessage {
-    ClientMessage::Subscribe {
+    Subscription::Subscribe {
         session,
         after_seq,
         exchanges: None,
     }
+    .into()
+}
+
+fn command(session: Uuid, client_id: &str, action: Action) -> ClientMessage {
+    Command {
+        session,
+        client_id: client_id.into(),
+        action,
+    }
+    .into()
 }
 
 fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
-    ClientMessage::Answer {
+    command(
         session,
-        request_id: request_id.into(),
-        answer: Answer::Allow {
-            updated_input: None,
-            note: None,
-            accept_edits: false,
-            folder: None,
-            always_for_file: false,
+        client_id,
+        Action::Answer {
+            request_id: request_id.into(),
+            answer: Answer::Allow {
+                updated_input: None,
+                note: None,
+                accept_edits: false,
+                folder: None,
+                always_for_file: false,
+            },
+            rewarm: false,
         },
-        rewarm: false,
-        client_id: client_id.into(),
-    }
+    )
 }
 
 fn say(session: Uuid, text: &str, rewarm: bool, client_id: &str) -> ClientMessage {
-    ClientMessage::Send {
+    command(
         session,
-        text: text.into(),
-        rewarm,
-        client_id: client_id.into(),
-    }
+        client_id,
+        Action::Send {
+            text: text.into(),
+            rewarm,
+        },
+    )
 }
 
 fn rewarmed(message: ClientMessage) -> ClientMessage {
     match message {
-        ClientMessage::Answer {
+        ClientMessage::Command(Command {
             session,
-            request_id,
-            answer,
             client_id,
-            ..
-        } => ClientMessage::Answer {
+            action: Action::Answer {
+                request_id, answer, ..
+            },
+        }) => command(
             session,
-            request_id,
-            answer,
-            rewarm: true,
-            client_id,
-        },
+            &client_id,
+            Action::Answer {
+                request_id,
+                answer,
+                rewarm: true,
+            },
+        ),
         other => panic!("not an answer: {other:?}"),
     }
 }
@@ -496,12 +513,7 @@ async fn malformed_input_and_unknown_sessions_are_reported() {
     client.send(&subscribe(unknown, 0)).await;
     assert_eq!(client.until_error().await.1, Some(unknown));
 
-    client
-        .send(&ClientMessage::Interrupt {
-            session: unknown,
-            client_id: "i".into(),
-        })
-        .await;
+    client.send(&command(unknown, "i", Action::Interrupt)).await;
     let (ok, error) = client.ack("i").await;
     assert!(!ok);
     assert!(error.unwrap().contains("not running"));
@@ -555,14 +567,7 @@ async fn usage_is_announced_after_a_turn_and_served_over_rest() {
     let server = Server::start(USAGE_SCRIPT).await;
     let mut client = server.client().await;
     let id = server.create_session().await.id;
-    client
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "hello".into(),
-            rewarm: false,
-            client_id: "send-1".into(),
-        })
-        .await;
+    client.send(&say(id, "hello", false, "send-1")).await;
     assert_eq!(client.ack("send-1").await, (true, None));
     // One for the rate limit line, one for the finished turn.
     while client.usage_changed < 2 {
@@ -591,14 +596,7 @@ async fn two_clients_share_a_session_and_its_asks() {
     first.send(&subscribe(id, 0)).await;
     second.send(&subscribe(id, 0)).await;
 
-    first
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "hello".into(),
-            rewarm: false,
-            client_id: "send-1".into(),
-        })
-        .await;
+    first.send(&say(id, "hello", false, "send-1")).await;
     assert_eq!(first.ack("send-1").await, (true, None));
 
     let queued = first.until(|event| host_event(event, "ask_queued")).await;
@@ -639,11 +637,13 @@ async fn two_clients_share_a_session_and_its_asks() {
     }
 
     second
-        .send(&ClientMessage::SetPermissionMode {
-            session: id,
-            mode: "plan".into(),
-            client_id: "mode-1".into(),
-        })
+        .send(&command(
+            id,
+            "mode-1",
+            Action::SetPermissionMode {
+                mode: PermissionMode::Plan,
+            },
+        ))
         .await;
     assert_eq!(second.ack("mode-1").await, (true, None));
     // The launch reported default first; the change follows.
@@ -656,23 +656,13 @@ async fn two_clients_share_a_session_and_its_asks() {
     second
         .until(|event| host_event(event, "permission_mode") && event.payload["mode"] == "plan")
         .await;
-    second
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "count".into(),
-            rewarm: false,
-            client_id: "send-2".into(),
-        })
-        .await;
+    second.send(&say(id, "count", false, "send-2")).await;
     assert_eq!(second.ack("send-2").await, (true, None));
     second
         .until(|event| event.payload == json!({"type": "noise", "n": 3}))
         .await;
     second
-        .send(&ClientMessage::Interrupt {
-            session: id,
-            client_id: "interrupt-1".into(),
-        })
+        .send(&command(id, "interrupt-1", Action::Interrupt))
         .await;
     assert_eq!(second.ack("interrupt-1").await, (true, None));
 
@@ -692,14 +682,7 @@ async fn a_late_subscriber_replays_from_its_seq_then_follows_live() {
     let id = server.create_session().await.id;
     let mut first = server.client().await;
     first.send(&subscribe(id, 0)).await;
-    first
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "hello".into(),
-            rewarm: false,
-            client_id: "send-1".into(),
-        })
-        .await;
+    first.send(&say(id, "hello", false, "send-1")).await;
     let queued = first.until(|event| host_event(event, "ask_queued")).await;
 
     let mut late = server.client().await;
@@ -748,12 +731,14 @@ async fn a_blank_restart_reaches_subscribers_without_a_child() {
     client.send(&subscribe(id, 0)).await;
     client.until(|event| host_event(event, "started")).await;
     client
-        .send(&ClientMessage::Restart {
-            session: id,
-            mode: vigie2::session::RestartMode::Blank,
-            text: None,
-            client_id: "restart-1".into(),
-        })
+        .send(&command(
+            id,
+            "restart-1",
+            Action::Restart {
+                mode: RestartMode::Blank,
+                text: None,
+            },
+        ))
         .await;
     assert_eq!(client.ack("restart-1").await, (true, None));
     client.until(|event| host_event(event, "restarted")).await;
@@ -774,11 +759,13 @@ async fn a_stopped_session_stores_its_mode_and_the_next_send_launches_with_it() 
     let mut client = server.client().await;
     let changes_before = client.sessions_changed;
     client
-        .send(&ClientMessage::SetPermissionMode {
-            session: id,
-            mode: "plan".into(),
-            client_id: "mode-1".into(),
-        })
+        .send(&command(
+            id,
+            "mode-1",
+            Action::SetPermissionMode {
+                mode: PermissionMode::Plan,
+            },
+        ))
         .await;
     assert_eq!(client.ack("mode-1").await, (true, None));
     assert!(
@@ -796,14 +783,7 @@ async fn a_stopped_session_stores_its_mode_and_the_next_send_launches_with_it() 
 
     let stopped_at = list.sessions[0].last_seq;
     client.send(&subscribe(id, stopped_at)).await;
-    client
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "hello".into(),
-            rewarm: false,
-            client_id: "send-1".into(),
-        })
-        .await;
+    client.send(&say(id, "hello", false, "send-1")).await;
     assert_eq!(client.ack("send-1").await, (true, None));
     let changed = client
         .until(|event| host_event(event, "permission_mode"))
@@ -834,14 +814,7 @@ async fn a_slow_subscriber_still_gets_every_event() {
     let mut client = server.client().await;
     client.send(&subscribe(id, 0)).await;
     client.until(|event| host_event(event, "started")).await;
-    client
-        .send(&ClientMessage::Send {
-            session: id,
-            text: "hello".into(),
-            rewarm: false,
-            client_id: "send-1".into(),
-        })
-        .await;
+    client.send(&say(id, "hello", false, "send-1")).await;
     // Not reading lets the socket, then the broadcast, back up.
     tokio::time::timeout(TIMEOUT, async {
         loop {
@@ -940,10 +913,7 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
         .until(|event| event.payload == json!({"type": "noise", "n": 3}))
         .await;
     client
-        .send(&ClientMessage::Interrupt {
-            session: id,
-            client_id: "interrupt-1".into(),
-        })
+        .send(&command(id, "interrupt-1", Action::Interrupt))
         .await;
     assert_eq!(client.ack("interrupt-1").await, (true, None));
     client
@@ -951,12 +921,14 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
         .await;
 
     client
-        .send(&ClientMessage::Restart {
-            session: id,
-            mode: RestartMode::Blank,
-            text: None,
-            client_id: "restart-1".into(),
-        })
+        .send(&command(
+            id,
+            "restart-1",
+            Action::Restart {
+                mode: RestartMode::Blank,
+                text: None,
+            },
+        ))
         .await;
     assert_eq!(client.ack("restart-1").await, (true, None));
     client.until(|event| host_event(event, "restarted")).await;
@@ -966,25 +938,15 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
 }
 
 fn kill(session: Uuid, reason: StopReason, client_id: &str) -> ClientMessage {
-    ClientMessage::Kill {
-        session,
-        reason,
-        client_id: client_id.into(),
-    }
+    command(session, client_id, Action::Kill { reason })
 }
 
 fn archive(session: Uuid, client_id: &str) -> ClientMessage {
-    ClientMessage::Archive {
-        session,
-        client_id: client_id.into(),
-    }
+    command(session, client_id, Action::Archive)
 }
 
 fn restore(session: Uuid, client_id: &str) -> ClientMessage {
-    ClientMessage::Restore {
-        session,
-        client_id: client_id.into(),
-    }
+    command(session, client_id, Action::Restore)
 }
 
 impl Server {
@@ -1103,12 +1065,14 @@ async fn a_restart_or_a_send_unarchives() {
     }
 
     client
-        .send(&ClientMessage::Restart {
-            session: restarted,
-            mode: RestartMode::Blank,
-            text: None,
-            client_id: "restart-1".into(),
-        })
+        .send(&command(
+            restarted,
+            "restart-1",
+            Action::Restart {
+                mode: RestartMode::Blank,
+                text: None,
+            },
+        ))
         .await;
     assert_eq!(client.ack("restart-1").await, (true, None));
     assert_eq!(server.view(restarted).await.archived_at, None);
@@ -1130,12 +1094,14 @@ fn set_settings(
     effort: Option<Option<&str>>,
     client_id: &str,
 ) -> ClientMessage {
-    ClientMessage::SetSettings {
+    command(
         session,
-        model: model.map(|model| model.map(str::to_owned)),
-        effort: effort.map(|effort| effort.map(str::to_owned)),
-        client_id: client_id.into(),
-    }
+        client_id,
+        Action::SetSettings {
+            model: model.map(|model| model.map(str::to_owned)),
+            effort: effort.map(|effort| effort.map(str::to_owned)),
+        },
+    )
 }
 
 /// SCRIPT without its permission mode change.
@@ -1160,6 +1126,47 @@ async fn set_settings_reads_absent_and_null_fields_apart() {
         "session": Uuid::nil(), "model": null, "client_id": "c"}))
     .unwrap();
     assert_eq!(null, set_settings(Uuid::nil(), Some(None), None, "c"));
+}
+
+/// Commands and subscriptions share one flat JSON shape tagged by `type`.
+#[test]
+fn client_frames_read_and_write_flat() {
+    let session = Uuid::nil();
+    let frames = [
+        (
+            json!({"type": "interrupt", "session": session, "client_id": "c"}),
+            command(session, "c", Action::Interrupt),
+        ),
+        (
+            json!({"type": "send", "session": session, "text": "hi", "rewarm": false,
+                "client_id": "c"}),
+            say(session, "hi", false, "c"),
+        ),
+        (
+            json!({"type": "unsubscribe", "session": session}),
+            Subscription::Unsubscribe { session }.into(),
+        ),
+        (
+            json!({"type": "presence", "session": null, "active": true}),
+            Subscription::Presence {
+                session: None,
+                active: true,
+            }
+            .into(),
+        ),
+    ];
+    for (json, message) in frames {
+        assert_eq!(
+            serde_json::from_value::<ClientMessage>(json.clone()).unwrap(),
+            message
+        );
+        assert_eq!(serde_json::to_value(&message).unwrap(), json);
+    }
+    let error = serde_json::from_value::<ClientMessage>(
+        json!({"type": "nope", "session": session, "client_id": "c"}),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("nope"), "{error}");
 }
 
 #[tokio::test]
@@ -1305,12 +1312,14 @@ async fn clear_restarts_blank_whatever_the_cache() {
     client.send(&say(id, "hello", false, "send-1")).await;
     assert_eq!(client.ack("send-1").await, cold());
     client
-        .send(&ClientMessage::Restart {
-            session: id,
-            mode: RestartMode::Clear,
-            text: None,
-            client_id: "clear-1".into(),
-        })
+        .send(&command(
+            id,
+            "clear-1",
+            Action::Restart {
+                mode: RestartMode::Clear,
+                text: None,
+            },
+        ))
         .await;
     assert_eq!(client.ack("clear-1").await, (true, None));
     let restarted = client.until(|event| host_event(event, "restarted")).await;
@@ -1332,12 +1341,14 @@ async fn a_restart_starts_on_the_stored_settings_and_ends_the_settings_change() 
     assert_eq!(client.ack("settings-1").await, (true, None));
     assert!(server.view(id).await.settings_changed_at.is_some());
     client
-        .send(&ClientMessage::Restart {
-            session: id,
-            mode: RestartMode::Blank,
-            text: Some("hello".into()),
-            client_id: "restart-1".into(),
-        })
+        .send(&command(
+            id,
+            "restart-1",
+            Action::Restart {
+                mode: RestartMode::Blank,
+                text: Some("hello".into()),
+            },
+        ))
         .await;
     assert_eq!(client.ack("restart-1").await, (true, None));
     let view = server.view(id).await;
@@ -1531,11 +1542,14 @@ async fn a_windowed_subscribe_sends_the_prelude_then_the_last_exchanges() {
     let last = events.last().unwrap().seq;
     let mut client = server.client().await;
     client
-        .send(&ClientMessage::Subscribe {
-            session: id,
-            after_seq: 0,
-            exchanges: Some(2),
-        })
+        .send(
+            &Subscription::Subscribe {
+                session: id,
+                after_seq: 0,
+                exchanges: Some(2),
+            }
+            .into(),
+        )
         .await;
     while client.synced.is_empty() {
         client.pump().await;
@@ -1563,11 +1577,14 @@ async fn history_pages_reach_the_start_of_the_discussion() {
     let mut loaded = Vec::new();
     loop {
         client
-            .send(&ClientMessage::History {
-                session: id,
-                before_seq: before,
-                exchanges: 2,
-            })
+            .send(
+                &Subscription::History {
+                    session: id,
+                    before_seq: before,
+                    exchanges: 2,
+                }
+                .into(),
+            )
             .await;
         let count = client.pages.len();
         while client.pages.len() == count {
@@ -1606,11 +1623,14 @@ async fn a_resubscribe_after_a_reconnect_sends_only_what_came_after() {
     let last = events.last().unwrap().seq;
     let mut client = server.client().await;
     client
-        .send(&ClientMessage::Subscribe {
-            session: id,
-            after_seq: 5,
-            exchanges: Some(1),
-        })
+        .send(
+            &Subscription::Subscribe {
+                session: id,
+                after_seq: 5,
+                exchanges: Some(1),
+            }
+            .into(),
+        )
         .await;
     while client.synced.is_empty() {
         client.pump().await;

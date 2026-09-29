@@ -1,4 +1,4 @@
-//! The client WebSocket: session subscriptions and commands. Protocol in `wire`.
+//! The client WebSocket: session subscriptions and commands. Protocol in `notes/wire.md`.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -24,7 +24,7 @@ use crate::AppState;
 use crate::auth::{Auth, AuthedDevice};
 use crate::manager::SessionManager;
 use crate::session::{Event, EventBody, HostEvent, Session};
-use crate::wire::{ClientMessage, ServerMessage, WireEvent};
+use crate::wire::{Action, ClientMessage, Command, ServerMessage, Subscription, WireEvent};
 
 /// Stored events read per history query.
 const PAGE: u32 = 500;
@@ -168,8 +168,27 @@ impl Connection {
                 });
             }
         };
-        match message {
-            ClientMessage::Subscribe {
+        let subscription = match message {
+            ClientMessage::Subscription(subscription) => subscription,
+            ClientMessage::Command(command) => {
+                let manager = self.manager.clone();
+                let out = self.out.clone();
+                tokio::spawn(async move {
+                    let client_id = command.client_id.clone();
+                    let result = execute(&manager, command).await;
+                    let _ = out
+                        .send(ServerMessage::Ack {
+                            client_id,
+                            ok: result.is_ok(),
+                            error: result.err().map(|err| format!("{err:#}")),
+                        })
+                        .await;
+                });
+                return None;
+            }
+        };
+        match subscription {
+            Subscription::Subscribe {
                 session,
                 after_seq,
                 exchanges,
@@ -187,7 +206,7 @@ impl Connection {
                 ));
                 self.subscriptions.insert(session, task);
             }
-            ClientMessage::History {
+            Subscription::History {
                 session,
                 before_seq,
                 exchanges,
@@ -207,27 +226,13 @@ impl Connection {
                     let _ = out.send(message).await;
                 });
             }
-            ClientMessage::Unsubscribe { session } => {
+            Subscription::Unsubscribe { session } => {
                 if let Some(task) = self.subscriptions.remove(&session) {
                     task.abort();
                 }
             }
-            ClientMessage::Presence { session, active } => {
+            Subscription::Presence { session, active } => {
                 self.manager.set_presence(self.viewer, session, active);
-            }
-            command => {
-                let manager = self.manager.clone();
-                let out = self.out.clone();
-                tokio::spawn(async move {
-                    let (client_id, result) = execute(&manager, command).await;
-                    let _ = out
-                        .send(ServerMessage::Ack {
-                            client_id,
-                            ok: result.is_ok(),
-                            error: result.err().map(|err| format!("{err:#}")),
-                        })
-                        .await;
-                });
             }
         }
         None
@@ -241,129 +246,68 @@ impl Connection {
     }
 }
 
-/// Runs a command other than a subscription; returns its `client_id` and outcome.
-async fn execute(manager: &SessionManager, command: ClientMessage) -> (String, Result<()>) {
-    match command {
-        ClientMessage::Send {
-            session,
-            text,
-            rewarm,
-            client_id,
-        } => {
-            let tag = Some(client_id.clone());
-            let result = async {
-                manager.unarchive(session).await?;
-                if !rewarm {
-                    manager.ensure_warm(session).await?;
-                }
-                manager.open(session).await?.send(text, tag).await
-            };
-            (client_id, result.await)
+async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
+    let Command {
+        session,
+        client_id,
+        action,
+    } = command;
+    match action {
+        Action::Send { text, rewarm } => {
+            manager.unarchive(session).await?;
+            if !rewarm {
+                manager.ensure_warm(session).await?;
+            }
+            manager
+                .open(session)
+                .await?
+                .send(text, Some(client_id))
+                .await
         }
-        ClientMessage::Interrupt { session, client_id } => {
-            let result = async {
-                running(manager, session).await?.interrupt().await?;
-                Ok(())
-            };
-            (client_id, result.await)
+        Action::Interrupt => {
+            running(manager, session).await?.interrupt().await?;
+            Ok(())
         }
-        ClientMessage::Relay {
-            session,
+        Action::Relay {
             task_id,
             text,
             rewarm,
-            client_id,
         } => {
-            let tag = Some(client_id.clone());
-            let result = async {
-                if !rewarm {
-                    manager.ensure_warm(session).await?;
-                }
-                running(manager, session)
-                    .await?
-                    .relay(task_id, text, tag)
-                    .await
-            };
-            (client_id, result.await)
+            if !rewarm {
+                manager.ensure_warm(session).await?;
+            }
+            running(manager, session)
+                .await?
+                .relay(task_id, text, Some(client_id))
+                .await
         }
-        ClientMessage::StopTask {
-            session,
-            task_id,
-            client_id,
-        } => {
-            let result = async { running(manager, session).await?.stop_task(task_id).await };
-            (client_id, result.await)
-        }
-        ClientMessage::StopAgents { session, client_id } => {
-            let result = async { running(manager, session).await?.stop_agents().await };
-            (client_id, result.await)
-        }
-        ClientMessage::Answer {
-            session,
+        Action::StopTask { task_id } => running(manager, session).await?.stop_task(task_id).await,
+        Action::StopAgents => running(manager, session).await?.stop_agents().await,
+        Action::Answer {
             request_id,
             answer,
             rewarm,
-            client_id,
         } => {
-            let result = async {
-                manager.unarchive(session).await?;
-                if !rewarm {
-                    manager.ensure_warm(session).await?;
-                }
-                running(manager, session)
-                    .await?
-                    .answer(request_id, answer)
-                    .await
-            };
-            (client_id, result.await)
+            manager.unarchive(session).await?;
+            if !rewarm {
+                manager.ensure_warm(session).await?;
+            }
+            running(manager, session)
+                .await?
+                .answer(request_id, answer)
+                .await
         }
-        ClientMessage::SetPermissionMode {
-            session,
-            mode,
-            client_id,
-        } => {
-            let result = manager.set_permission_mode(session, mode).await;
-            (client_id, result)
+        Action::SetPermissionMode { mode } => manager.set_permission_mode(session, mode).await,
+        Action::SetSettings { model, effort } => manager.set_settings(session, model, effort).await,
+        Action::Restart { mode, text } => {
+            manager.unarchive(session).await?;
+            manager
+                .restart(session, mode, text.unwrap_or_default(), Some(client_id))
+                .await
         }
-        ClientMessage::SetSettings {
-            session,
-            model,
-            effort,
-            client_id,
-        } => (
-            client_id,
-            manager.set_settings(session, model, effort).await,
-        ),
-        ClientMessage::Restart {
-            session,
-            mode,
-            text,
-            client_id,
-        } => {
-            let tag = Some(client_id.clone());
-            let result = async {
-                manager.unarchive(session).await?;
-                manager
-                    .restart(session, mode, text.unwrap_or_default(), tag)
-                    .await
-            };
-            (client_id, result.await)
-        }
-        ClientMessage::Kill {
-            session,
-            reason,
-            client_id,
-        } => (client_id, manager.kill(session, reason).await),
-        ClientMessage::Archive { session, client_id } => {
-            (client_id, manager.archive(session).await)
-        }
-        ClientMessage::Restore { session, client_id } => {
-            (client_id, manager.restore(session).await)
-        }
-        ClientMessage::Subscribe { .. }
-        | ClientMessage::Unsubscribe { .. }
-        | ClientMessage::History { .. }
-        | ClientMessage::Presence { .. } => (String::new(), Err(anyhow!("not a command"))),
+        Action::Kill { reason } => manager.kill(session, reason).await,
+        Action::Archive => manager.archive(session).await,
+        Action::Restore => manager.restore(session).await,
     }
 }
 

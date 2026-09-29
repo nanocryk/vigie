@@ -1,6 +1,6 @@
 # vigie2
 
-A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`.
+A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`, the client protocol in `notes/wire.md`.
 
 Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes". Vigie's hook already does nothing without the `VIGIE_HOOK_URL` and `VIGIE_HOOK_SECRET` env vars, so vigie2 removes every `VIGIE_*` var from its children's env.
 

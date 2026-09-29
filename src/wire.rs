@@ -1,177 +1,6 @@
 //! Messages between the server and its clients: the WebSocket protocol at
-//! `/api/ws` and the bodies of the `/api/sessions` routes. `GET /api/usage`
-//! answers `usage::Snapshot`.
-//!
-//! WebSocket frames are JSON text tagged by `type`.
-//!
-//! Client to server:
-//! - `subscribe {session, after_seq, exchanges?}`: opens the session, sends its
-//!   stored events with a seq above `after_seq`, then its live events, each once
-//!   and in order. Subscribing again to the same session restarts from the new
-//!   `after_seq`. With `exchanges` and an `after_seq` of 0, the stored events sent
-//!   are only the last `exchanges` exchanges: first `window`, then the prelude,
-//!   then the events from the window's `first_seq`, then `synced`.
-//! - An exchange starts at a `user_sent` host event; a window or a page starts at
-//!   one, or at the discussion's first event when fewer exchanges precede it.
-//!   Its prelude is the latest `started`, `permission_mode`, `catalog` and
-//!   `restarted` host events stored before it, those that exist, in seq order:
-//!   the state folding the events from its start needs.
-//! - `history {session, before_seq, exchanges}`: answered by `page` with the
-//!   last `exchanges` exchanges stored below `before_seq` (at least one).
-//! - `unsubscribe {session}`
-//! - `send {session, text, rewarm?, client_id}`: spawns the child again if it
-//!   ended. The session emits a `user_sent {text, client_id}` host event before
-//!   writing the text.
-//! - `interrupt {session, client_id}`
-//! - `relay {session, task_id, text, rewarm?, client_id}`: a message to the
-//!   subagent `task_id` of the running child, which `-p` cannot reach directly.
-//!   The main agent gets a wrapped message asking it to forward `text` verbatim
-//!   with SendMessage to `task_id`, then to reply exactly `[Relay acknowledged]`.
-//!   Emits `relay_sent` before writing it; follows the cold rule of `send`.
-//!   Refused when the child is not running or does not know the agent.
-//! - `stop_task {session, task_id, client_id}`: stops one agent of the running
-//!   child. `stop_agents {session, client_id}` stops every running one.
-//! - `answer {session, request_id, answer, rewarm?, client_id}`: `answer` is `allow
-//!   {updated_input?, note?, accept_edits?, folder?, always_for_file?}`, `deny
-//!   {message}` or `questions {answers}`, tagged by `kind`. A non-blank allow
-//!   `note` is then sent as a user message queued for the running turn, with its
-//!   own `user_sent` event. `accept_edits: true` also sends the ask's `setMode
-//!   acceptEdits` suggestion; `folder` also grants that folder for the session, in
-//!   the kind of the ask's folder suggestion; `always_for_file: true` grants the
-//!   ask's file until the child stops: later asks on it of the same kind are
-//!   allowed by the server, and the allow carries a session rule for it unless the
-//!   ask is a safety check. Each is refused when the ask did not offer it, and
-//!   `folder` must be the offered folder or one of its parents.
-//! - While the discussion's cache is cold (`gauges::is_cold`), or a model or
-//!   effort change awaits its first main request (`settings_changed_at` set), a
-//!   `send` or an `answer` without `rewarm: true` is refused with the ack error
-//!   `cache_cold` and has no effect. `restart` and `interrupt` are always accepted.
-//! - `set_permission_mode {session, mode, client_id}`: a live session asks the CLI;
-//!   a stopped one only stores the mode (`default`, `acceptEdits` or `plan`) for its
-//!   next launch and announces `sessions_changed`.
-//! - `set_settings {session, model?, effort?, client_id}`: stores the model and
-//!   the effort level (`low`, `medium`, `high`, `xhigh` or `max`) every launch
-//!   passes as `--model` and `--effort`; an absent field keeps its value, `null`
-//!   lets the CLI pick. Settings equal to the stored ones change nothing. A
-//!   change sets `settings_changed_at`, clears `applied_model` and
-//!   `applied_effort`, and announces `sessions_changed`; on a live child it also
-//!   interrupts the running turn, if any, then applies the new model with
-//!   `set_model` and a new effort level with `apply_flag_settings`, and asks
-//!   `get_settings` again.
-//! - `restart {session, mode, text?, client_id}`: moves the discussion to a fresh
-//!   Claude session in the same permission mode, model and effort, and announces
-//!   `sessions_changed`.
-//!   The live child, if any, is stopped first, its pending asks dropped. The
-//!   session then records a `restarted {mode, exchanges, total_exchanges, seed?}`
-//!   host event and forgets its `cache` and `context`. `mode` `continue` launches
-//!   the new session with one message: `seed`, a blank line, then `text`, or
-//!   `CLOSING` (asks for a summary and what to do next) when `text` is blank; `seed` renders the
-//!   last `exchanges` of the discussion's `total_exchanges`. `blank` launches it
-//!   with `text` when not blank, else only at the next `send`; `clear` does the
-//!   same and is recorded as the Clear command. The `user_sent` event carries
-//!   `text` alone, and there is none for a blank `text`.
-//! - `kill {session, reason?, client_id}`: stops the live child the graceful way;
-//!   the discussion stays listed and the next `send` resumes it. Acked without
-//!   effect when not live. `reason` is `kill` (the default, from Home) or `revoke`
-//!   (dropping the granted folders and files). A stop for a reason (these two, or
-//!   `shutdown` when the server stops) emits `stopping {reason}` as it begins,
-//!   and `child_exited` carries the reason too.
-//! - `archive {session, client_id}`: refused with the ack error `session_live`
-//!   while the child runs. `restore {session, client_id}` unarchives.
-//! - A `send`, `answer` or `restart` on an archived discussion unarchives it
-//!   first, then follows its usual rules, the cold check included.
-//! - `kill`, `archive` and `restore` announce `sessions_changed`.
-//!
-//! Server to client:
-//! - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI
-//!   stdout line as JSON (a string when the line is not JSON), `host` a host
-//!   event tagged by `event`. `ask_queued` carries `danger {dangerous, reasons}`,
-//!   `accept_edits` (true on an edit ask offering Accept edits, absent otherwise)
-//!   and `folder {kind, folder, broad}` when the CLI suggests a folder to grant:
-//!   `kind` `read` or `directory`, `folder` as `C:\a\b` or `/a/b`, `broad` the
-//!   folder and parents too broad to grant (drive roots, the home folder, ...).
-//!   It also carries `file {kind, path}` on a Read or edit-tool ask: `kind`
-//!   `read` or `edit`, `path` the absolute file path, as `C:\a\b.md` or `/a/b.md`.
-//!   An ask on a file granted with `always_for_file` is answered by the server
-//!   and recorded as `auto_allowed {request_id, tool_name, tool_use_id, file}`
-//!   instead of `ask_queued`. Both carry `agent_id`, the task id of the
-//!   subagent asking, absent for the main agent.
-//!   `relay_sent {text, client_id?, task_id, agent_tool_use_id, name, wrapped,
-//!   mid_turn?}` precedes the write of a relay: `wrapped` is the message the
-//!   main agent gets, `agent_tool_use_id` the Agent call that started the agent.
-//!   `relay_checked {relay_seq, task_id, agent_tool_use_id, outcome}` follows
-//!   the turn that took it (`relay_seq` is the seq of its `relay_sent`):
-//!   `outcome` is `faithful {send_message}` when that turn called SendMessage
-//!   to `task_id` with `text` unchanged (`send_message` is that call's tool use
-//!   id) and replied `[Relay acknowledged]`, else `failed {reason}` with
-//!   `reason` `altered` (SendMessage to the agent with other text),
-//!   `other_recipient`, `not_forwarded`, `no_acknowledgement` or `ended` (the
-//!   child stopped first).
-//!   `catalog {models, commands}` follows each accepted `initialize`: `models
-//!   [{value, resolved_model?, display_name, description?, effort_levels}]`
-//!   (`resolved_model` the model id `value` stands for, `effort_levels` empty
-//!   for a model without effort) and `commands [{name, description,
-//!   argument_hint}]`, the CLI's slash commands and skills.
-//! - `synced {session, seq}`: the stored events of a subscribed session were
-//!   all sent, up to `seq`; follows the history sent on `subscribe`, and each
-//!   later catch-up from the store.
-//! - `window {session, first_seq, start_reached}`: a windowed `subscribe` sends
-//!   the events from `first_seq`, after the prelude; `start_reached` when no
-//!   event precedes `first_seq`.
-//! - `page {session, first_seq, start_reached, events}`: answers `history`;
-//!   `events` holds the prelude then the events from `first_seq` to below
-//!   `before_seq`, in seq order, shaped as `event` without its `type`.
-//! - `ack {client_id, ok, error?}`: one per command carrying a `client_id`.
-//! - `sessions_changed`: a session was created, changed activity or its count
-//!   of pending asks, ended, had
-//!   the permission mode of its stopped state or its model or effort changed, its main conversation
-//!   made a request or finished a turn (new `cache` and `context`), or the CLI
-//!   reported a new context usage or new applied settings, one of its agents
-//!   started, progressed, made a request or ended, it restarted on a fresh Claude session, or it
-//!   was killed, archived or restored; `GET /api/sessions` has the new list.
-//! - `usage_changed`: a usage reading was taken or a turn finished;
-//!   `GET /api/usage` has the new snapshot.
-//! - `catalog_changed`: the shared catalog or default settings changed;
-//!   `GET /api/catalog` has the new ones.
-//! - `error {message, session?}`: a malformed frame, or a `subscribe` or a
-//!   `history` that failed.
-//!
-//! `GET /api/catalog` is what all discussions share, persisted: `models` and
-//! `commands` (shaped as in `catalog`) from the latest `initialize` of any
-//! Claude start, `terminal_commands` (names of the commands that only work in
-//! the terminal) from the latest `system/init`, and `defaults {model, effort}`,
-//! what `get_settings` reports applying for a child launched without a model or
-//! effort whose discussion still has none. Each is null until first reported.
-//! With `models` or `defaults` unknown at launch, the server starts one Claude
-//! in its state folder to read them (`initialize` and `get_settings`, no user
-//! message), then stops it; a failure waits for the next launch.
-//!
-//! Each session of `GET /api/sessions` carries `archived_at` (null while not
-//! archived), `model` and `effort` (null when the CLI picks),
-//! `settings_changed_at` (null unless a model or effort change awaits its first
-//! main request), `applied_model` and `applied_effort` (what the CLI reports
-//! applying through `get_settings`, asked when the child starts, after each turn
-//! and after a change, e.g. `claude-opus-5-5[1m]` and `medium`; kept once the
-//! child stops, null while unknown), `live`, `busy`, `asks` (the
-//! permission, question and plan approval asks its running child awaits an
-//! answer to, 0 when not live), `cache {last_request_at,
-//! ttl_secs}` and `context {used_tokens, max_tokens, percentage, source,
-//! autocompact_threshold, categories}`; either is null while unknown. `source`
-//! is `cli` when the total comes from the CLI's `get_context_usage` (asked when
-//! the child starts and after each turn), `estimate` when a later main request
-//! replaced it with its prompt tokens. `max_tokens` is the CLI's when known,
-//! else the model's context window. `autocompact_threshold` (nullable) and
-//! `categories [{name, tokens, kind}]` (empty while unknown) come from the
-//! latest CLI reply. `agents` lists the subagents the running child started,
-//! oldest first, empty when not live: `{task_id, tool_use_id, name,
-//! subagent_type, parent_tool_use_id, state, activity, cache, prompt_tokens,
-//! started_at}`. `tool_use_id` is the Agent call, which the agent's lines carry
-//! as `parent_tool_use_id`; `name` its description; `parent_tool_use_id` the
-//! Agent call of the agent that started it, null for the main agent; `state`
-//! `running`, `completed`, `stopped` or `failed`; `activity` its latest
-//! progress, then its final summary (nullable); `cache` as the session's, from
-//! its own last request (nullable); `prompt_tokens` that request's prompt, the
-//! context a relay to a cold agent caches again (0 before any).
+//! `/api/ws` and the bodies of the `/api/sessions` routes. The protocol is
+//! specified in `notes/wire.md`.
 
 use std::path::PathBuf;
 
@@ -193,9 +22,35 @@ pub const CACHE_COLD: &str = "cache_cold";
 /// Ack error of an `archive` refused while the child runs.
 pub const SESSION_LIVE: &str = "session_live";
 
+/// A client frame. Both kinds are tagged by `type`; a `type` naming a
+/// subscription reads as one, any other as a command.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ClientMessage {
+    Subscription(Subscription),
+    Command(Command),
+}
+
+impl<'de> Deserialize<'de> for ClientMessage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let subscription = value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| Subscription::TYPES.contains(&kind));
+        let message = if subscription {
+            Subscription::deserialize(value).map(Self::Subscription)
+        } else {
+            Command::deserialize(value).map(Self::Command)
+        };
+        message.map_err(serde::de::Error::custom)
+    }
+}
+
+/// What a connection streams; not acked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ClientMessage {
+pub enum Subscription {
     Subscribe {
         session: Uuid,
         #[serde(default)]
@@ -213,55 +68,75 @@ pub enum ClientMessage {
     Unsubscribe {
         session: Uuid,
     },
+    /// The discussion on screen (`None` on Home or elsewhere) and whether the user
+    /// is there: page visible and recent input. Sent on every change.
+    Presence {
+        session: Option<Uuid>,
+        active: bool,
+    },
+}
+
+impl Subscription {
+    /// The `type` of each variant.
+    const TYPES: [&str; 4] = ["subscribe", "history", "unsubscribe", "presence"];
+}
+
+/// An action on one session, answered by one `ack` carrying `client_id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Command {
+    pub session: Uuid,
+    pub client_id: String,
+    #[serde(flatten)]
+    pub action: Action,
+}
+
+impl From<Command> for ClientMessage {
+    fn from(command: Command) -> Self {
+        Self::Command(command)
+    }
+}
+
+impl From<Subscription> for ClientMessage {
+    fn from(subscription: Subscription) -> Self {
+        Self::Subscription(subscription)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Action {
     Send {
-        session: Uuid,
         text: String,
         /// Goes through on a cold cache.
         #[serde(default)]
         rewarm: bool,
-        client_id: String,
     },
-    Interrupt {
-        session: Uuid,
-        client_id: String,
-    },
+    Interrupt,
     /// A message for subagent `task_id`, relayed by the main agent.
     Relay {
-        session: Uuid,
         task_id: String,
         text: String,
         /// Goes through on a cold cache.
         #[serde(default)]
         rewarm: bool,
-        client_id: String,
     },
     StopTask {
-        session: Uuid,
         task_id: String,
-        client_id: String,
     },
     /// Stops every running agent.
-    StopAgents {
-        session: Uuid,
-        client_id: String,
-    },
+    StopAgents,
     Answer {
-        session: Uuid,
         request_id: String,
         answer: Answer,
         /// Goes through on a cold cache.
         #[serde(default)]
         rewarm: bool,
-        client_id: String,
     },
     SetPermissionMode {
-        session: Uuid,
         mode: PermissionMode,
-        client_id: String,
     },
     /// An absent field keeps its setting; `null` goes back to the CLI's default.
     SetSettings {
-        session: Uuid,
         #[serde(
             default,
             deserialize_with = "present",
@@ -274,35 +149,18 @@ pub enum ClientMessage {
             skip_serializing_if = "Option::is_none"
         )]
         effort: Option<Option<String>>,
-        client_id: String,
     },
     Restart {
-        session: Uuid,
         mode: RestartMode,
         #[serde(default)]
         text: Option<String>,
-        client_id: String,
     },
     Kill {
-        session: Uuid,
         #[serde(default)]
         reason: StopReason,
-        client_id: String,
     },
-    Archive {
-        session: Uuid,
-        client_id: String,
-    },
-    Restore {
-        session: Uuid,
-        client_id: String,
-    },
-    /// The discussion on screen (`None` on Home or elsewhere) and whether the user
-    /// is there: page visible and recent input. Sent on every change; not acked.
-    Presence {
-        session: Option<Uuid>,
-        active: bool,
-    },
+    Archive,
+    Restore,
 }
 
 /// Tells a field sent as `null` from an absent one, which `default` leaves `None`.
