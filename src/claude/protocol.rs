@@ -660,8 +660,24 @@ pub struct ControlCancelRequest {
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum CliRequest {
     CanUseTool(Box<CanUseTool>),
+    McpMessage(McpMessage),
     #[serde(untagged)]
     Other(Extra),
+}
+
+/// One MCP JSON-RPC message for the SDK-hosted server `server_name`, answered by `McpResponse`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpMessage {
+    pub server_name: String,
+    pub message: Value,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Success payload answering an `mcp_message`: the server's JSON-RPC reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpResponse {
+    pub mcp_response: Value,
 }
 
 /// Only the three identifying fields are typed strictly; the rest accept any
@@ -705,6 +721,13 @@ pub struct CanUseTool {
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum HostRequest {
     Initialize {
+        /// SDK-hosted MCP servers, reached through `mcp_message`.
+        #[serde(
+            rename = "sdkMcpServers",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        sdk_mcp_servers: Vec<String>,
         #[serde(flatten)]
         extra: Extra,
     },
@@ -757,8 +780,9 @@ pub enum HostRequest {
 }
 
 impl HostRequest {
-    pub fn initialize() -> Self {
+    pub fn initialize(sdk_mcp_servers: Vec<String>) -> Self {
         Self::Initialize {
+            sdk_mcp_servers,
             extra: Extra::new(),
         }
     }
@@ -859,6 +883,19 @@ impl ControlResponse {
         Self::from_body(ControlResponseBody::Success {
             request_id: request_id.into(),
             response: Some(serde_json::to_value(result).expect("permission result serializes")),
+            extra: Extra::new(),
+        })
+    }
+
+    pub fn mcp(request_id: impl Into<String>, reply: Value) -> Self {
+        Self::from_body(ControlResponseBody::Success {
+            request_id: request_id.into(),
+            response: Some(
+                serde_json::to_value(McpResponse {
+                    mcp_response: reply,
+                })
+                .expect("mcp response serializes"),
+            ),
             extra: Extra::new(),
         })
     }

@@ -140,6 +140,8 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 ## MCP server
 
 - vigie2 exposes an MCP server to its sessions. Claude drives the UI through tool calls instead of text syntax parsed out of messages.
+- Hosted in each session's actor as an SDK MCP server: calls arrive on the child's control channel, so they reach their session with no port or auth. vigie2's tools are allowed without asking; their descriptions alone tell Claude when to use them.
+- Attachments: `set_attachments` sets the files shown on Claude's reply at the end of the turn; each call replaces the list, so a wrong file is dropped by calling again (see `notes/wire.md`).
 - Presentation: show images (e.g. a screenshot a command took), file excerpts, diffs, and other content in the discussion.
 - Interaction: custom blocking widgets whose answer returns as the tool result, a richer `AskUserQuestion`.
 - Panels with state: e.g. an RPG character sheet the game master updates, or a status report while working on a project.
@@ -268,7 +270,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Which folder or file counts as related to a session (its cwd, the last file referenced, files it edited).
 - Terminals for non-Claude tasks: approach undecided (ideas: fixed size, piping output and showing text instead of a terminal emulator, named run configurations such as canif scripts with live text output).
 - Per-session and per-project notification and visibility settings: which settings.
-- MCP server: tool list and schemas, routing calls to their session, pre-allowing vigie2's own tools, how skills or CLAUDE.md tell Claude when to use them.
+- MCP server: the tools beyond `set_attachments`, and their schemas.
 - Sensory features (sound, music, animation): opt-in per device, global mute, reduced motion.
 - Which commands get a custom presentation beyond commits, and how one is defined.
 - Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, rename and auto-title, Mermaid rendering.

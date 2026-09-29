@@ -17,6 +17,7 @@ pub mod gauges;
 pub mod grant;
 mod handle;
 pub mod manager;
+pub mod mcp;
 pub mod plan;
 pub mod seed;
 

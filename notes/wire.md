@@ -36,6 +36,8 @@ Every other frame is a command on one session. It carries `session` and `client_
 
 A message with attachments reaches Claude as its text, a blank line, then `Attachments:` and one `- {path}` line per file (the block alone when the text is blank). `user_sent` and `relay_sent` record `text` and `attachments` apart, so clients show the files apart from the text; the CLI's echo holds the composed text.
 
+Claude attaches files to its own reply with the `set_attachments {paths}` tool of vigie2's MCP server (`mcp__vigie2__set_attachments`, allowed without asking). Each call replaces the turn's list; `[]` clears it. Relative paths resolve from the session folder; every path must be an existing file, else the call fails, naming the bad paths, and the list stays as it was. Calls from subagents count for the main turn. When the main agent's turn ends (its `result` line) with a non-empty list, `claude_attached {attachments}` follows, absolute paths; clients show them on the turn's last Claude text. A child that stops mid-turn drops the list.
+
 ## Server to client
 
 - `event {session, seq, time, kind, payload}`: `kind` `line` carries a CLI stdout line as JSON (a string when the line is not JSON), `host` a host event tagged by `event`.

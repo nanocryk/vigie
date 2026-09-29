@@ -23,7 +23,7 @@ use super::events::{
 use super::grant::{self, FileOffer};
 use super::handle::Config;
 use super::plan::PlanTracker;
-use super::{attachments, danger, seed};
+use super::{attachments, danger, mcp, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
     CanUseTool, CliRequest, ControlRequest, ControlResponse, HostRequest, Inbound,
@@ -144,6 +144,8 @@ pub struct Actor {
     file_grants: Vec<FileOffer>,
     /// Reads of files in it are answered here.
     uploads: Option<PathBuf>,
+    /// Set by `set_attachments`, announced and cleared when the turn ends.
+    turn_attachments: Vec<String>,
     /// Keyed by request id.
     pending: HashMap<String, PendingRequest>,
     /// Last mode announced with `HostEvent::PermissionMode`.
@@ -180,6 +182,7 @@ impl Actor {
             asks: Vec::new(),
             file_grants: Vec::new(),
             uploads: config.uploads,
+            turn_attachments: Vec::new(),
             pending: HashMap::new(),
             permission_mode: None,
             next_request: 0,
@@ -195,7 +198,10 @@ impl Actor {
             cwd: self.cwd.clone(),
         });
         let request_id = self.next_request_id();
-        let initialize = ControlRequest::new(request_id.clone(), HostRequest::initialize());
+        let initialize = ControlRequest::new(
+            request_id.clone(),
+            HostRequest::initialize(vec![mcp::SERVER_NAME.into()]),
+        );
         self.state = State::Initializing { request_id };
         if let Err(err) = self.write(Outbound::ControlRequest(initialize)).await {
             tracing::warn!("send initialize: {err:#}");
@@ -308,6 +314,12 @@ impl Actor {
             {
                 self.fail_gate(GateFailure::Overage);
             }
+            Inbound::Result(_) => {
+                let attachments = std::mem::take(&mut self.turn_attachments);
+                if !attachments.is_empty() {
+                    self.emit_host(HostEvent::ClaudeAttached { attachments });
+                }
+            }
             Inbound::ControlRequest(request) => self.on_cli_request(request).await,
             Inbound::ControlResponse(response) => self.on_control_response(response),
             Inbound::ControlCancelRequest(cancel) => self.on_cancel(&cancel.request_id),
@@ -360,6 +372,23 @@ impl Actor {
                     agent_id,
                 });
                 self.publish_status();
+            }
+            CliRequest::McpMessage(message) => {
+                let response = if message.server_name == mcp::SERVER_NAME {
+                    let handled = mcp::handle(&message.message, &self.cwd);
+                    if let mcp::Effect::SetAttachments(paths) = handled.effect {
+                        self.turn_attachments = paths;
+                    }
+                    ControlResponse::mcp(request.request_id.clone(), handled.reply)
+                } else {
+                    ControlResponse::error(
+                        request.request_id.clone(),
+                        format!("unknown MCP server {}", message.server_name),
+                    )
+                };
+                if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
+                    tracing::warn!("answer mcp_message: {err:#}");
+                }
             }
             CliRequest::Other(fields) => {
                 let subtype = fields

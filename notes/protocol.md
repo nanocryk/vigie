@@ -24,6 +24,7 @@ Line-delimited JSON on stdin/stdout, the same wire protocol the Agent SDKs use. 
   - In `auto` and `bypassPermissions` modes it is never called, so questions and plans skip the host unless a `PreToolUse` hook routes them.
 - Host to CLI: `initialize`, `interrupt` (optional `cancel_queued`), `set_permission_mode`, `set_model`, `get_usage` (experimental), `get_context_usage`, `get_settings`, `side_question`, `rewind_files`, `request_user_dialog` answers, and more.
 - `reinitialize` after a transport gap: the response carries the `can_use_tool` requests still pending.
+- SDK-hosted MCP servers: `initialize {sdkMcpServers: [name]}` registers in-process servers. The CLI reaches one with `mcp_message {server_name, message}` (CLI to host), `message` one MCP JSON-RPC message, answered by success `{mcp_response}`: the server's JSON-RPC reply, or a reply with an empty result for a notification. The CLI runs the MCP handshake (`initialize`, `notifications/initialized`, `tools/list`) through it before the first turn, then `tools/call`. Tools are named `mcp__{server}__{tool}`. Read from the CLI's bundled schema, not a recording.
 - `system/init.capabilities` for feature detection: `interrupt_receipt_v1` (interrupt response lists `still_queued`), `interrupt_cancel_queued_v1`.
 - SIGTERM leaves the turn unfinished (exit 143); use `interrupt` to end a turn.
 

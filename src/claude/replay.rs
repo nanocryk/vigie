@@ -21,6 +21,8 @@ use crate::claude::protocol::Inbound;
 
 /// Keys whose values legitimately differ between a recorded run and a replay.
 const RUN_SPECIFIC_KEYS: [&str; 3] = ["session_id", "uuid", "timestamp"];
+/// Keys the host sends that older recordings predate; compared only when recorded.
+const LATER_HOST_KEYS: [&str; 1] = ["sdkMcpServers"];
 /// Longest rendering of a line inside an error message.
 const SHOWN_CHARS: usize = 600;
 
@@ -579,6 +581,7 @@ fn first_difference(expected: &Value, got: &Value, path: String) -> Option<Strin
                 match (want.get(key), have.get(key)) {
                     (Some(want), Some(have)) => first_difference(want, have, child),
                     (Some(_), None) => Some(format!("{child}: missing")),
+                    (None, Some(_)) if LATER_HOST_KEYS.contains(&key.as_str()) => None,
                     _ => Some(format!("{child}: not in the recording")),
                 }
             })
@@ -964,5 +967,16 @@ mod tests {
             first_difference(&comparable(&recorded), &comparable(&sent), String::new()),
             None
         );
+    }
+
+    #[test]
+    fn later_host_keys_are_compared_only_when_recorded() {
+        let old = serde_json::json!({"request": {"subtype": "initialize"}});
+        let new = serde_json::json!({"request": {"subtype": "initialize", "sdkMcpServers": ["a"]}});
+        let other =
+            serde_json::json!({"request": {"subtype": "initialize", "sdkMcpServers": ["b"]}});
+        assert_eq!(first_difference(&old, &new, String::new()), None);
+        assert!(first_difference(&new, &old, String::new()).is_some());
+        assert!(first_difference(&new, &other, String::new()).is_some());
     }
 }

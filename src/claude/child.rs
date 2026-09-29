@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::claude::protocol::PermissionMode;
+use crate::session::mcp;
 
 /// Set on every child so hooks can tell which vigie2 session runs them.
 pub const SESSION_ENV: &str = "VIGIE2_SESSION_ID";
@@ -41,7 +42,7 @@ const CARGO_RUN_ENV_PREFIX: &str = "CARGO_PKG_";
 /// Set to false so claude.ai connectors are not loaded; an unauthorized one otherwise gets reported by the model.
 const CONNECTORS_ENV: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
-const FLAGS: [&str; 11] = [
+const FLAGS: [&str; 13] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -53,6 +54,8 @@ const FLAGS: [&str; 11] = [
     "stdio",
     "--replay-user-messages",
     "--forward-subagent-text",
+    "--allowedTools",
+    mcp::SET_ATTACHMENTS_TOOL,
 ];
 
 const LINE_BUFFER: usize = 1024;

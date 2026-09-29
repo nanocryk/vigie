@@ -1157,3 +1157,124 @@ async fn reads_in_the_uploads_folder_are_allowed_by_the_host() {
     }
     harness.finish().await;
 }
+
+/// `set_attachments` through the SDK MCP channel: a bad path fails and keeps
+/// the list, a later call replaces it, and the turn's end announces the last
+/// one; a turn without a call announces nothing.
+#[tokio::test]
+async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.png");
+    let second = dir.path().join("second.txt");
+    std::fs::write(&first, b"png").unwrap();
+    std::fs::write(&second, b"txt").unwrap();
+    let missing = dir.path().join("missing.txt");
+    let [first, second, missing] = [first, second, missing].map(|path| path.display().to_string());
+
+    let record = |dir: &str, msg: Value| json!({"t": 0, "dir": dir, "msg": msg}).to_string();
+    let call = |request_id: &str, id: u64, paths: &[&str]| {
+        record(
+            "out",
+            json!({"type": "control_request", "request_id": request_id, "request": {
+                "subtype": "mcp_message", "server_name": "vigie2", "message": {
+                    "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {"name": "set_attachments", "arguments": {"paths": paths}}}}}),
+        )
+    };
+    let reply = |request_id: &str, id: u64, text: String, is_error: bool| {
+        record(
+            "in",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": request_id, "response": {"mcp_response": {
+                    "jsonrpc": "2.0", "id": id, "result": {
+                        "content": [{"type": "text", "text": text}], "isError": is_error}}}}}),
+        )
+    };
+    let result = |uuid: &str| {
+        record(
+            "out",
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn",
+                "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": uuid}),
+        )
+    };
+    let script = [
+        record(
+            "in",
+            json!({"type": "control_request", "request_id": "init", "request": {
+                "subtype": "initialize", "sdkMcpServers": ["vigie2"]}}),
+        ),
+        record(
+            "out",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}),
+        ),
+        record(
+            "out",
+            json!({"type": "control_request", "request_id": "mcp-1", "request": {
+                "subtype": "mcp_message", "server_name": "vigie2",
+                "message": {"jsonrpc": "2.0", "method": "notifications/initialized"}}}),
+        ),
+        record(
+            "in",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": "mcp-1", "response": {"mcp_response": {
+                    "jsonrpc": "2.0", "result": {}, "id": 0}}}}),
+        ),
+        call("mcp-2", 1, &[&first]),
+        reply(
+            "mcp-2",
+            1,
+            format!("These files will be attached to this turn's reply:\n- {first}"),
+            false,
+        ),
+        call("mcp-3", 2, &[&first, &missing]),
+        reply(
+            "mcp-3",
+            2,
+            format!(
+                "Nothing changed, the attachments stay as they were. Bad paths:\n- {missing}: not found"
+            ),
+            true,
+        ),
+        call("mcp-4", 3, &[&second]),
+        reply(
+            "mcp-4",
+            3,
+            format!("These files will be attached to this turn's reply:\n- {second}"),
+            false,
+        ),
+        result("r1"),
+        result("r2"),
+    ];
+    let path = dir.path().join("attach.ndjson");
+    std::fs::write(&path, script.join("\n")).unwrap();
+
+    let mut harness = Harness::start(&path);
+    let attached = harness
+        .until_host(|host| matches!(host, HostEvent::ClaudeAttached { .. }))
+        .await;
+    assert_eq!(
+        attached,
+        HostEvent::ClaudeAttached {
+            attachments: vec![second]
+        }
+    );
+    harness.until_result().await;
+    tokio::time::timeout(TIMEOUT, harness.session.stop())
+        .await
+        .expect("session did not stop");
+    let rest = harness
+        .until(|event| match &event.body {
+            EventBody::Host(HostEvent::ClaudeAttached { .. }) => Some(false),
+            EventBody::Host(HostEvent::ChildExited { code, .. }) => {
+                assert_eq!(*code, Some(0), "fake claude failed");
+                Some(true)
+            }
+            _ => None,
+        })
+        .await;
+    assert!(rest, "a turn without a call announced attachments");
+}

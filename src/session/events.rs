@@ -112,6 +112,11 @@ pub enum HostEvent {
         request_id: String,
         resolution: Resolution,
     },
+    /// The files Claude attached to its reply with `set_attachments`, as absolute
+    /// paths; follows the `result` line ending the main agent's turn.
+    ClaudeAttached {
+        attachments: Vec<String>,
+    },
     /// The CLI's permission mode changed, as reported by `initialize`, `system/init`,
     /// `system/status` or a successful `set_permission_mode`.
     PermissionMode {
