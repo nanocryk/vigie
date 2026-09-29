@@ -243,6 +243,28 @@ describe("transcript from recordings", () => {
     expect(next.items.at(-1)).toMatchObject({ kind: "user", text: "again" });
   });
 
+  it("a set_attachments call is hidden", () => {
+    const call = (id: string, name: string): WireEvent => ({
+      session: SESSION,
+      seq: Number(id),
+      time: "t",
+      kind: "line",
+      payload: {
+        type: "assistant",
+        message: { id: `m${id}`, content: [{ type: "tool_use", id, name, input: { paths: [] } }] },
+        parent_tool_use_id: null,
+      },
+    });
+    const state = applyEvents(emptyTranscript, [
+      call("1", "mcp__vigie2__set_attachments"),
+      call("2", "Read"),
+    ]);
+    expect(state.items.map((item) => [item.kind === "tool" && item.name, item.hidden])).toEqual([
+      ["mcp__vigie2__set_attachments", true],
+      ["Read", undefined],
+    ]);
+  });
+
   it("cd: a command the CLI answers locally is marked handled", () => {
     const state = transcript("cd");
     expect(state.items.map(shape)).toEqual([

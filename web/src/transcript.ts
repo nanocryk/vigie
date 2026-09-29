@@ -84,7 +84,7 @@ export type Delivery = "on_host" | "received" | "handled";
  */
 export type Item = {
   time: number | null;
-  /** Not shown: the parts of a faithful relay in the main discussion. */
+  /** Not shown: the parts of a faithful relay in the main discussion, `set_attachments` calls. */
   hidden?: true;
 } & ItemBody;
 
@@ -340,6 +340,8 @@ export const emptyTranscript: TranscriptState = {
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
 const SKILL_TOOL = "Skill";
+/** vigie2's attach tool: its effect shows as chips on the reply, so its row is hidden. */
+const SET_ATTACHMENTS_TOOL = "mcp__vigie2__set_attachments";
 
 const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
@@ -728,6 +730,13 @@ class Draft {
   private add(body: ItemBody): void {
     if (this.prelude) return;
     this.items.push({ ...body, time: this.time });
+  }
+
+  /** Hides the item just added, if one was. */
+  private hideLast(): void {
+    if (this.prelude) return;
+    const last = this.items.at(-1);
+    if (last !== undefined) this.items[this.items.length - 1] = { ...last, hidden: true };
   }
 
   apply(event: WireEvent): void {
@@ -1164,6 +1173,7 @@ class Draft {
             endTime: null,
             attached: null,
           });
+          if (block.name === SET_ATTACHMENTS_TOOL) this.hideLast();
           return;
         case "tool_result":
         case "other":
