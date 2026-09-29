@@ -21,9 +21,10 @@ import {
   type TranscriptState,
   applyEvents,
   emptyTranscript,
+  parseTaskNotification,
+  quietWork,
   relayFailureText,
   restartLabel,
-  quietWork,
   toolSummary,
   toolTimeVisible,
 } from "@/transcript";
@@ -105,10 +106,13 @@ type Shape =
   | ["restart", string, string | null]
   | ["agent", string]
   | ["brief", string]
-  | ["relay_failed", string];
+  | ["relay_failed", string]
+  | ["task_end", string, string];
 
 function shape(item: Item): Shape {
   switch (item.kind) {
+    case "task_end":
+      return ["task_end", item.status, item.summary];
     case "agent":
       return ["agent", item.name];
     case "brief":
@@ -1053,6 +1057,51 @@ describe("toolSummary", () => {
     expect(toolSummary("Bash", { command: "npm test", run_in_background: true })).toBe(
       "npm test (background)",
     );
+  });
+});
+
+describe("task notifications", () => {
+  const notification = (status: string, extra = "") =>
+    `<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n${extra}<status>${status}</status>\n<summary>Background command "sleep 5" ${status}</summary>\n</task-notification>`;
+  const line = (seq: number, text: string, origin: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "line",
+    payload: {
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+      isReplay: true,
+      origin,
+    },
+  });
+
+  it("shows a notification as a background row, never as the user's message", () => {
+    const state = applyEvents(emptyTranscript, [
+      line(1, notification("completed", "<output-file>C:\\t\\b1.output</output-file>\n"), {
+        kind: "task-notification",
+      }),
+      line(2, notification("killed"), { kind: "task-notification" }),
+    ]);
+    expect(state.items.map(shape)).toEqual([
+      ["task_end", "ok", 'Background command "sleep 5" completed'],
+      ["task_end", "stopped", 'Background command "sleep 5" killed'],
+    ]);
+    expect(state.items[0]).toMatchObject({ outputFile: "C:\\t\\b1.output" });
+    expect(state.items[1]).toMatchObject({ outputFile: null });
+  });
+
+  it("falls back to a system message when the notification cannot be read", () => {
+    const state = applyEvents(emptyTranscript, [
+      line(1, "<task-notification>garbled", { kind: "task-notification" }),
+    ]);
+    expect(state.items.map(shape)).toEqual([["notice", "System message"]]);
+  });
+
+  it("maps failures to errors", () => {
+    expect(parseTaskNotification(notification("failed"))?.status).toBe("error");
+    expect(parseTaskNotification("hello")).toBeNull();
   });
 });
 

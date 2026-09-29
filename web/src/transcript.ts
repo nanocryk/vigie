@@ -19,6 +19,27 @@ import {
 
 export type ToolStatus = "running" | "ok" | "error" | "unfinished";
 
+export type TaskEndStatus = "ok" | "stopped" | "error";
+
+const TASK_NOTIFICATION = "task-notification";
+
+/** The fields of a `<task-notification>` message, or null when it is not one. */
+export function parseTaskNotification(
+  text: string,
+): { status: TaskEndStatus; summary: string; outputFile: string | null } | null {
+  if (!text.trimStart().startsWith(`<${TASK_NOTIFICATION}>`)) return null;
+  const field = (name: string) =>
+    new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() ?? null;
+  const summary = field("summary");
+  const status = field("status");
+  if (summary === null || status === null) return null;
+  return {
+    status: status === "completed" ? "ok" : status === "failed" || status === "error" ? "error" : "stopped",
+    summary,
+    outputFile: field("output-file"),
+  };
+}
+
 /**
  * `on_host`: written to the CLI, not echoed yet. `received`: the CLI echoed it.
  * `handled`: the CLI answered without echoing it (a command it runs locally).
@@ -70,6 +91,17 @@ type ItemBody =
   | { kind: "agent"; key: string; toolUseId: string; name: string }
   /** The prompt an agent was started with, first in its own view. */
   | { kind: "brief"; key: string; text: string }
+  /** A background task ended: the CLI's notification, written in the user's place. */
+  | {
+      kind: "task_end";
+      key: string;
+      status: TaskEndStatus;
+      summary: string;
+      /** Where the task's output was written, when it says. */
+      outputFile: string | null;
+      /** The notification as the CLI wrote it. */
+      raw: string;
+    }
   /** The main agent did not pass a relayed message on as asked. */
   | { kind: "relay_failed"; key: string; reason: RelayFailure };
 
@@ -780,7 +812,14 @@ class Draft {
     switch (line.type) {
       case "user":
         if (line.parentToolUseId === this.scope) {
-          this.user(line.content, line.isMeta, line.isSynthetic, line.toolUseResult, key);
+          this.user(
+            line.content,
+            line.isMeta,
+            line.isSynthetic,
+            line.origin,
+            line.toolUseResult,
+            key,
+          );
         }
         return;
       case "assistant":
@@ -847,6 +886,7 @@ class Draft {
     content: string | ContentBlock[],
     isMeta: boolean,
     isSynthetic: boolean,
+    origin: string | null,
     toolUseResult: unknown,
     key: string,
   ): void {
@@ -863,6 +903,10 @@ class Draft {
     }
     if (texts.length === 0 || isMeta) return;
     const text = texts.join("\n");
+    if (origin === TASK_NOTIFICATION) {
+      this.taskEnd(text, key);
+      return;
+    }
     if (isSynthetic) {
       this.synthetic(text, key);
       return;
@@ -937,6 +981,16 @@ class Draft {
       if (item?.kind === "user" && item.delivery === "handled") entry.settled = true;
       entry.armed = true;
     }
+  }
+
+  /** A background task's end, which the CLI writes as a user message. */
+  private taskEnd(text: string, key: string): void {
+    const parsed = parseTaskNotification(text);
+    if (parsed === null) {
+      this.add({ kind: "notice", key, tone: "info", text: "System message", detail: text });
+      return;
+    }
+    this.add({ kind: "task_end", key, ...parsed, raw: text });
   }
 
   /**

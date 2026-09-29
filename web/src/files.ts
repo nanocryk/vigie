@@ -401,6 +401,14 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
   return selectTab({ ...state, tabs: [...state.tabs, tab] }, tab.id);
 }
 
+/** Activates the free tab used last on `file`, with its folder behind it for the back button. */
+export function openFileInLastFree(state: ExplorerState, file: string): ExplorerState {
+  const next = selectLastFree(state);
+  const path = crumbs(file);
+  const folder = path.length >= 2 ? (path[path.length - 2]?.path ?? null) : null;
+  return updateTab(next, next.active, { folder, diff: null, file, line: null, scroll: 0 });
+}
+
 /** Activates the session's tab on its folder view, the diff and any file closed. */
 export function openSessionFolder(state: ExplorerState, session: string, root: string): ExplorerState {
   const next = openSessionTab(state, session, root);

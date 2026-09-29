@@ -11,6 +11,7 @@ import {
   isInside,
   joinPath,
   newFreeTab,
+  openFileInLastFree,
   openSessionDiff,
   openSessionFolder,
   openSessionTab,
@@ -118,6 +119,15 @@ describe("tabs", () => {
     state = updateTab(state, state.active, { folder: "C:\\p\\src", file: "C:\\p\\src\\a.ts" });
     state = openSessionFolder(selectLastFree(state), "s1", "C:\\p");
     expect(activeTab(state)).toMatchObject({ folder: "C:\\p\\src", diff: null, file: null });
+  });
+
+  it("opens a file in the free tab used last, its folder behind it", () => {
+    const state = openFileInLastFree(openSessionTab(initialState(), "s1", "C:\\p"), "C:\\t\\b1.output");
+    expect(activeTab(state)).toMatchObject({
+      owner: { kind: "free" },
+      folder: "C:\\t",
+      file: "C:\\t\\b1.output",
+    });
   });
 
   it("drops the tabs of sessions no longer live", () => {

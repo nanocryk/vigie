@@ -978,6 +978,8 @@ export type CliLine =
       isMeta: boolean;
       /** Written by the CLI, not typed: a loaded skill's text, a subagent's brief. */
       isSynthetic: boolean;
+      /** What wrote the message when not the user, such as `task-notification`. */
+      origin: string | null;
       content: string | ContentBlock[];
       /** The CLI's structured result of the tool call answered by this line, if any. */
       toolUseResult: unknown;
@@ -1040,6 +1042,11 @@ function parseTaskLine(raw: Record<string, unknown>): TaskLine | null {
 
 function stringOrNull(raw: unknown): string | null {
   return typeof raw === "string" ? raw : null;
+}
+
+/** The `kind` of a user line's `origin`, such as `task-notification`. */
+function originKind(raw: unknown): string | null {
+  return isRecord(raw) ? stringOrNull(raw["kind"]) : null;
 }
 
 function toolResultText(raw: unknown): string {
@@ -1135,6 +1142,7 @@ export function parseCliLine(raw: unknown): CliLine {
         isReplay: raw["isReplay"] === true,
         isMeta: raw["isMeta"] === true,
         isSynthetic: raw["isSynthetic"] === true,
+        origin: originKind(raw["origin"]),
         content: parsed,
         toolUseResult: raw["tool_use_result"],
       };

@@ -15,12 +15,15 @@ import { Markdown } from "@/components/Markdown";
 import { useClock, useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
+import { changeExplorer, openFileInLastFree } from "@/files";
 import { formatSpan } from "@/gauges";
+import { navigate } from "@/route";
 import type { BackgroundView } from "@/wire";
 import type { Beginning, Request } from "@/history";
 import {
   type Delivery,
   type Item,
+  type TaskEndStatus,
   type ToolStatus,
   quietWork,
   relayFailureText,
@@ -245,6 +248,42 @@ function ToolRow({
   );
 }
 
+const TASK_END_MARK: Record<TaskEndStatus, { text: string; className: string }> = {
+  ok: { text: "ok", className: "text-muted-foreground" },
+  stopped: { text: "--", className: "text-muted-foreground" },
+  error: { text: "err", className: "text-destructive" },
+};
+
+/** A background task's end, shown like a tool row; tapping it shows the notification. */
+function TaskEndRow({ item }: { item: Extract<Item, { kind: "task_end" }> }) {
+  const mark = TASK_END_MARK[item.status];
+  const outputFile = item.outputFile;
+  return (
+    <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
+      <summary className={TOOL_SUMMARY}>
+        <span className={`voice-code w-7 shrink-0 text-xs ${mark.className}`}>{mark.text}</span>
+        <span className="voice-ui shrink-0">Background</span>
+        <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
+      </summary>
+      <div className="mt-1 mr-2 ml-9 space-y-2">
+        {outputFile !== null && (
+          <button
+            type="button"
+            onClick={() => {
+              changeExplorer((state) => openFileInLastFree(state, outputFile));
+              navigate({ kind: "files" });
+            }}
+            className="text-primary voice-ui rounded-[5px] border px-2 py-0.5 text-xs"
+          >
+            Open output
+          </button>
+        )}
+        <pre className={PANEL}>{item.raw}</pre>
+      </div>
+    </details>
+  );
+}
+
 /** A file change, TUI style: open until its header is tapped, open again after a reload. */
 function DiffRow({ item, diff, stamp }: { item: ToolItem; diff: FileDiff; stamp: string | null }) {
   const [open, setOpen] = useState(true);
@@ -463,6 +502,8 @@ const ItemView = memo(function ItemView({
           </button>
         </div>
       );
+    case "task_end":
+      return <TaskEndRow item={item} />;
     case "brief":
       return (
         <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
