@@ -139,21 +139,14 @@ function useTweened(target: number): number {
   return value;
 }
 
-/** Session rows label a gauge; window rows carry the time left, up to `6d23h/7d`. */
-const LABEL_WIDTH = { session: "w-[5ch]", window: "w-[8ch]" };
-
-function Row({
-  label,
-  width = "session",
-  children,
-}: {
-  label: string;
-  width?: keyof typeof LABEL_WIDTH;
-  children: ReactNode;
-}) {
+/**
+ * Every row has the same label and figures widths, so all tracks line up. The
+ * label fits a window's time left, up to `6d23h/7d`. Text on each side hugs the track.
+ */
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex h-4 items-center gap-2">
-      <span className={`text-muted-foreground shrink-0 tabular-nums ${LABEL_WIDTH[width]}`}>
+      <span className="text-muted-foreground w-[8ch] shrink-0 text-right tabular-nums">
         {label}
       </span>
       {children}
@@ -161,39 +154,22 @@ function Row({
   );
 }
 
-function Figures({
-  main,
-  side,
-  className = "",
-}: {
-  main: ReactNode;
-  side?: string;
-  className?: string;
-}) {
-  return (
-    <>
-      <span className={`w-[8ch] shrink-0 text-right tabular-nums ${className}`}>{main}</span>
-      {side !== undefined && (
-        <span className="text-muted-foreground w-[4ch] shrink-0 text-right tabular-nums">
-          {side}
-        </span>
-      )}
-    </>
-  );
+function Figures({ main, className = "" }: { main: ReactNode; className?: string }) {
+  return <span className={`w-[8ch] shrink-0 tabular-nums ${className}`}>{main}</span>;
 }
 
 function EmptyRow({ label }: { label: string }) {
   return (
     <Row label={label}>
       <div className={EMPTY_TRACK} />
-      <Figures main="--" side="" />
+      <Figures main="--" />
     </Row>
   );
 }
 
 function EmptyWindowRow({ kind }: { kind: WindowKind }) {
   return (
-    <Row label={`--/${kind}`} width="window">
+    <Row label={`--/${kind}`}>
       <div className={EMPTY_TRACK} />
       <Figures main="--" />
     </Row>
@@ -205,8 +181,8 @@ function WindowRow({ kind, report, now }: { kind: WindowKind; report: WindowRepo
   const projected = useTweened(report.projected);
   const bar = windowBar(kind, { ...report, used, projected });
   return (
-    <Row label={`${formatSpan(Date.parse(report.resets_at) - now)}/${kind}`} width="window">
-      <div className={TRACK}>
+    <Row label={`${formatSpan(Date.parse(report.resets_at) - now)}/${kind}`}>
+      <div className={TRACK} style={kind === "7d" ? tickStyle(100 / 7) : undefined}>
         <div
           className={`absolute inset-y-0 left-0 ${bar.full ? "bg-destructive" : "bg-foreground"}`}
           style={{ width: `${bar.spent}%` }}
@@ -271,11 +247,7 @@ function ContextRow({ context }: { context: ContextView | null }) {
           style={{ width: `${Math.min(100, percentage)}%` }}
         />
       </div>
-      <Figures
-        main={formatPercent(percentage)}
-        side={formatTokens(context.used_tokens)}
-        className={CONTEXT_TEXT[tone]}
-      />
+      <Figures main={formatPercent(percentage)} className={CONTEXT_TEXT[tone]} />
     </Row>
   );
 }
@@ -285,7 +257,7 @@ function AgentContextRow({ promptTokens }: { promptTokens: number }) {
   return (
     <Row label="ctx">
       <div className={EMPTY_TRACK} />
-      <Figures main={promptTokens > 0 ? formatTokens(promptTokens) : "--"} side="" />
+      <Figures main={promptTokens > 0 ? formatTokens(promptTokens) : "--"} />
     </Row>
   );
 }
@@ -298,7 +270,7 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
       return (
         <Row label="cache">
           <div className={`${EMPTY_TRACK} border-gauge-cold`} />
-          <Figures main="cold" side="" className="text-gauge-cold" />
+          <Figures main="cold" className="text-gauge-cold" />
         </Row>
       );
     case "warm":
@@ -312,7 +284,6 @@ function CacheRow({ gauge }: { gauge: CacheGauge }) {
           </div>
           <Figures
             main={formatSpan(gauge.remainingMs)}
-            side=""
             className={gauge.low ? "text-gauge-glow" : ""}
           />
         </Row>
@@ -361,9 +332,9 @@ export function NeedsYouColumn({ sessions }: { sessions: readonly SessionView[] 
 }
 
 /**
- * The top bar, then a thin bar. The side slots keep fixed widths so the account
- * column sits at the same place on every screen. Gauge columns are side by side
- * from 600 px, stacked below.
+ * The top bar, then a thin bar. The gauges grow to the discussion's width first,
+ * then the side slots share what is left equally, keeping the gauges centered.
+ * Gauge columns are side by side from 600 px, stacked below.
  */
 export function Header({
   left,
@@ -389,19 +360,17 @@ export function Header({
   const now = useClock(1000);
   return (
     <header className="shrink-0">
-      <div className="flex items-start gap-4 border-b px-2 py-1.5">
+      <div className="grid grid-cols-[minmax(6rem,1fr)_minmax(0,64rem)_minmax(3.5rem,1fr)] items-start gap-4 border-b px-2 py-1.5">
         {/* Not clipped: the Home button's pulse glows past it. */}
-        <div className="flex w-24 shrink-0 items-center self-center whitespace-nowrap">
-          {left}
-        </div>
+        <div className="flex items-center self-center whitespace-nowrap">{left}</div>
         <div
           aria-label="Usage, context and cache"
-          className="voice-code grid min-w-0 flex-1 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
+          className="voice-code grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
         >
           <AccountColumn usage={usage} now={now} />
           {column}
         </div>
-        <div className="flex w-14 shrink-0 items-center justify-end gap-1.5 self-center">
+        <div className="flex items-center justify-end gap-1.5 self-center">
           {right}
           <button
             type="button"
