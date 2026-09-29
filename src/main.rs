@@ -11,12 +11,12 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use vigie2::BASE_PATH_SLASH;
-use vigie2::auth::{Auth, Registry, state_dir};
-use vigie2::child::Program;
-use vigie2::manager::{Probe, SessionManager};
-use vigie2::net;
-use vigie2::push::{self, Pusher};
-use vigie2::server::{AppState, build_app};
+use vigie2::claude::child::Program;
+use vigie2::http::auth::{Auth, Registry, state_dir};
+use vigie2::http::net;
+use vigie2::http::push::{self, Pusher};
+use vigie2::http::server::{AppState, build_app};
+use vigie2::session::manager::{Probe, SessionManager};
 use vigie2::store::Store;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7879";

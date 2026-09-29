@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::protocol::CanUseTool;
+use crate::claude::protocol::CanUseTool;
 
 const SAFETY_CHECK: &str = "safetyCheck";
 /// Words that run the command after them.

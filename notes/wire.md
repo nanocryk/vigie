@@ -1,6 +1,6 @@
 # Client protocol
 
-Messages between the server and its clients: the WebSocket protocol at `/api/ws` and the REST bodies. Types in `src/wire.rs`, mirrored by `web/src/wire.ts`. `GET /api/usage` answers `usage::Snapshot`.
+Messages between the server and its clients: the WebSocket protocol at `/api/ws` and the REST bodies. Types in `src/http/wire.rs`, mirrored by `web/src/wire.ts`. `GET /api/usage` answers `usage::Snapshot`.
 
 WebSocket frames are JSON text tagged by `type`.
 

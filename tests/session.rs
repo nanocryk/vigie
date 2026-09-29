@@ -10,10 +10,10 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vigie2::child::{Effort, Launch, ModelSettings};
-use vigie2::grant::GrantKind;
-use vigie2::protocol::{Delta, Inbound, PermissionMode, ResultMessage, StreamEventBody};
-use vigie2::replay::Recording;
+use vigie2::claude::child::{Effort, Launch, ModelSettings};
+use vigie2::claude::protocol::{Delta, Inbound, PermissionMode, ResultMessage, StreamEventBody};
+use vigie2::claude::replay::Recording;
+use vigie2::session::grant::GrantKind;
 use vigie2::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
 };
@@ -892,7 +892,7 @@ fn relay_script(wrapped: &str) -> String {
 
 #[tokio::test]
 async fn a_subagent_asks_through_the_parent_and_takes_a_faithful_relay() {
-    use vigie2::agents::{self, AgentState, RelayOutcome};
+    use vigie2::session::agents::{self, AgentState, RelayOutcome};
 
     let text = "Say PINEAPPLE.";
     let wrapped = agents::wrap("sleeper", "a1", text);
@@ -1019,7 +1019,7 @@ const FILE_SCRIPT: &str = r#"
 #[cfg(windows)]
 #[tokio::test]
 async fn a_file_granted_for_good_is_allowed_by_the_host() {
-    use vigie2::grant::{FileKind, FileOffer};
+    use vigie2::session::grant::{FileKind, FileOffer};
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("file.ndjson");

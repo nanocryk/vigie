@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api::ApiError;
+use crate::http::api::ApiError;
 
 /// Text past this is cut and flagged truncated.
 pub const TEXT_MAX_BYTES: u64 = 2 * 1024 * 1024;

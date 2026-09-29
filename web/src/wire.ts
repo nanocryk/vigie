@@ -1,4 +1,4 @@
-// Mirror of `src/wire.rs`: the websocket protocol at `api/ws` and the bodies of
+// Mirror of `src/http/wire.rs`: the websocket protocol at `api/ws` and the bodies of
 // `api/sessions` and `api/catalog`, and the part of `api/usage` the app reads. Envelopes are validated strictly; CLI lines and host events of
 // unknown shape are kept as raw values instead of failing.
 

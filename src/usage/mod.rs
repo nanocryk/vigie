@@ -23,7 +23,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::protocol::PermissionMode;
+use crate::claude::protocol::PermissionMode;
 use crate::usage::db::UsageDb;
 use crate::usage::estimate::Confidence;
 use crate::usage::facts::{Fact, Moment};

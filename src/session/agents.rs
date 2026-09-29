@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::gauges::{Cache, FIVE_MINUTE_TTL_SECS, MainRequest};
-use crate::protocol::{ContentBlock, Inbound, MessageContent, System};
+use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, System};
+use crate::session::gauges::{Cache, FIVE_MINUTE_TTL_SECS, MainRequest};
 
 /// Tools starting a subagent.
 const AGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
@@ -439,7 +439,7 @@ fn message_text(content: &MessageContent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::replay::recorded_lines;
+    use crate::claude::replay::recorded_lines;
 
     const SLEEPER: &str = "toolu_012QcBdgY7ftdrny3oJtHMt5";
     const STOPPER: &str = "toolu_015G4gKRa122iYWaHqcCUYmB";

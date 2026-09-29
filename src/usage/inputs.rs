@@ -8,7 +8,7 @@
 use chrono::DateTime;
 use serde_json::Number;
 
-use crate::protocol::{AssistantMessage, GetUsageResponse, RateLimitInfo, Usage};
+use crate::claude::protocol::{AssistantMessage, GetUsageResponse, RateLimitInfo, Usage};
 use crate::usage::db::MessageTokens;
 use crate::usage::units::{Pct, Timestamp};
 use crate::usage::window::{WindowKind, WindowState};
@@ -92,8 +92,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{Reading, from_assistant, from_get_usage, from_rate_limit_event};
-    use crate::protocol::{GetUsageResponse, Inbound};
-    use crate::replay::{self, Recording};
+    use crate::claude::protocol::{GetUsageResponse, Inbound};
+    use crate::claude::replay::{self, Recording};
     use crate::usage::mix::{Family, Mix};
     use crate::usage::window::WindowKind;
 

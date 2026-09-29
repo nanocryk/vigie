@@ -21,10 +21,10 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::auth::{Auth, AuthedDevice};
-use crate::manager::SessionManager;
+use crate::http::auth::{Auth, AuthedDevice};
+use crate::http::wire::{Action, ClientMessage, Command, ServerMessage, Subscription, WireEvent};
+use crate::session::manager::SessionManager;
 use crate::session::{Event, EventBody, HostEvent, Session};
-use crate::wire::{Action, ClientMessage, Command, ServerMessage, Subscription, WireEvent};
 
 /// Stored events read per history query.
 const PAGE: u32 = 500;

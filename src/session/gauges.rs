@@ -13,7 +13,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{AssistantMessage, ContextCategory, ResultMessage, Usage};
+use crate::claude::protocol::{AssistantMessage, ContextCategory, ResultMessage, Usage};
 
 pub const ONE_HOUR_TTL_SECS: u32 = 60 * 60;
 pub const FIVE_MINUTE_TTL_SECS: u32 = 5 * 60;
@@ -186,8 +186,8 @@ impl Context {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Inbound;
-    use crate::replay::recorded_lines;
+    use crate::claude::protocol::Inbound;
+    use crate::claude::replay::recorded_lines;
 
     const RECORDINGS: [&str; 6] = [
         "basic",

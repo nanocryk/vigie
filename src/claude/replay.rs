@@ -17,7 +17,7 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Lines};
 
-use crate::protocol::Inbound;
+use crate::claude::protocol::Inbound;
 
 /// Keys whose values legitimately differ between a recorded run and a replay.
 const RUN_SPECIFIC_KEYS: [&str; 3] = ["session_id", "uuid", "timestamp"];
@@ -157,7 +157,7 @@ fn initialize_ids(recording: &Recording) -> HashSet<String> {
 /// The `get_usage` answer of the `basic` recording, served for any `get_usage`
 /// the script does not expect.
 static CANNED_USAGE: LazyLock<Value> = LazyLock::new(|| {
-    let recording = Recording::parse(include_str!("../spike/runs/basic.ndjson"))
+    let recording = Recording::parse(include_str!("../../spike/runs/basic.ndjson"))
         .expect("basic recording parses");
     let request_id = recording
         .steps

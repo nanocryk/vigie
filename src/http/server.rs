@@ -14,10 +14,10 @@ use axum::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::auth::{self, Auth};
-use crate::manager::SessionManager;
-use crate::push::{self, Pusher};
-use crate::{api, files, git, ws};
+use crate::http::auth::{self, Auth};
+use crate::http::push::{self, Pusher};
+use crate::http::{api, files, git, ws};
+use crate::session::manager::SessionManager;
 
 /// Path prefix everything is served under. Android builds a WebAPK's intent
 /// filter from scheme, host and path, never the port, so two apps behind one
@@ -120,8 +120,8 @@ mod auth_gate_tests {
     //! adding it here means the coverage silently gaps, so keep the two
     //! tables in sync (one entry per route/method registered in that fn).
     use super::*;
-    use crate::auth::Registry;
-    use crate::child::Program;
+    use crate::claude::child::Program;
+    use crate::http::auth::Registry;
     use crate::store::Store;
     use axum::body::Body;
     use axum::extract::ConnectInfo;

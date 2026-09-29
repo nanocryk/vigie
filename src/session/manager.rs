@@ -13,17 +13,18 @@ use tokio::task::AbortHandle;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use crate::agents::AgentView;
-use crate::background::BackgroundView;
-use crate::child::{Effort, Launch, ModelSettings, Program};
-use crate::gauges::{self, MainRequest};
-use crate::protocol::{Inbound, PermissionMode, System};
+use crate::claude::child::{Effort, Launch, ModelSettings, Program};
+use crate::claude::protocol::{Inbound, PermissionMode, System};
+use crate::http::wire;
+use crate::session::agents::AgentView;
+use crate::session::background::BackgroundView;
+use crate::session::gauges::{self, MainRequest};
+use crate::session::seed;
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
 use crate::store::{SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 use crate::usage::{SessionContext, Snapshot};
-use crate::{seed, wire};
 
 /// Period of `get_usage` samples while at least one session is live.
 pub const USAGE_INTERVAL: Duration = Duration::from_secs(5 * 60);

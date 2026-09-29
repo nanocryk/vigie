@@ -25,7 +25,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::api::ApiError;
+use crate::http::api::ApiError;
 use crate::{BASE_PATH, BASE_PATH_SLASH};
 
 pub const COOKIE_NAME: &str = "vigie2_session";
@@ -727,7 +727,7 @@ pub async fn pair(
     Extension(device): Extension<AuthedDevice>,
     req: Option<Json<PairReq>>,
 ) -> Response {
-    let known_ips: std::collections::HashSet<String> = crate::net::all_reachable_ipv4()
+    let known_ips: std::collections::HashSet<String> = crate::http::net::all_reachable_ipv4()
         .into_iter()
         .map(|ip| ip.to_string())
         .collect();
@@ -778,7 +778,7 @@ pub async fn pair(
 pub struct InterfacesResp {
     port: u16,
     scheme: String,
-    interfaces: Vec<crate::net::Interface>,
+    interfaces: Vec<crate::http::net::Interface>,
     public_hosts: Vec<String>,
 }
 
@@ -834,7 +834,7 @@ pub async fn interfaces(State(state): State<crate::AppState>) -> Json<Interfaces
     Json(InterfacesResp {
         port: state.pair_port,
         scheme: state.pair_scheme.as_str().to_string(),
-        interfaces: crate::net::enumerate(),
+        interfaces: crate::http::net::enumerate(),
         public_hosts: state.pair_extra_hosts.iter().cloned().collect(),
     })
 }

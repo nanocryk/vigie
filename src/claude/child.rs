@@ -12,7 +12,7 @@ use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::protocol::PermissionMode;
+use crate::claude::protocol::PermissionMode;
 
 /// Set on every child so hooks can tell which vigie2 session runs them.
 pub const SESSION_ENV: &str = "VIGIE2_SESSION_ID";

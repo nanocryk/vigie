@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agents::AgentView;
-use crate::background::BackgroundView;
-use crate::child::Effort;
-use crate::gauges::{Cache, Context};
-use crate::manager::LiveView;
-use crate::protocol::PermissionMode;
+use crate::claude::child::Effort;
+use crate::claude::protocol::PermissionMode;
+use crate::session::agents::AgentView;
+use crate::session::background::BackgroundView;
+use crate::session::gauges::{Cache, Context};
+use crate::session::manager::LiveView;
 use crate::session::{Activity, Answer, Event, EventBody, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
 

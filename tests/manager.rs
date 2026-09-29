@@ -10,14 +10,14 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
-use vigie2::child::Launch;
-use vigie2::gauges::ContextSource;
-use vigie2::manager::{Notice, NoticeKind, Probe, SessionManager};
-use vigie2::protocol::{AppliedSettings, Inbound, PermissionMode};
-use vigie2::replay::{
+use vigie2::claude::child::Launch;
+use vigie2::claude::protocol::{AppliedSettings, Inbound, PermissionMode};
+use vigie2::claude::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
     CANNED_DEFAULT_MODEL, Direction, Recording,
 };
+use vigie2::session::gauges::ContextSource;
+use vigie2::session::manager::{Notice, NoticeKind, Probe, SessionManager};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
 use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 
@@ -718,14 +718,15 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     let store = Store::open(&env.db).unwrap();
     let row = store.session(id).await.unwrap().unwrap();
     let expected_seed =
-        vigie2::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap()).seed(
-            &env.cwd,
-            row.created_at.with_timezone(&chrono::Local).date_naive(),
-        );
+        vigie2::session::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap())
+            .seed(
+                &env.cwd,
+                row.created_at.with_timezone(&chrono::Local).date_naive(),
+            );
     drop(store);
     let script = env.script(
         "seeded.ndjson",
-        &user_script(&vigie2::seed::first_message(
+        &user_script(&vigie2::session::seed::first_message(
             &expected_seed.text,
             "next step",
         )),

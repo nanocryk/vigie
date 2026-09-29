@@ -14,7 +14,7 @@ use std::path::Path;
 use chrono::NaiveDate;
 use serde_json::Value;
 
-use crate::protocol::{ContentBlock, Inbound, MessageContent};
+use crate::claude::protocol::{ContentBlock, Inbound, MessageContent};
 use crate::session::HostEvent;
 use crate::store::{EventKind, StoredEvent};
 

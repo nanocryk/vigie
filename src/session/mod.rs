@@ -1,7 +1,17 @@
 //! One long-lived `claude` child per session, driven by an actor task.
 //!
 //! Commands go in through `Session`. Every stdout line and a few host events come
-//! out on a broadcast channel, numbered by a per-session sequence.
+//! out on a broadcast channel, numbered by a per-session sequence. The
+//! submodules track what the session runs and decides, and `manager` holds
+//! every session.
+
+pub mod agents;
+pub mod background;
+pub mod danger;
+pub mod gauges;
+pub mod grant;
+pub mod manager;
+pub mod seed;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -18,12 +28,13 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::agents::{self, AgentState, AgentTracker, AgentView, RelayFilter, RelayOutcome};
-use crate::background::{BackgroundTracker, BackgroundView};
-use crate::child::{Child, Effort, Launch, ModelSettings, Program};
-use crate::danger::{self, Danger};
-use crate::grant::{self, FileOffer, FolderOffer};
-use crate::protocol::{
+use agents::{AgentState, AgentTracker, AgentView, RelayFilter, RelayOutcome};
+use background::{BackgroundTracker, BackgroundView};
+use danger::Danger;
+use grant::{FileOffer, FolderOffer};
+
+use crate::claude::child::{Child, Effort, Launch, ModelSettings, Program};
+use crate::claude::protocol::{
     AppliedSettings, CanUseTool, CliRequest, ContextUsageResponse, ControlRequest, ControlResponse,
     Extra, GetUsageResponse, HostRequest, Inbound, InitCommand, InitModel, InitializeResponse,
     InterruptResponse, Outbound, PermissionMode, PermissionResult, Priority,
@@ -1107,7 +1118,7 @@ impl Actor {
             });
         }
         let written = match &seed {
-            Some(seed) => crate::seed::first_message(seed, &text),
+            Some(seed) => crate::session::seed::first_message(seed, &text),
             None => text,
         };
         let session_id = self.launch.claude_session_id().to_string();
@@ -1384,7 +1395,7 @@ fn permission_result(ask: &CanUseTool, answer: &Answer, cwd: &Path) -> Result<Pe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::replay;
+    use crate::claude::replay;
 
     fn recorded_lines(name: &str) -> Vec<Inbound> {
         replay::recorded_lines(name).expect("recording")

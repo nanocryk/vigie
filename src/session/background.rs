@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{Inbound, System};
+use crate::claude::protocol::{Inbound, System};
 
 const LOCAL_AGENT: &str = "local_agent";
 

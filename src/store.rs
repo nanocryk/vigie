@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::child::{Effort, Launch, ModelSettings};
-use crate::gauges::{self, Cache, ContextSource, MainRequest, Windows};
-use crate::protocol::{
+use crate::claude::child::{Effort, Launch, ModelSettings};
+use crate::claude::protocol::{
     AppliedSettings, ContextUsageResponse, GetUsageResponse, Inbound, PermissionMode,
 };
-use crate::push::{PushKeys, PushSubscription};
+use crate::http::push::{PushKeys, PushSubscription};
+use crate::session::gauges::{self, Cache, ContextSource, MainRequest, Windows};
 use crate::session::{
     CommandInfo, Event, EventBody, GateFailure, HostEvent, ModelChoice, StopReason,
 };
@@ -1035,7 +1035,7 @@ impl Store {
         after_seq: u64,
         start: DateTime<Utc>,
     ) -> u64 {
-        use crate::replay::{Direction, Recording};
+        use crate::claude::replay::{Direction, Recording};
         use crate::session::Line;
 
         let recording = Recording::named(name).expect("recording");
@@ -1349,8 +1349,8 @@ fn json_error(err: serde_json::Error) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::child::Launch;
-    use crate::replay::Recording;
+    use crate::claude::child::Launch;
+    use crate::claude::replay::Recording;
     use crate::session::{HostEvent, Line, RestartMode};
 
     /// A store in a fresh folder, with one session started in that folder.
@@ -1576,7 +1576,7 @@ mod tests {
         assert_eq!(context.autocompact_threshold, Some(900_000));
         assert_eq!(
             context.categories,
-            [crate::protocol::ContextCategory {
+            [crate::claude::protocol::ContextCategory {
                 name: "Messages".into(),
                 tokens: 12_000,
                 kind: "used".into(),

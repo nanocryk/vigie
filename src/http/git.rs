@@ -15,8 +15,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api::ApiError;
-use crate::files::{PathQuery, canonical, display_path, is_binary};
+use crate::http::api::ApiError;
+use crate::http::files::{PathQuery, canonical, display_path, is_binary};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A file with more changed lines than this keeps its counts but not its lines.

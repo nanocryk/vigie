@@ -1129,7 +1129,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::replay::runs_dir;
+    use crate::claude::replay::runs_dir;
 
     #[test]
     fn permission_modes_keep_their_wire_string() {

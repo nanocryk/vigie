@@ -22,19 +22,19 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
-use vigie2::auth::{self, Auth, Device, Registry};
-use vigie2::child::{Effort, Launch};
-use vigie2::manager::SessionManager;
-use vigie2::protocol::PermissionMode;
-use vigie2::push::{Pusher, Vapid};
-use vigie2::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
-use vigie2::server::{AppState, build_app};
-use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
-use vigie2::store::{EventKind, SessionState, Store};
-use vigie2::wire::{
+use vigie2::claude::child::{Effort, Launch};
+use vigie2::claude::protocol::PermissionMode;
+use vigie2::claude::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
+use vigie2::http::auth::{self, Auth, Device, Registry};
+use vigie2::http::push::{Pusher, Vapid};
+use vigie2::http::server::{AppState, build_app};
+use vigie2::http::wire::{
     Action, CACHE_COLD, ClientMessage, Command, SESSION_LIVE, ServerMessage, SessionList,
     SessionView, Subscription, WireEvent,
 };
+use vigie2::session::manager::SessionManager;
+use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
+use vigie2::store::{EventKind, SessionState, Store};
 
 use common::{TIMEOUT, fake};
 

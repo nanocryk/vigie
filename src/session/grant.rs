@@ -8,8 +8,8 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::danger;
-use crate::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
+use crate::claude::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
+use crate::session::danger;
 
 pub const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const ACCEPT_EDITS: &str = "acceptEdits";

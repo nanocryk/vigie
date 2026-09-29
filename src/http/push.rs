@@ -26,10 +26,10 @@ use tracing::warn;
 
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::api::ApiError;
-use crate::auth::{Auth, AuthedDevice};
-use crate::manager::{CACHE_WARNING_BEFORE, Notice, NoticeKind, SessionManager};
-use crate::server::AppState;
+use crate::http::api::ApiError;
+use crate::http::auth::{Auth, AuthedDevice};
+use crate::http::server::AppState;
+use crate::session::manager::{CACHE_WARNING_BEFORE, Notice, NoticeKind, SessionManager};
 use crate::store::Store;
 
 const VAPID_JWT_TTL_SECS: i64 = 12 * 3600;

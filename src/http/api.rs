@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 use crate::AppState;
-use crate::manager::SessionManager;
-use crate::wire::{CreateSession, SessionList, SessionView};
+use crate::http::wire::{CreateSession, SessionList, SessionView};
+use crate::session::manager::SessionManager;
 
 /// A failed request, answered `{"error": code}` with its status.
 #[derive(Debug)]
