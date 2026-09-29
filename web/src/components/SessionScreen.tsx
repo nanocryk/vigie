@@ -235,6 +235,11 @@ function Composer({
   );
 }
 
+/** The thin bar's background pill, or null with none running. */
+function backgroundLabel(count: number): string | null {
+  return count === 0 ? null : `${count} background`;
+}
+
 const THIN_BUTTON =
   "text-primary hover:bg-muted flex shrink-0 items-center gap-1 rounded-[5px] border px-1.5 leading-5 whitespace-nowrap";
 
@@ -653,6 +658,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       )
       .finally(() => setStoppingAgents(false));
   };
+  const [bottomRequest, setBottomRequest] = useState(0);
   const stopAgent = (taskId: string) =>
     client.command({ type: "stop_task", session: id, task_id: taskId, client_id: client.newClientId() });
   const openAgents = () => {
@@ -796,6 +802,12 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
             onOpen={toggleMenu}
             agents={workingLabel(liveAgents)}
             onAgents={() => (agentsOpen ? setAgentsOpen(false) : openAgents())}
+            background={backgroundLabel(view?.background.length ?? 0)}
+            onBackground={() => {
+              // The rows live at the end of the main discussion.
+              if (viewing !== null) switchTo(null);
+              setBottomRequest((count) => count + 1);
+            }}
           />
         }
         end={
@@ -850,6 +862,11 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
+        background={viewing === null ? (view?.background ?? []) : []}
+        onStopTask={async (taskId) => {
+          await stopAgent(taskId);
+        }}
+        bottomRequest={bottomRequest}
         panel={
           panel.kind !== "closed" ? (
             <CommandsPanel

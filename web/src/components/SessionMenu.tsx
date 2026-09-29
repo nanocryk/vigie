@@ -418,6 +418,8 @@ export function MenuPills({
   onOpen,
   agents,
   onAgents,
+  background,
+  onBackground,
 }: {
   mode: string | null;
   modelLabel: string;
@@ -426,6 +428,9 @@ export function MenuPills({
   /** `2 agents working`; null hides the pill. */
   agents: string | null;
   onAgents: () => void;
+  /** `1 background`; null hides the pill. */
+  background: string | null;
+  onBackground: () => void;
 }) {
   return (
     <>
@@ -454,6 +459,15 @@ export function MenuPills({
           className={`${PILL} bg-card border-primary text-primary`}
         >
           {agents}
+        </button>
+      )}
+      {background !== null && (
+        <button
+          type="button"
+          onClick={onBackground}
+          className={`${PILL} bg-card text-muted-foreground`}
+        >
+          {background}
         </button>
       )}
     </>

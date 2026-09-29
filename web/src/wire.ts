@@ -43,8 +43,19 @@ export interface SessionView {
   applied_effort: string | null;
   /** Subagents of the running child, oldest first; empty when not live. */
   agents: AgentView[];
+  /** Background tasks of the running child, oldest first; empty when not live. */
+  background: BackgroundView[];
   /** Null once the user saw the discussion. */
   unread: Unread | null;
+}
+
+/** A background task of the running child, such as a command run in the background. */
+export interface BackgroundView {
+  task_id: string;
+  /** Such as `local_bash`. */
+  task_type: string | null;
+  description: string | null;
+  started_at: string;
 }
 
 export type Unread = "finished" | "stopped";
@@ -483,8 +494,24 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     applied_model: optStr(value, "applied_model", label),
     applied_effort: optStr(value, "applied_effort", label),
     agents: parseAgents(value["agents"], `${label}.agents`),
+    background: parseBackground(value["background"], `${label}.background`),
     unread: parseUnread(value["unread"], `${label}.unread`),
   };
+}
+
+function parseBackground(raw: unknown, label: string): BackgroundView[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) fail(label, "expected an array", raw);
+  return raw.map((item: unknown, index) => {
+    const itemLabel = `${label}[${index}]`;
+    const value = record(item, itemLabel);
+    return {
+      task_id: str(value, "task_id", itemLabel),
+      task_type: optStr(value, "task_type", itemLabel),
+      description: optStr(value, "description", itemLabel),
+      started_at: str(value, "started_at", itemLabel),
+    };
+  });
 }
 
 function parseUnread(raw: unknown, label: string): Unread | null {

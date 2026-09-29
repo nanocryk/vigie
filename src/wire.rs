@@ -181,6 +181,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::agents::AgentView;
+use crate::background::BackgroundView;
 use crate::gauges::{Cache, Context};
 use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
@@ -430,13 +431,20 @@ pub struct SessionView {
     pub applied_effort: Option<String>,
     /// Subagents of the running child, oldest first; empty when not live.
     pub agents: Vec<AgentView>,
+    /// Background tasks of the running child, oldest first; empty when not live.
+    pub background: Vec<BackgroundView>,
     /// `None` once the user saw the discussion.
     pub unread: Option<Unread>,
 }
 
 impl SessionView {
     /// `status` is `None` when the child is not running.
-    pub fn new(row: SessionRow, status: Option<LiveStatus>, agents: Vec<AgentView>) -> Self {
+    pub fn new(
+        row: SessionRow,
+        status: Option<LiveStatus>,
+        agents: Vec<AgentView>,
+        background: Vec<BackgroundView>,
+    ) -> Self {
         Self {
             id: row.id,
             cwd: row.cwd,
@@ -457,6 +465,7 @@ impl SessionView {
             applied_model: row.applied.model,
             applied_effort: row.applied.effort,
             agents,
+            background,
             unread: row.unread,
         }
     }

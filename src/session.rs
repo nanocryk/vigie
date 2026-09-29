@@ -19,6 +19,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::agents::{self, AgentState, AgentTracker, AgentView, RelayFilter, RelayOutcome};
+use crate::background::{BackgroundTracker, BackgroundView};
 use crate::child::{Child, Launch, ModelSettings, Program};
 use crate::danger::{self, Danger};
 use crate::grant::{self, FileOffer, FolderOffer};
@@ -415,6 +416,7 @@ pub struct Session {
     events: broadcast::Sender<Arc<Event>>,
     status: watch::Receiver<LiveStatus>,
     agents: watch::Receiver<Vec<AgentView>>,
+    background: watch::Receiver<Vec<BackgroundView>>,
     launch_settings: ModelSettings,
     /// Set once a model or effort change was sent to the child.
     retuned: Arc<AtomicBool>,
@@ -439,6 +441,7 @@ impl Session {
         let (events, first_receiver) = broadcast::channel(EVENT_CAPACITY);
         let (status_sender, status) = watch::channel(LiveStatus::default());
         let (agents_sender, agents) = watch::channel(Vec::new());
+        let (background_sender, background) = watch::channel(Vec::new());
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let actor = Actor {
             id: config.id,
@@ -454,6 +457,8 @@ impl Session {
             tracker: ActivityTracker::default(),
             agents: AgentTracker::default(),
             agents_view: agents_sender,
+            background: BackgroundTracker::default(),
+            background_view: background_sender,
             relays: RelayFilter::default(),
             asks: Vec::new(),
             file_grants: Vec::new(),
@@ -473,6 +478,7 @@ impl Session {
             events,
             status,
             agents,
+            background,
             launch_settings,
             retuned: Arc::new(AtomicBool::new(false)),
         };
@@ -500,6 +506,11 @@ impl Session {
     /// The subagents the child started, oldest first; republished on every change.
     pub fn agents(&self) -> watch::Receiver<Vec<AgentView>> {
         self.agents.clone()
+    }
+
+    /// The running background tasks, oldest first; republished on every change.
+    pub fn background(&self) -> watch::Receiver<Vec<BackgroundView>> {
+        self.background.clone()
     }
 
     /// Writes `agents::wrap` of `text` to the main agent for agent `task_id`,
@@ -742,6 +753,8 @@ struct Actor {
     tracker: ActivityTracker,
     agents: AgentTracker,
     agents_view: watch::Sender<Vec<AgentView>>,
+    background: BackgroundTracker,
+    background_view: watch::Sender<Vec<BackgroundView>>,
     relays: RelayFilter,
     /// In arrival order.
     asks: Vec<PendingAsk>,
@@ -826,6 +839,9 @@ impl Actor {
             if self.agents.on_line(parsed, event.time) {
                 self.publish_agents();
             }
+            if self.background.on_line(parsed, event.time) {
+                self.publish_background();
+            }
             for verdict in self.relays.on_line(parsed) {
                 self.emit_verdict(verdict);
             }
@@ -838,6 +854,15 @@ impl Actor {
         self.agents_view.send_if_modified(|current| {
             let changed = *current != agents;
             *current = agents;
+            changed
+        });
+    }
+
+    fn publish_background(&mut self) {
+        let tasks = self.background.tasks().to_vec();
+        self.background_view.send_if_modified(|current| {
+            let changed = *current != tasks;
+            *current = tasks;
             changed
         });
     }
@@ -1249,6 +1274,8 @@ impl Actor {
         }
         self.agents = AgentTracker::default();
         self.publish_agents();
+        self.background = BackgroundTracker::default();
+        self.publish_background();
         self.requests.clear();
         self.mode_requests.clear();
         let stderr_tail = std::mem::take(&mut self.stderr_tail).into();

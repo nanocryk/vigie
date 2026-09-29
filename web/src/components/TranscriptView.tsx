@@ -12,9 +12,11 @@ import {
 
 import { DiffBlock } from "@/components/Diff";
 import { Markdown } from "@/components/Markdown";
-import { useNow } from "@/components/useNow";
+import { useClock, useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
+import { formatSpan } from "@/gauges";
+import type { BackgroundView } from "@/wire";
 import type { Beginning, Request } from "@/history";
 import {
   type Delivery,
@@ -41,6 +43,72 @@ export interface PendingSend {
 }
 
 const BUBBLE = "min-w-0 rounded-[5px] px-3 py-2 text-sm";
+
+/** One row per background task: "In background" during a turn, "Waiting for" once it ended. */
+function BackgroundRows({
+  tasks,
+  waiting,
+  onStop,
+}: {
+  tasks: readonly BackgroundView[];
+  /** The turn ended and Claude waits for these to continue. */
+  waiting: boolean;
+  onStop: (taskId: string) => Promise<void>;
+}) {
+  const now = useClock(1000);
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const stop = (taskId: string) => {
+    setError(null);
+    setStopping((current) => new Set(current).add(taskId));
+    onStop(taskId).catch((err: unknown) => {
+      setError(`Stop failed: ${err instanceof Error ? err.message : String(err)}`);
+      setStopping((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    });
+  };
+  // Full-width bars, like the restart divider.
+  return (
+    <div className="-mx-3 space-y-px pt-2">
+      {tasks.map((task) => {
+        const started = Date.parse(task.started_at);
+        return (
+          <div
+            key={task.task_id}
+            className="bg-muted text-foreground voice-ui flex items-center gap-2 px-3 py-1.5 text-xs"
+          >
+            <span className="min-w-0 flex-1 truncate">
+              <span className="text-muted-foreground">
+                {waiting ? "Waiting for: " : "In background: "}
+              </span>
+              {task.description ?? task.task_id}
+              <span className="text-muted-foreground">
+                {Number.isNaN(started) ? "" : ` · ${formatSpan(now - started)}`}
+              </span>
+              {waiting && (
+                <span className="ml-1.5">
+                  <Dots />
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              disabled={stopping.has(task.task_id)}
+              onClick={() => stop(task.task_id)}
+              className="border-destructive/50 text-destructive hover:bg-destructive/10 shrink-0 rounded-[5px] border px-2 py-0.5 disabled:opacity-50"
+            >
+              {stopping.has(task.task_id) ? "Stopping..." : "Stop"}
+            </button>
+          </div>
+        );
+      })}
+      {error !== null && <p className="text-destructive voice-ui px-3 text-xs">{error}</p>}
+    </div>
+  );
+}
 
 /** Three dots animated in turn: work is going on. */
 function Dots() {
@@ -494,6 +562,9 @@ export function TranscriptView({
   awaiting,
   turnOpen,
   onOpen,
+  background,
+  onStopTask,
+  bottomRequest,
   overlay,
   panel,
 }: {
@@ -515,6 +586,11 @@ export function TranscriptView({
   turnOpen: boolean;
   /** Switches to an agent's discussion, or to the main one with null; kept stable. */
   onOpen: (toolUseId: string | null) => void;
+  /** Background tasks, listed at the end with a Stop button each. */
+  background: readonly BackgroundView[];
+  onStopTask: (taskId: string) => Promise<void>;
+  /** Each change scrolls the view to its bottom. */
+  bottomRequest: number;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
   /** In front of the discussion, positioned by itself. */
@@ -631,11 +707,18 @@ export function TranscriptView({
     };
   }, []);
 
-  const jump = () => {
+  const jump = useCallback(() => {
     atBottom.current = true;
     setShowJump(false);
     stick();
-  };
+  }, [stick]);
+
+  const lastBottomRequest = useRef(bottomRequest);
+  useEffect(() => {
+    if (lastBottomRequest.current === bottomRequest) return;
+    lastBottomRequest.current = bottomRequest;
+    jump();
+  }, [bottomRequest, jump]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -686,6 +769,9 @@ export function TranscriptView({
             >
               <Dots />
             </div>
+          )}
+          {background.length > 0 && (
+            <BackgroundRows tasks={background} waiting={!turnOpen} onStop={onStopTask} />
           )}
         </div>
       </div>

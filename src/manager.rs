@@ -14,6 +14,7 @@ use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 use crate::agents::AgentView;
+use crate::background::BackgroundView;
 use crate::child::{Launch, ModelSettings, Program};
 use crate::gauges::{self, MainRequest};
 use crate::protocol::{Inbound, System};
@@ -318,6 +319,18 @@ impl SessionManager {
             .collect()
     }
 
+    /// Background tasks of every session whose child is running.
+    pub async fn background(&self) -> HashMap<Uuid, Vec<BackgroundView>> {
+        self.inner
+            .live
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, session)| !session.is_closed())
+            .map(|(id, session)| (*id, session.background().borrow().clone()))
+            .collect()
+    }
+
     /// The live session, or a known ended one resumed with `--resume`.
     pub async fn open(&self, id: Uuid) -> Result<Session> {
         let mut live = self.inner.live.lock().await;
@@ -607,6 +620,7 @@ impl SessionManager {
             id,
             session.status(),
             session.agents(),
+            session.background(),
             self.inner.changes.clone(),
         ));
         tokio::spawn(track_attention(
@@ -634,12 +648,14 @@ async fn announce_changes(
     id: Uuid,
     mut status: watch::Receiver<LiveStatus>,
     mut agents: watch::Receiver<Vec<AgentView>>,
+    mut background: watch::Receiver<Vec<BackgroundView>>,
     changes: broadcast::Sender<Uuid>,
 ) {
     loop {
         let changed = tokio::select! {
             changed = status.changed() => changed,
             changed = agents.changed() => changed,
+            changed = background.changed() => changed,
         };
         if changed.is_err() {
             break;

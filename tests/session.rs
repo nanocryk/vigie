@@ -445,6 +445,8 @@ async fn background_task_starts_its_own_turn() {
     let second = harness.until_result().await;
     assert!(second.result.unwrap_or_default().contains("exit"));
     assert_eq!(harness.session.status().borrow().activity, Activity::Idle);
+    // The replay has no gap between the turns, so only the end state is certain.
+    assert!(harness.session.background().borrow().is_empty());
     harness.finish().await;
 }
 
