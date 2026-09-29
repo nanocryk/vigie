@@ -41,6 +41,8 @@ const NEAR_TOP_SCREENS = 1;
 export interface PendingSend {
   id: string;
   text: string;
+  /** Paths of the attached files. */
+  attachments: readonly string[];
   /** One per attempt; the server's `user_sent` carrying any of them replaces this entry. */
   clientIds: readonly string[];
   status: "sending" | "sent" | "failed";

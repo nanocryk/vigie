@@ -183,6 +183,39 @@ describe("transcript from recordings", () => {
     expect(received.items.at(-1)).toMatchObject({ key: bubble?.key, delivery: "received" });
   });
 
+  it("a message's attachments stay apart from its text, and its composed echo delivers it", () => {
+    const files = ["C:\\up\\0a1b2c3d4e5f-shot.png"];
+    const state = applyEvents(emptyTranscript, [
+      {
+        session: SESSION,
+        seq: 1,
+        time: "t",
+        kind: "host",
+        payload: { event: "user_sent", text: "look", attachments: files, client_id: "c1" },
+      },
+      {
+        session: SESSION,
+        seq: 2,
+        time: "t",
+        kind: "line",
+        payload: {
+          type: "user",
+          message: { role: "user", content: "look\n\nAttachments:\n- C:\\up\\0a1b2c3d4e5f-shot.png" },
+          parent_tool_use_id: null,
+          session_id: "s",
+          isReplay: true,
+        },
+      },
+    ]);
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]).toMatchObject({
+      kind: "user",
+      text: "look",
+      attachments: files,
+      delivery: "received",
+    });
+  });
+
   it("cd: a command the CLI answers locally is marked handled", () => {
     const state = transcript("cd");
     expect(state.items.map(shape)).toEqual([
@@ -220,7 +253,7 @@ describe("transcript from recordings", () => {
         seq: midTurn.lastSeq + 1,
         time: "t",
         kind: "host",
-        payload: { event: "user_sent", text: "queued", client_id: "q" },
+        payload: { event: "user_sent", text: "queued", attachments: [], client_id: "q" },
       },
     ]);
     const firstResult = events.findIndex(

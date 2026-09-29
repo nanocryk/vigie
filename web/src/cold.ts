@@ -1,3 +1,4 @@
+import { attachmentsField, sendableText } from "@/attachments";
 import { type CacheGauge, formatPercent, formatTokens } from "@/gauges";
 import { CACHE_COLD, type ContextView, type RestartMode, SESSION_LIVE } from "@/wire";
 
@@ -49,10 +50,10 @@ export function rewarmField(
 }
 
 export type ColdAction =
-  | { kind: "send"; text: string }
+  | { kind: "send"; text: string; attachments?: string[] }
   | { kind: "unblock" }
   | { kind: "restore" }
-  | { kind: "restart"; mode: RestartMode; text: string | null };
+  | { kind: "restart"; mode: RestartMode; text: string | null; attachments?: string[] };
 
 /**
  * The cold-cache panel replaces the composer while the cache is cold and no turn
@@ -73,21 +74,30 @@ export function coldPanelShown(input: {
   return spell === input.refusedAt || !input.busy || input.asks > 0;
 }
 
-/** What a choice does with the composer draft. */
-export function coldAction(choice: ColdChoice, draft: string): ColdAction {
-  const text = draft.trim() === "" ? null : draft;
+/** What a choice does with the composer draft: its text and attached files. */
+export function coldAction(
+  choice: ColdChoice,
+  draft: string,
+  attachments: readonly string[] = [],
+): ColdAction {
+  const text = sendableText(draft, attachments);
+  const files = attachmentsField(attachments);
   switch (choice) {
     case "rewarm":
-      return text === null ? { kind: "unblock" } : { kind: "send", text };
+      return text === null ? { kind: "unblock" } : { kind: "send", text, ...files };
     case "continue":
     case "blank":
-      return { kind: "restart", mode: choice, text };
+      return { kind: "restart", mode: choice, text, ...files };
   }
 }
 
 /** A choice from an archived discussion's panel: the server unarchives on the send or the restart; a bare rewarm restores it. */
-export function archivedAction(choice: ColdChoice, draft: string): ColdAction {
-  const action = coldAction(choice, draft);
+export function archivedAction(
+  choice: ColdChoice,
+  draft: string,
+  attachments: readonly string[] = [],
+): ColdAction {
+  const action = coldAction(choice, draft, attachments);
   return action.kind === "unblock" ? { kind: "restore" } : action;
 }
 

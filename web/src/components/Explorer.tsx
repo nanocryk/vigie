@@ -93,7 +93,7 @@ export const FolderIcon = ({ className }: { className?: string }) => (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   </Icon>
 );
-const FileIcon = ({ className }: { className?: string }) => (
+export const FileIcon = ({ className }: { className?: string }) => (
   <Icon className={className}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
     <path d="M14 3v5h5" />
@@ -129,9 +129,14 @@ const PlusIcon = ({ className }: { className?: string }) => (
     <path d="M12 5v14M5 12h14" />
   </Icon>
 );
-const CloseIcon = ({ className }: { className?: string }) => (
+export const CloseIcon = ({ className }: { className?: string }) => (
   <Icon className={className}>
     <path d="M6 6l12 12M18 6 6 18" />
+  </Icon>
+);
+export const PaperclipIcon = ({ className }: { className?: string }) => (
+  <Icon className={className}>
+    <path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
   </Icon>
 );
 const ChevronIcon = ({ className }: { className?: string }) => (

@@ -1,6 +1,7 @@
 // The model and effort change flow: picks, labels, the choice panel's first
 // button, and what each choice sends. Pure, so the flow is testable without a DOM.
 
+import { attachmentsField, sendableText } from "@/attachments";
 import type { ColdChoice } from "@/cold";
 import type { ModelChoice, RestartMode } from "@/wire";
 
@@ -173,26 +174,29 @@ export interface SettingsPlan {
   then:
     | { kind: "close" }
     /** Sends carry `rewarm` once the change shows in the session list; the draft, if any, goes now. */
-    | { kind: "rewarm"; text: string | null }
-    | { kind: "restart"; mode: RestartMode; text: string | null };
+    | { kind: "rewarm"; text: string | null; attachments?: string[] }
+    | { kind: "restart"; mode: RestartMode; text: string | null; attachments?: string[] };
 }
 
+/** `draft` and `attachments` are the composer's text and attached files. */
 export function settingsPlan(
   picks: Settings,
   current: Settings,
   choice: ColdChoice,
   draft: string,
+  attachments: readonly string[] = [],
 ): SettingsPlan {
   const patch = settingsPatch(picks, current);
-  const text = draft.trim() === "" ? null : draft;
+  const text = sendableText(draft, attachments);
+  const files = attachmentsField(attachments);
   switch (choice) {
     case "rewarm":
       return patch === null
         ? { patch, then: { kind: "close" } }
-        : { patch, then: { kind: "rewarm", text } };
+        : { patch, then: { kind: "rewarm", text, ...files } };
     case "continue":
     case "blank":
-      return { patch, then: { kind: "restart", mode: choice, text } };
+      return { patch, then: { kind: "restart", mode: choice, text, ...files } };
   }
 }
 

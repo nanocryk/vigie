@@ -1,4 +1,6 @@
 import {
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   useCallback,
   useEffect,
@@ -15,6 +17,7 @@ import {
   recentAgents,
   workingLabel,
 } from "@/agents";
+import { attachmentName, attachmentsField, uploadFile } from "@/attachments";
 import type { Client } from "@/client";
 import {
   CacheColdError,
@@ -41,6 +44,7 @@ import {
 } from "@/commands";
 import { AgentsPanel } from "@/components/AgentsPanel";
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
+import { type ComposerFile, ComposerFiles } from "@/components/Attachments";
 import { AgentColdPanel, ColdPanel, useCacheGauge } from "@/components/ColdPanel";
 import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
@@ -57,7 +61,7 @@ import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
-import { DiffIcon, FolderIcon } from "@/components/Explorer";
+import { DiffIcon, FolderIcon, PaperclipIcon } from "@/components/Explorer";
 import { changeExplorer, openSessionDiff, openSessionFolder } from "@/files";
 import { repoRoot } from "@/git";
 import { folderName, stateLabel } from "@/format";
@@ -85,6 +89,28 @@ import { type TranscriptState, emptyTranscript, parseTime, wakeText } from "@/tr
 
 /** Unsent composer text per discussion (`draftKey`), kept while the app stays open. */
 const drafts = new Map<string, string>();
+/** Files attached to the unsent draft per discussion, uploads still running included. */
+const draftFiles = new Map<string, ComposerFile[]>();
+
+/** Paths of a draft's uploaded files. */
+function readyPaths(slot: string): string[] {
+  return (draftFiles.get(slot) ?? []).flatMap((file) =>
+    file.status === "ready" && file.path !== null ? [file.path] : [],
+  );
+}
+
+/** Changes a draft's files, whether or not its composer is on screen. */
+function updateDraftFiles(
+  slot: string,
+  change: (files: ComposerFile[]) => ComposerFile[],
+): ComposerFile[] {
+  const next = change(draftFiles.get(slot) ?? []);
+  if (next.length === 0) draftFiles.delete(slot);
+  else draftFiles.set(slot, next);
+  return next;
+}
+
+let nextFileKey = 0;
 /** Per session, the last cold-cache choice and the spell it was made for. */
 const coldChoices = new Map<string, ColdChoiceMade>();
 /** Per session, the agent whose discussion is on screen; absent for the main one. */
@@ -97,6 +123,9 @@ function draftKey(session: string, agent: string | null): string {
 
 /** A send waiting for its `user_sent` or `relay_sent`, in the discussion it was typed in. */
 type ScopedSend = PendingSend & { scope: string | null };
+
+/** Spread into a `send` or a `relay`. */
+type SendFields = { rewarm?: true; attachments?: string[] };
 
 /** Client ids of the messages the server announced, in every discussion of the session. */
 function sentClientIds(transcript: TranscriptState): Set<string> {
@@ -119,6 +148,7 @@ function errorMessage(err: unknown): string {
 
 function Composer({
   session,
+  uploadTo,
   placeholder,
   turnOpen,
   stopping,
@@ -131,12 +161,14 @@ function Composer({
 }: {
   /** The draft slot of the discussion on screen. */
   session: string;
+  /** The session whose uploads folder takes the attached files. */
+  uploadTo: string;
   placeholder: string;
   turnOpen: boolean;
   /** A stop was sent and awaits the server. */
   stopping: boolean;
   menuOpen: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: string[]) => void;
   /** A `/` became the first character: `text` is the whole composer text. */
   onSlash: (text: string) => void;
   onStop: () => void;
@@ -146,8 +178,57 @@ function Composer({
   onMenuToggle: () => void;
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
+  const [files, setFiles] = useState<ComposerFile[]>(() => draftFiles.get(session) ?? []);
   const area = useRef<HTMLTextAreaElement>(null);
   const measure = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // An upload may end after the composer left the screen: the draft's files still change.
+  const changeFiles = (change: (files: ComposerFile[]) => ComposerFile[]) => {
+    const next = updateDraftFiles(session, change);
+    if (mounted.current) setFiles(next);
+  };
+  const settle = (key: string, patch: Partial<ComposerFile>) =>
+    changeFiles((list) => list.map((file) => (file.key === key ? { ...file, ...patch } : file)));
+
+  const attach = (picked: readonly File[]) => {
+    for (const file of picked) {
+      nextFileKey += 1;
+      const key = String(nextFileKey);
+      const name = file.name === "" ? "pasted" : file.name;
+      changeFiles((list) => [...list, { key, name, status: "uploading", path: null, error: null }]);
+      uploadFile(uploadTo, file).then(
+        (path) => settle(key, { status: "ready", path }),
+        (err: unknown) => settle(key, { status: "failed", error: errorMessage(err) }),
+      );
+    }
+  };
+  const remove = (key: string) => changeFiles((list) => list.filter((file) => file.key !== key));
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = Array.from(event.clipboardData.files);
+    if (pasted.length === 0) return;
+    event.preventDefault();
+    attach(pasted);
+  };
+  const carriesFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
+  const onDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    attach(Array.from(event.dataTransfer.files));
+  };
 
   // Measured on an out-of-flow copy: collapsing the input itself would resize
   // the transcript for a moment and move its scroll position.
@@ -166,10 +247,15 @@ function Composer({
     if (opens) onSlash(value);
   };
 
+  const uploading = files.some((file) => file.status === "uploading");
+  const paths = readyPaths(session);
+  const ready = !uploading && (text.trim() !== "" || paths.length > 0);
+
   const submit = () => {
-    if (text.trim() === "") return;
-    onSend(text);
+    if (!ready) return;
+    onSend(text, paths);
     change("");
+    changeFiles(() => []);
     // On touch, dropping focus closes the virtual keyboard so the reply is visible.
     if (coarsePointer()) area.current?.blur();
   };
@@ -189,7 +275,6 @@ function Composer({
   };
 
   const coarse = coarsePointer();
-  const ready = text.trim() !== "";
   const onAction = (action: SendAction) => {
     switch (action) {
       case "send":
@@ -206,7 +291,32 @@ function Composer({
 
   // The buttons keep a one-line input's height and sit at the bottom as the input grows.
   return (
-    <div className="mx-auto flex max-w-5xl items-end gap-2 select-text">
+    <div
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className="mx-auto flex max-w-5xl items-end gap-2 select-text"
+    >
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => {
+          attach(Array.from(event.target.files ?? []));
+          event.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        aria-label="Attach files"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => picker.current?.click()}
+        className="bg-card hover:bg-muted text-muted-foreground flex h-14 w-10 shrink-0 cursor-pointer items-center justify-center rounded-[5px] border"
+      >
+        <PaperclipIcon />
+      </button>
+      <div className="flex min-w-0 flex-1 flex-col">
+      <ComposerFiles files={files} onRemove={remove} />
       <div className="relative flex min-w-0 flex-1">
         <textarea
           ref={measure}
@@ -223,10 +333,12 @@ function Composer({
           value={text}
           onChange={(event) => change(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           enterKeyHint={coarse ? "enter" : "send"}
           placeholder={placeholder}
           className={`${COMPOSER_INPUT} focus:ring-ring max-h-[35dvh] flex-1 outline-none focus:ring-2`}
         />
+      </div>
       </div>
       {coarse ? (
         <TouchSend
@@ -319,9 +431,11 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const shown = viewing === null ? transcript : (transcript.scopes.get(viewing) ?? emptyTranscript);
   const draftSlot = draftKey(id, viewing);
   /** A relay to an agent whose cache went cold, waiting for its confirmation. */
-  const [agentColdSend, setAgentColdSend] = useState<{ text: string; rewarm: boolean } | null>(
-    null,
-  );
+  const [agentColdSend, setAgentColdSend] = useState<{
+    text: string;
+    attachments: string[];
+    rewarm: boolean;
+  } | null>(null);
   useEffect(() => setAgentColdSend(null), [viewing]);
 
   // A pending message leaves once the server's `user_sent` or `relay_sent` for one of its attempts is in.
@@ -358,7 +472,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     scope: string | null,
     text: string,
     clientId: string,
-    fields: { rewarm?: true },
+    fields: SendFields,
   ) => {
     const target = scope === null ? null : entries.find((entry) => entry.toolUseId === scope);
     let command: Promise<void>;
@@ -403,12 +517,13 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       });
 
   /** Sends to the discussion `scope` (null: the main one); `send` sends to the one on screen. */
-  const sendTo = (scope: string | null, text: string, fields: { rewarm?: true }) => {
+  const sendTo = (scope: string | null, text: string, fields: SendFields) => {
     nextPending.current += 1;
     const clientId = client.newClientId();
     const entry: ScopedSend = {
       id: String(nextPending.current),
       text,
+      attachments: fields.attachments ?? [],
       clientIds: [clientId],
       status: "sending",
       error: null,
@@ -419,9 +534,13 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   };
 
   /** In an agent's view, a relay; one to an agent whose cache went cold waits for a confirmation. */
-  const send = (text: string, fields: { rewarm?: true } = rewarm) => {
+  const send = (text: string, fields: SendFields = rewarm) => {
     if (agent !== null && agent.live && agentCold(agent, Date.now())) {
-      setAgentColdSend({ text, rewarm: fields.rewarm === true });
+      setAgentColdSend({
+        text,
+        attachments: fields.attachments ?? [],
+        rewarm: fields.rewarm === true,
+      });
       return;
     }
     sendTo(viewing, text, fields);
@@ -431,7 +550,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     const clientId = client.newClientId();
     const scope = pending.find((send) => send.id === entry.id)?.scope ?? null;
     patch(entry.id, { status: "sending", error: null, clientIds: [...entry.clientIds, clientId] });
-    deliver(entry.id, scope, entry.text, clientId, rewarm);
+    deliver(entry.id, scope, entry.text, clientId, {
+      ...rewarm,
+      ...attachmentsField(entry.attachments),
+    });
   };
 
   const dismiss = (entry: PendingSend) =>
@@ -531,7 +653,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const chooseSettings = (choice: ColdChoice) => {
     if (flow.kind !== "choosing") return;
     const chosenPicks = flow.picks;
-    const plan = settingsPlan(chosenPicks, current, choice, drafts.get(id) ?? "");
+    const plan = settingsPlan(chosenPicks, current, choice, drafts.get(id) ?? "", readyPaths(id));
     setColdError(null);
     if (plan.then.kind === "close") {
       setFlow(closedFlow);
@@ -554,7 +676,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         if (then.kind === "rewarm") {
           if (then.text !== null) {
             drafts.delete(id);
-            sendTo(null, then.text, { rewarm: true });
+            draftFiles.delete(id);
+            sendTo(null, then.text, { rewarm: true, ...attachmentsField(then.attachments ?? []) });
           }
           return;
         }
@@ -563,9 +686,11 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           session: id,
           mode: then.mode,
           ...(then.text === null ? {} : { text: then.text }),
+          ...attachmentsField(then.attachments ?? []),
           client_id: client.newClientId(),
         });
         drafts.delete(id);
+        draftFiles.delete(id);
       })
       .catch((err: unknown) => {
         setColdError(errorMessage(err));
@@ -723,12 +848,30 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     setAgentsOpen(true);
   };
   const cancelAgentCold = () => {
-    if (agentColdSend !== null) drafts.set(draftSlot, agentColdSend.text);
+    if (agentColdSend !== null) {
+      drafts.set(draftSlot, agentColdSend.text);
+      updateDraftFiles(draftSlot, (files) => [
+        ...files,
+        ...agentColdSend.attachments.map((path): ComposerFile => {
+          nextFileKey += 1;
+          return {
+            key: String(nextFileKey),
+            name: attachmentName(path),
+            status: "ready",
+            path,
+            error: null,
+          };
+        }),
+      ]);
+    }
     setAgentColdSend(null);
   };
   const confirmAgentCold = () => {
     if (agentColdSend === null) return;
-    sendTo(viewing, agentColdSend.text, agentColdSend.rewarm ? { rewarm: true } : {});
+    sendTo(viewing, agentColdSend.text, {
+      ...(agentColdSend.rewarm ? { rewarm: true } : {}),
+      ...attachmentsField(agentColdSend.attachments),
+    });
     setAgentColdSend(null);
   };
   const askGoTo = ask === undefined ? null : goToAgent(ask, viewing, entries);
@@ -764,8 +907,13 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     // A draft typed for an agent goes with a rewarm, as a relay; a restart ends
     // the agents, so the new session starts without it.
     const draft = drafts.get(draftSlot) ?? "";
-    const action = archived ? archivedAction(choice, draft) : coldAction(choice, draft);
+    const files = readyPaths(draftSlot);
+    const action = archived
+      ? archivedAction(choice, draft, files)
+      : coldAction(choice, draft, files);
     const restartText = action.kind === "restart" && viewing === null ? action.text : null;
+    const restartFiles =
+      action.kind === "restart" && viewing === null ? (action.attachments ?? []) : [];
     setColdError(null);
     switch (action.kind) {
       case "unblock":
@@ -780,8 +928,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         return;
       case "send":
         drafts.delete(draftSlot);
+        draftFiles.delete(draftSlot);
         settle();
-        send(action.text, { rewarm: true });
+        send(action.text, { rewarm: true, ...attachmentsField(action.attachments ?? []) });
         return;
       case "restart":
         setChoosing(true);
@@ -791,11 +940,15 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
             session: id,
             mode: action.mode,
             ...(restartText === null ? {} : { text: restartText }),
+            ...attachmentsField(restartFiles),
             client_id: client.newClientId(),
           })
           .then(
             () => {
-              if (restartText !== null) drafts.delete(draftSlot);
+              if (restartText !== null) {
+                drafts.delete(draftSlot);
+                draftFiles.delete(draftSlot);
+              }
               settle();
             },
             (err: unknown) => setColdError(errorMessage(err)),
@@ -1076,6 +1229,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
             <Composer
               key={draftSlot}
               session={draftSlot}
+              uploadTo={id}
               placeholder={
                 viewing === null
                   ? "Message Claude"
@@ -1084,7 +1238,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               turnOpen={transcript.turnOpen}
               stopping={stopping}
               menuOpen={menu.kind === "open"}
-              onSend={send}
+              onSend={(text, attachments) =>
+                send(text, { ...rewarm, ...attachmentsField(attachments) })
+              }
               onSlash={(text) => {
                 setMenu(closedMenu);
                 panelEvent({ type: "open_slash", text });

@@ -196,7 +196,15 @@ export type ClientMessage =
   | { type: "unsubscribe"; session: string }
   /** The discussion on screen and whether the user is there; not acked. */
   | { type: "presence"; session: string | null; active: boolean }
-  | { type: "send"; session: string; text: string; rewarm?: true; client_id: string }
+  | {
+      type: "send";
+      session: string;
+      text: string;
+      /** Paths of the attached files. */
+      attachments?: string[];
+      rewarm?: true;
+      client_id: string;
+    }
   | { type: "interrupt"; session: string; client_id: string }
   /** A message for subagent `task_id`, relayed by the main agent. */
   | {
@@ -204,6 +212,7 @@ export type ClientMessage =
       session: string;
       task_id: string;
       text: string;
+      attachments?: string[];
       rewarm?: true;
       client_id: string;
     }
@@ -227,7 +236,14 @@ export type ClientMessage =
       effort?: string | null;
       client_id: string;
     }
-  | { type: "restart"; session: string; mode: RestartMode; text?: string; client_id: string }
+  | {
+      type: "restart";
+      session: string;
+      mode: RestartMode;
+      text?: string;
+      attachments?: string[];
+      client_id: string;
+    }
   /** `reason` defaults to `kill`, a stop from Home. */
   | { type: "kill"; session: string; reason?: StopReason; client_id: string }
   | { type: "archive"; session: string; client_id: string }
@@ -321,7 +337,7 @@ function parseRelayOutcome(raw: unknown): RelayOutcome | null {
 
 export type HostEvent =
   | { event: "started"; cwd: string }
-  | { event: "user_sent"; text: string; client_id: string | null }
+  | { event: "user_sent"; text: string; attachments: string[]; client_id: string | null }
   | {
       event: "ask_queued";
       request_id: string;
@@ -349,6 +365,7 @@ export type HostEvent =
   | {
       event: "relay_sent";
       text: string;
+      attachments: string[];
       client_id: string | null;
       task_id: string;
       /** The Agent call that started the agent. */
@@ -706,6 +723,11 @@ export function parseDanger(raw: unknown): Danger {
   };
 }
 
+/** The strings of a list; anything else, an absent field included, is empty. */
+function stringList(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+}
+
 /** An offer of unexpected shape is dropped: the ask stays answerable without it. */
 export function parseFolderOffer(raw: unknown): FolderOffer | null {
   if (!isRecord(raw)) return null;
@@ -753,7 +775,12 @@ export function parseHostEvent(raw: unknown): HostEvent {
       const sentText = text("text");
       return sentText === null
         ? { event: "unknown", raw }
-        : { event: "user_sent", text: sentText, client_id: text("client_id") };
+        : {
+            event: "user_sent",
+            text: sentText,
+            attachments: stringList(raw["attachments"]),
+            client_id: text("client_id"),
+          };
     }
     case "permission_mode": {
       const mode = text("mode");
@@ -797,6 +824,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
       return {
         event: "relay_sent",
         text: sentText,
+        attachments: stringList(raw["attachments"]),
         client_id: text("client_id"),
         task_id: taskId,
         agent_tool_use_id: agentToolUseId,

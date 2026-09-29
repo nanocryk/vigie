@@ -129,6 +129,21 @@ describe("coldAction", () => {
     });
     expect(coldAction("blank", "")).toEqual({ kind: "restart", mode: "blank", text: null });
   });
+
+  it("a draft of files alone is not blank, and its files go along", () => {
+    const files = ["C:\\up\\a.png"];
+    expect(coldAction("rewarm", " ", files)).toEqual({
+      kind: "send",
+      text: " ",
+      attachments: files,
+    });
+    expect(coldAction("blank", "", files)).toEqual({
+      kind: "restart",
+      mode: "blank",
+      text: "",
+      attachments: files,
+    });
+  });
 });
 
 describe("archivedAction", () => {

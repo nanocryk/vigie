@@ -18,6 +18,17 @@ import {
   parseCliLine,
   stringOrNull,
 } from "@/wire";
+import { composeText } from "@/attachments";
+
+/** The `attachments` field of an item: absent when there are none. */
+function attached(paths: readonly string[]): { attachments?: readonly string[] } {
+  return paths.length === 0 ? {} : { attachments: paths };
+}
+
+/** The text Claude got for a user item, its attachments included. */
+function composedText(item: { text: string; attachments?: readonly string[] }): string {
+  return composeText(item.text, item.attachments ?? []);
+}
 
 export type ToolStatus = "running" | "ok" | "error" | "unfinished";
 
@@ -86,8 +97,17 @@ type ItemBody =
       clientId: string | null;
       /** Typed in an agent's view and passed on by the main agent. */
       relayed?: true;
+      /** Paths of the attached files; absent when none. */
+      attachments?: readonly string[];
     }
-  | { kind: "claude"; key: string; text: string; streaming: boolean }
+  | {
+      kind: "claude";
+      key: string;
+      text: string;
+      streaming: boolean;
+      /** Paths of the attached files; absent when none. */
+      attachments?: readonly string[];
+    }
   | { kind: "thinking"; key: string; text: string }
   | {
       kind: "tool";
@@ -653,8 +673,21 @@ class Draft {
   }
 
   /** A relay typed in this agent's view. */
-  private relayed(text: string, clientId: string | null, key: string): void {
-    this.add({ kind: "user", key, text, delivery: "on_host", clientId, relayed: true });
+  private relayed(
+    text: string,
+    attachments: readonly string[],
+    clientId: string | null,
+    key: string,
+  ): void {
+    this.add({
+      kind: "user",
+      key,
+      text,
+      delivery: "on_host",
+      clientId,
+      relayed: true,
+      ...attached(attachments),
+    });
   }
 
   /** The verdict on the relay at `key`, in this agent's view. */
@@ -724,6 +757,7 @@ class Draft {
           text: event.text,
           delivery: "on_host",
           clientId: event.client_id,
+          ...attached(event.attachments),
         });
         return;
       case "ask_queued": {
@@ -758,7 +792,12 @@ class Draft {
       case "relay_sent":
         this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
         this.add({ kind: "user", key, text: event.wrapped, delivery: "on_host", clientId: null });
-        this.scoped(event.agent_tool_use_id).relayed(event.text, event.client_id, key);
+        this.scoped(event.agent_tool_use_id).relayed(
+          event.text,
+          event.attachments,
+          event.client_id,
+          key,
+        );
         return;
       case "relay_checked": {
         const relayKey = String(event.relay_seq);
@@ -979,7 +1018,7 @@ class Draft {
     const text = seeded ? echoed.slice(prefix.length) : echoed;
     const matches = (entry: Outgoing, delivery: Delivery): boolean => {
       const item = this.items[entry.index];
-      return item?.kind === "user" && item.delivery === delivery && item.text === text;
+      return item?.kind === "user" && item.delivery === delivery && composedText(item) === text;
     };
     const onHost = this.outbox.findIndex((entry) => matches(entry, "on_host"));
     const position =
@@ -990,7 +1029,7 @@ class Draft {
       if (seeded) return;
       // A relayed message reaching the agent is already shown.
       const relayed = (candidate: Item) =>
-        candidate.kind === "user" && candidate.relayed === true && candidate.text === text;
+        candidate.kind === "user" && candidate.relayed === true && composedText(candidate) === text;
       if (this.scope !== null && this.items.some(relayed)) return;
       // History recorded before `user_sent` existed only has the echo.
       this.add({ kind: "user", key, text, delivery: "received", clientId: null });
