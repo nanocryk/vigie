@@ -200,9 +200,9 @@ function Composer({
     }
   };
 
-  // Send spans the bar's height at any number of lines: the row stretches its items.
+  // The buttons keep a one-line input's height and sit at the bottom as the input grows.
   return (
-    <div className="mx-auto flex max-w-5xl items-stretch gap-2 select-text">
+    <div className="mx-auto flex max-w-5xl items-end gap-2 select-text">
       <textarea
         ref={area}
         rows={1}

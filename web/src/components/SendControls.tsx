@@ -81,7 +81,7 @@ export function TouchSend({
       onPointerCancel={(event) => finish(event, { type: "cancel" })}
       onMouseDown={keepFocus}
       onContextMenu={keepFocus}
-      className={`voice-ui border-t-foreground w-28 shrink-0 touch-none rounded-[5px] border-t-4 text-sm select-none ${LATCHED_STYLE[view.latched ?? "send"]} ${stoppable ? "send-stop-edge border-l-4" : ""}`}
+      className={`voice-ui border-t-foreground h-14 w-28 shrink-0 touch-none rounded-[5px] border-t-4 text-sm select-none ${LATCHED_STYLE[view.latched ?? "send"]} ${stoppable ? "send-stop-edge border-l-4" : ""}`}
       style={{
         transform: `translate(${view.x / 2}px, ${view.y / 2}px)`,
         transition: state.kind === "dragging" ? "none" : "transform 200ms ease-out",
@@ -92,7 +92,7 @@ export function TouchSend({
   );
 }
 
-const DESKTOP_BUTTON = "voice-ui shrink-0 rounded-[5px] border text-sm";
+const DESKTOP_BUTTON = "voice-ui h-14 shrink-0 rounded-[5px] border text-sm";
 
 /** Send's gestures as buttons on a fine pointer: Stop, Menu, Send. Stop always shows. */
 export function DesktopSend({
