@@ -2,6 +2,8 @@
 
 A bar closing the discussion, shaped like the restart divider and absent while a turn runs, says when most of the context is old work and restarting the discussion costs less than continuing it: `Task done? Restarting should make each message ~1.6× cheaper.`, the stale share in its tooltip. Whether the task is done is left to the user: no signal tells it across workflows. Main conversation only, hidden while the cache is cold (the cold panel covers that case). It never restarts anything.
 
+Tapping the bar hides it on this device until the context shrinks below its size at the tap: a restart, a `/clear` or a compaction rebuilt it, while within one Claude session it only grows. The size is stored per discussion in `localStorage`.
+
 ## What a restart drops
 
 A restart with `continue` seeds the fresh session with the last `SEED_EXCHANGES` exchanges, truncated, tool results left out. The fresh session then reads again the files those exchanges touched.
