@@ -110,6 +110,8 @@ impl GaugeUpdate {
                              THEN context_source ELSE 'estimate' END,
                          settings_changed_at = CASE WHEN cache_message_id IS ?2
                              THEN settings_changed_at ELSE NULL END,
+                         main_requests = main_requests + CASE WHEN cache_message_id IS ?2
+                             THEN 0 ELSE 1 END,
                          cache_message_id = ?2,
                          cache_ttl_secs = COALESCE(?4, cache_ttl_secs),
                          context_model = COALESCE(?5, context_model),
@@ -126,6 +128,10 @@ impl GaugeUpdate {
                 )?;
             }
             Self::Windows(windows) => {
+                connection.execute(
+                    "UPDATE sessions SET turns = turns + 1 WHERE id = ?1",
+                    [session],
+                )?;
                 let model: Option<String> = connection
                     .query_row(
                         "SELECT context_model FROM sessions WHERE id = ?1",
@@ -415,8 +421,12 @@ mod tests {
             id,
         } = fixture();
         let start = parse_time("2026-09-27T10:00:00Z").unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.calls_per_message, None);
         store.record_recording(id, "cd", 0, start);
         let row = store.session(id).await.unwrap().unwrap();
+        // Two responses of two lines each, two results.
+        assert_eq!(row.calls_per_message, Some(1.0));
         // The last response streams two lines, at 7557 and 7579 ms.
         assert_eq!(
             row.cache,
@@ -460,6 +470,7 @@ mod tests {
             })
         );
         assert_eq!(row.context.map(|context| context.used_tokens), Some(40_005));
+        assert_eq!(row.calls_per_message, Some(1.5));
     }
 
     fn host(seq: u64, host: HostEvent) -> Event {

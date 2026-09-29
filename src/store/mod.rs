@@ -28,7 +28,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 13] = [
+const MIGRATIONS: [&str; 15] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -120,6 +120,18 @@ CREATE TABLE push_subscriptions (
     p256dh TEXT NOT NULL,
     auth TEXT NOT NULL
 ) STRICT;
+"#,
+    // Main-conversation requests and finished turns, for the calls a message makes.
+    r#"
+ALTER TABLE sessions ADD COLUMN main_requests INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN turns INTEGER NOT NULL DEFAULT 0;
+"#,
+    // What a restart would keep, see `advice::RestartMeasure`; NULL until measured.
+    r#"
+ALTER TABLE sessions ADD COLUMN restart_window_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN restart_seed_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN restart_reread_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN restart_other_cost REAL;
 "#,
 ];
 

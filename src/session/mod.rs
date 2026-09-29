@@ -7,6 +7,7 @@
 
 mod activity;
 mod actor;
+pub mod advice;
 pub mod agents;
 pub mod background;
 pub mod danger;

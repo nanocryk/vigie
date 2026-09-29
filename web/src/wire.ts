@@ -31,6 +31,10 @@ export interface SessionView {
   /** Null until a main request reported the TTL of its cache write. */
   cache: CacheView | null;
   context: ContextView | null;
+  /** Main-conversation requests per finished turn; null before the first turn. */
+  calls_per_message: number | null;
+  /** What a restart would keep, measured after each turn; null before. */
+  restart: RestartMeasure | null;
   /** Null while the discussion is not archived. */
   archived_at: string | null;
   /** Stored model and effort every launch passes; null lets the CLI pick. */
@@ -124,6 +128,17 @@ export interface ContextView {
   autocompact_threshold: number | null;
   /** From the latest CLI reply; empty while unknown. */
   categories: ContextCategory[];
+}
+
+/** See `notes/restart-advice.md`. */
+export interface RestartMeasure {
+  /** Prompt tokens when the oldest exchange a seed carries started. */
+  window_start_tokens: number;
+  seed_tokens: number;
+  /** The files the seeded exchanges touched, which a fresh session reads again. */
+  reread_tokens: number;
+  /** Mean cost of the seeded exchanges' main calls besides cache reads, in base input tokens. */
+  other_cost_per_call: number;
 }
 
 export interface ContextCategory {
@@ -487,6 +502,8 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     permission_mode: optStr(value, "permission_mode", label),
     cache: parseCache(value["cache"], `${label}.cache`),
     context: parseContext(value["context"], `${label}.context`),
+    calls_per_message: optNum(value, "calls_per_message", label),
+    restart: parseRestart(value["restart"], `${label}.restart`),
     archived_at: optStr(value, "archived_at", label),
     model: optStr(value, "model", label),
     effort: optStr(value, "effort", label),
@@ -568,6 +585,17 @@ function parseContext(raw: unknown, label: string): ContextView | null {
     source,
     autocompact_threshold: optNum(value, "autocompact_threshold", label),
     categories: parseCategories(value["categories"], `${label}.categories`),
+  };
+}
+
+function parseRestart(raw: unknown, label: string): RestartMeasure | null {
+  if (raw === undefined || raw === null) return null;
+  const value = record(raw, label);
+  return {
+    window_start_tokens: num(value, "window_start_tokens", label),
+    seed_tokens: num(value, "seed_tokens", label),
+    reread_tokens: num(value, "reread_tokens", label),
+    other_cost_per_call: num(value, "other_cost_per_call", label),
   };
 }
 

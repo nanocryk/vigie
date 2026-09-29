@@ -53,6 +53,7 @@ import {
   SessionMenu,
   closedMenu,
 } from "@/components/SessionMenu";
+import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -902,6 +903,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         background={viewing === null ? (view?.background ?? []) : []}
         onStopTask={stopBackground}
         bottomRequest={bottomRequest}
+        end={viewing === null && !transcript.turnOpen && <RestartBanner session={view} />}
         panel={
           panel.kind !== "closed" ? (
             <CommandsPanel

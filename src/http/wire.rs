@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::claude::child::Effort;
 use crate::claude::protocol::PermissionMode;
+use crate::session::advice::RestartMeasure;
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{Cache, Context};
@@ -278,6 +279,10 @@ pub struct SessionView {
     /// Prompt cache of the main conversation; clients count the TTL down themselves.
     pub cache: Option<Cache>,
     pub context: Option<Context>,
+    /// Main-conversation requests per finished turn; `None` before the first turn.
+    pub calls_per_message: Option<f64>,
+    /// What a restart would keep, measured after each turn; `None` before.
+    pub restart: Option<RestartMeasure>,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// Stored model and effort, passed at every launch; `None` lets the CLI pick.
@@ -318,6 +323,8 @@ impl SessionView {
             permission_mode: row.permission_mode,
             cache: row.cache,
             context: row.context,
+            calls_per_message: row.calls_per_message,
+            restart: row.restart,
             archived_at: row.archived_at,
             model: row.settings.model,
             effort: row.settings.effort,

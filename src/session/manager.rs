@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::claude::child::{Effort, Launch, ModelSettings, Program};
 use crate::claude::protocol::{Inbound, PermissionMode, System};
 use crate::http::wire;
+use crate::session::advice::RestartMeasure;
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{self, MainRequest};
@@ -851,6 +852,7 @@ async fn sample_after_turns(
             sample(&session, &store, &signals).await;
             ask_context(&session, &store, &signals).await;
             ask_settings(&session, &store, &signals).await;
+            measure_restart(id, &store, &signals).await;
         }
     }
 }
@@ -870,6 +872,32 @@ async fn ask_context(session: &Session, store: &Store, signals: &Signals) {
         format_args!("store the context of session {id}"),
         || signals.session(id),
     );
+}
+
+/// Measures what a restart would keep, stores it and announces the session when it changed.
+async fn measure_restart(id: Uuid, store: &Store, signals: &Signals) {
+    let measured = async {
+        let row = store.require_session(id).await?;
+        let events = store.events_after(id, 0, u32::MAX).await?;
+        let started = std::time::Instant::now();
+        let measure = tokio::task::spawn_blocking(move || {
+            let history = seed::History::from_events(&events);
+            let seed = history.seed(&row.cwd, row.created_at.with_timezone(&Local).date_naive());
+            RestartMeasure::new(&history.seed_window(), &seed)
+        })
+        .await?;
+        tracing::debug!("restart measure of session {id} in {:?}", started.elapsed());
+        anyhow::Ok(measure)
+    };
+    match measured.await {
+        Ok(Some(measure)) => after_write(
+            store.record_restart_measure(id, measure).await,
+            format_args!("store the restart measure of session {id}"),
+            || signals.session(id),
+        ),
+        Ok(None) => {}
+        Err(err) => tracing::warn!("measure a restart of session {id}: {err:#}"),
+    }
 }
 
 /// Stores the model and effort the CLI applies and announces the session when

@@ -12,6 +12,7 @@ use super::{Store, format_time, json_error, known_session, parse_time};
 use crate::claude::child::{Effort, Launch, ModelSettings};
 use crate::claude::protocol::{AppliedSettings, ContextUsageResponse, PermissionMode};
 use crate::session::GateFailure;
+use crate::session::advice::RestartMeasure;
 use crate::session::gauges::{self, Cache, ContextSource};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +101,10 @@ pub struct SessionRow {
     pub applied: AppliedSettings,
     /// `None` once the user saw the discussion.
     pub unread: Option<Unread>,
+    /// Main-conversation requests per finished turn; `None` before the first turn.
+    pub calls_per_message: Option<f64>,
+    /// What a restart would keep, measured after each turn; `None` before.
+    pub restart: Option<RestartMeasure>,
 }
 
 impl Store {
@@ -293,6 +298,31 @@ impl Store {
         .await
     }
 
+    /// Stores what a restart would keep; resolves to whether that changed the stored values.
+    pub async fn record_restart_measure(
+        &self,
+        session: Uuid,
+        measure: RestartMeasure,
+    ) -> Result<bool> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET restart_window_tokens = ?2, restart_seed_tokens = ?3,
+                     restart_reread_tokens = ?4, restart_other_cost = ?5
+                 WHERE id = ?1 AND NOT (restart_window_tokens IS ?2 AND restart_seed_tokens IS ?3
+                     AND restart_reread_tokens IS ?4 AND restart_other_cost IS ?5)",
+                params![
+                    session.to_string(),
+                    measure.window_start_tokens,
+                    measure.seed_tokens,
+                    measure.reread_tokens,
+                    measure.other_cost_per_call
+                ],
+            )?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+
     /// Stores the model and effort the CLI reports applying; resolves to whether
     /// that changed the stored values.
     pub async fn record_applied_settings(
@@ -349,7 +379,8 @@ const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, 
     exit_code, gate_failure, permission_mode, cache_request_at, cache_ttl_secs, context_tokens,
     context_window, context_source, context_max_tokens, context_autocompact, context_categories,
     claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at,
-    applied_model, applied_effort, unread FROM sessions";
+    applied_model, applied_effort, unread, main_requests, turns, restart_window_tokens,
+    restart_seed_tokens, restart_reread_tokens, restart_other_cost FROM sessions";
 
 /// A row of `SESSION_SELECT`, read by column name.
 struct RawSession {
@@ -379,6 +410,12 @@ struct RawSession {
     applied_model: Option<String>,
     applied_effort: Option<String>,
     unread: Option<String>,
+    main_requests: u64,
+    turns: u64,
+    restart_window_tokens: Option<u64>,
+    restart_seed_tokens: Option<u64>,
+    restart_reread_tokens: Option<u64>,
+    restart_other_cost: Option<f64>,
 }
 
 impl RawSession {
@@ -410,6 +447,12 @@ impl RawSession {
             applied_model: row.get("applied_model")?,
             applied_effort: row.get("applied_effort")?,
             unread: row.get("unread")?,
+            main_requests: row.get("main_requests")?,
+            turns: row.get("turns")?,
+            restart_window_tokens: row.get("restart_window_tokens")?,
+            restart_seed_tokens: row.get("restart_seed_tokens")?,
+            restart_reread_tokens: row.get("restart_reread_tokens")?,
+            restart_other_cost: row.get("restart_other_cost")?,
         })
     }
 
@@ -491,6 +534,22 @@ impl RawSession {
                 effort: self.applied_effort,
             },
             unread: self.unread.as_deref().map(Unread::parse).transpose()?,
+            calls_per_message: (self.turns > 0)
+                .then(|| self.main_requests as f64 / self.turns as f64),
+            restart: match (
+                self.restart_window_tokens,
+                self.restart_seed_tokens,
+                self.restart_reread_tokens,
+                self.restart_other_cost,
+            ) {
+                (Some(window), Some(seed), Some(reread), Some(other)) => Some(RestartMeasure {
+                    window_start_tokens: window,
+                    seed_tokens: seed,
+                    reread_tokens: reread,
+                    other_cost_per_call: other,
+                }),
+                _ => None,
+            },
         })
     }
 }
@@ -517,6 +576,41 @@ mod tests {
         for state in states {
             assert_eq!(serde_json::to_value(&state).unwrap()["kind"], state.name());
         }
+    }
+
+    #[tokio::test]
+    async fn a_restart_measure_survives_a_reopen() {
+        let Fixture {
+            dir: _dir,
+            path,
+            store,
+            id,
+        } = fixture();
+        assert_eq!(store.require_session(id).await.unwrap().restart, None);
+        let measure = RestartMeasure {
+            window_start_tokens: 90_000,
+            seed_tokens: 2_000,
+            reread_tokens: 10_000,
+            other_cost_per_call: 1_234.5,
+        };
+        assert!(
+            store
+                .record_restart_measure(id, measure.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .record_restart_measure(id, measure.clone())
+                .await
+                .unwrap()
+        );
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened.require_session(id).await.unwrap().restart,
+            Some(measure)
+        );
     }
 
     fn context_reply(total_tokens: u64) -> ContextUsageResponse {

@@ -24,6 +24,8 @@ const session = (id: string, patch: Partial<SessionView> = {}): SessionView => (
   permission_mode: null,
   cache: null,
   context: null,
+  calls_per_message: null,
+  restart: null,
   archived_at: null,
   model: null,
   effort: null,

@@ -5,16 +5,24 @@ import {
   cacheTickStep,
   contextTone,
   formatPercent,
+  formatRatio,
   formatSpan,
   formatTokens,
   formatTtl,
   isStale,
   needsYou,
   readingAge,
+  restartAdvice,
   tween,
   windowBar,
 } from "@/gauges";
-import type { SessionView, UsageSnapshot, WindowReport } from "@/wire";
+import type {
+  ContextView,
+  RestartMeasure,
+  SessionView,
+  UsageSnapshot,
+  WindowReport,
+} from "@/wire";
 
 const session = (patch: Partial<SessionView>): SessionView => ({
   id: "s",
@@ -29,6 +37,8 @@ const session = (patch: Partial<SessionView>): SessionView => ({
   permission_mode: null,
   cache: null,
   context: null,
+  calls_per_message: null,
+  restart: null,
   archived_at: null,
   model: null,
   effort: null,
@@ -185,6 +195,72 @@ describe("contextTone", () => {
     expect(contextTone(context(50))).toBe("high");
     expect(contextTone(context(69))).toBe("high");
     expect(contextTone(context(70))).toBe("full");
+  });
+});
+
+describe("restartAdvice", () => {
+  // 27k fixed, plus a 3k seed and 20k of files read again: a restart starts at 50k.
+  const context = (used: number, categories = true): ContextView => ({
+    used_tokens: used,
+    max_tokens: 1_000_000,
+    percentage: used / 10_000,
+    source: "cli",
+    autocompact_threshold: null,
+    categories: categories
+      ? [
+          { name: "System prompt", tokens: 7_000, kind: "used" },
+          { name: "System tools", tokens: 20_000, kind: "used" },
+          { name: "MCP tools", tokens: 50_000, kind: "deferred" },
+          { name: "Messages", tokens: used - 27_000, kind: "used" },
+          { name: "Free space", tokens: 1_000_000 - used, kind: "free" },
+        ]
+      : [],
+  });
+
+  const measure = (windowStart: number, other = 0): RestartMeasure => ({
+    window_start_tokens: windowStart,
+    seed_tokens: 3_000,
+    reread_tokens: 20_000,
+    other_cost_per_call: other,
+  });
+
+  it("counts the stale share, the messages a restart pays back in, and the gain", () => {
+    // 300k of 400k is older than the seed; 2 * 50k / (0.1 * 350k) = 2.9 calls.
+    expect(restartAdvice(context(400_000), 1, measure(327_000))).toEqual({
+      staleShare: 0.75,
+      messages: 3,
+      ratio: 8,
+    });
+    expect(restartAdvice(context(400_000), 5, measure(327_000))?.messages).toBe(1);
+  });
+
+  it("weighs what a call costs besides reading the cache", () => {
+    // (40k + 5k) / (5k + 5k).
+    expect(restartAdvice(context(400_000), 1, measure(327_000, 5_000))?.ratio).toBe(4.5);
+  });
+
+  it("stays quiet while under half of the context is stale", () => {
+    expect(restartAdvice(context(400_000), 1, measure(227_000))?.staleShare).toBe(0.5);
+    expect(restartAdvice(context(400_000), 1, measure(226_000))).toBeNull();
+  });
+
+  it("stays quiet past ten messages", () => {
+    // 2 * 50k / (0.1 * 100k) = 10 calls.
+    expect(restartAdvice(context(150_000), 1, measure(127_000))?.messages).toBe(10);
+    expect(restartAdvice(context(140_000), 1, measure(117_000))).toBeNull();
+  });
+
+  it("stays quiet without the figures it needs or under 100k of context", () => {
+    expect(restartAdvice(context(400_000), 1, null)).toBeNull();
+    expect(restartAdvice(context(400_000), null, measure(327_000))).toBeNull();
+    expect(restartAdvice(context(400_000, false), 1, measure(327_000))).toBeNull();
+    expect(restartAdvice(context(90_000), 1, measure(80_000))).toBeNull();
+  });
+
+  it("formats the ratio", () => {
+    expect(formatRatio(8)).toBe("~8×");
+    expect(formatRatio(3.14)).toBe("~3.1×");
+    expect(formatRatio(12.6)).toBe("~13×");
   });
 });
 

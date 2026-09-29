@@ -2,6 +2,7 @@ import type {
   CacheView,
   Confidence,
   ContextView,
+  RestartMeasure,
   SessionView,
   UsageSnapshot,
   WindowReport,
@@ -118,6 +119,63 @@ export function contextTone(context: ContextView): ContextTone {
   if (context.percentage >= 70) return "full";
   if (context.percentage >= 50) return "high";
   return "ok";
+}
+
+/** Advice shows once at least this share of the context is conversation a restart drops. */
+export const STALE_MIN_SHARE = 0.5;
+/** Advice shows when a restart pays back within this many messages. */
+export const ADVICE_MAX_MESSAGES = 10;
+/** Below this context, a restart saves too little per message to mention. */
+export const ADVICE_MIN_CONTEXT = 100_000;
+/** Price of a 1 hour cache write, and of a cache read, over the base input price. */
+const CACHE_WRITE_PRICE = 2;
+const CACHE_READ_PRICE = 0.1;
+/** The context category holding the conversation itself, dropped by a restart. */
+const MESSAGES_CATEGORY = "Messages";
+
+export interface RestartAdvice {
+  /** Share of the context older than what a restart keeps, 0 to 1. */
+  staleShare: number;
+  /** Messages after which restarting first costs less. */
+  messages: number;
+  /** How much less each call costs after a restart. */
+  ratio: number;
+}
+
+/**
+ * Continuing reads the context `C` at the cache read price per call; a restart
+ * writes the smaller `S` once, then reads it per call. It pays back after
+ * `write * S / (read * (C - S))` calls. See `notes/restart-advice.md`.
+ */
+export function restartAdvice(
+  context: ContextView,
+  callsPerMessage: number | null,
+  restart: RestartMeasure | null,
+): RestartAdvice | null {
+  if (restart === null || callsPerMessage === null || callsPerMessage <= 0) return null;
+  if (context.categories.length === 0 || context.used_tokens < ADVICE_MIN_CONTEXT) return null;
+  let fixed = 0;
+  for (const category of context.categories) {
+    if (category.kind === "used" && category.name !== MESSAGES_CATEGORY) fixed += category.tokens;
+  }
+  const current = context.used_tokens;
+  const staleShare = clamp((restart.window_start_tokens - fixed) / current, 0, 1);
+  if (staleShare < STALE_MIN_SHARE) return null;
+  const restarted = fixed + restart.seed_tokens + restart.reread_tokens;
+  const saved = current - restarted;
+  if (saved <= 0) return null;
+  const calls = (CACHE_WRITE_PRICE * restarted) / (CACHE_READ_PRICE * saved);
+  const messages = Math.max(1, Math.ceil(calls / callsPerMessage));
+  if (messages > ADVICE_MAX_MESSAGES) return null;
+  const other = restart.other_cost_per_call;
+  const ratio = (CACHE_READ_PRICE * current + other) / (CACHE_READ_PRICE * restarted + other);
+  return { staleShare, messages, ratio };
+}
+
+/** `~8×`, one decimal under 10. */
+export function formatRatio(ratio: number): string {
+  const rounded = ratio < 10 ? Math.round(ratio * 10) / 10 : Math.round(ratio);
+  return `~${rounded}×`;
 }
 
 /** Compact span: `45s`, `42m`, `2h10`, `3d4h`. */

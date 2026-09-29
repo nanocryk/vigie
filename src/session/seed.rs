@@ -8,14 +8,15 @@
 //! dropped. The seed a `restarted` event carries is stripped from the echo of the
 //! first message that followed it, so a later seed never nests an earlier one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
 use serde_json::Value;
 
-use crate::claude::protocol::{ContentBlock, Inbound, MessageContent};
+use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, Usage};
 use crate::session::HostEvent;
+use crate::session::gauges::MainRequest;
 use crate::store::{EventKind, StoredEvent};
 
 pub const SEED_EXCHANGES: usize = 5;
@@ -26,6 +27,8 @@ const TOOL_LIMIT: usize = 100;
 pub const CLOSING: &str =
     "The user has not typed a request yet: summarize where things stand and ask what to do next.";
 const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
+/// Tools whose file a fresh session reads again when it picks the work back up.
+const FILE_TOOLS: [&str; 5] = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
 /// Input keys tried in order for the argument shown on a tool line.
 const ARG_KEYS: [&str; 11] = [
     "file_path",
@@ -64,6 +67,21 @@ enum Block {
 struct Exchange {
     user: String,
     blocks: Vec<Block>,
+    /// Prompt tokens of the exchange's first main request.
+    start_prompt: Option<u64>,
+    /// Usage of each main request, the last line of each response.
+    calls: Vec<(String, Usage)>,
+}
+
+/// What the seeded exchanges tell about a restart, see `advice`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedWindow {
+    /// Prompt tokens when the oldest seeded exchange of the current context started.
+    pub start_prompt: Option<u64>,
+    /// Characters of the largest Read result of each file the seeded exchanges touched.
+    pub reread_chars: usize,
+    /// Usage of the main requests of the seeded exchanges.
+    pub calls: Vec<Usage>,
 }
 
 /// The exchanges of a discussion, across every Claude session behind it.
@@ -107,12 +125,25 @@ impl History {
                         history.exchanges.push(Exchange {
                             user: text,
                             blocks: Vec::new(),
+                            start_prompt: None,
+                            calls: Vec::new(),
                         });
                     }
                     Ok(Inbound::Assistant(assistant)) if assistant.parent_tool_use_id.is_none() => {
                         let Some(exchange) = history.exchanges.last_mut() else {
                             continue;
                         };
+                        if let Some(request) = MainRequest::from_assistant(&assistant)
+                            && let Some(usage) = &assistant.message.usage
+                        {
+                            exchange.start_prompt.get_or_insert(request.prompt_tokens);
+                            match exchange.calls.last_mut() {
+                                Some((id, last)) if *id == request.message_id => {
+                                    *last = usage.clone()
+                                }
+                                _ => exchange.calls.push((request.message_id, usage.clone())),
+                            }
+                        }
                         for block in assistant.message.content {
                             match block {
                                 ContentBlock::Text { text, .. } => {
@@ -160,6 +191,52 @@ impl History {
 
     pub fn total_exchanges(&self) -> usize {
         self.exchanges.len()
+    }
+
+    /// The exchanges a seed gives, from the latest one whose prompt started smaller
+    /// than the one before: a restart, a compaction or a clear rebuilt the context there.
+    pub fn seed_window(&self) -> SeedWindow {
+        let total = self.exchanges.len();
+        let rebuilt = self
+            .exchanges
+            .iter()
+            .enumerate()
+            .filter_map(|(index, exchange)| exchange.start_prompt.map(|prompt| (index, prompt)))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .rfind(|pair| pair[1].1 < pair[0].1)
+            .map_or(0, |pair| pair[1].0);
+        let window = &self.exchanges[total.saturating_sub(SEED_EXCHANGES).max(rebuilt)..];
+        let mut read_chars: HashMap<&str, usize> = HashMap::new();
+        for exchange in &self.exchanges {
+            for block in &exchange.blocks {
+                if let Block::Tool { id, name, input } = block
+                    && name == "Read"
+                    && let (Some(path), Some(result)) = (file_path(input), self.results.get(id))
+                {
+                    let size = read_chars.entry(path).or_default();
+                    *size = (*size).max(result.len());
+                }
+            }
+        }
+        let touched: HashSet<&str> = window
+            .iter()
+            .flat_map(|exchange| &exchange.blocks)
+            .filter_map(|block| match block {
+                Block::Tool { name, input, .. } if FILE_TOOLS.contains(&name.as_str()) => {
+                    file_path(input)
+                }
+                _ => None,
+            })
+            .collect();
+        SeedWindow {
+            start_prompt: window.iter().find_map(|exchange| exchange.start_prompt),
+            reread_chars: touched.iter().filter_map(|path| read_chars.get(path)).sum(),
+            calls: window
+                .iter()
+                .flat_map(|exchange| exchange.calls.iter().map(|(_, usage)| usage.clone()))
+                .collect(),
+        }
     }
 
     /// The seed of a discussion started on `started` in `cwd`, without `CLOSING`.
@@ -241,6 +318,13 @@ pub fn first_message(seed: &str, text: &str) -> String {
         text
     };
     format!("{seed}\n\n{next}")
+}
+
+fn file_path(input: &Value) -> Option<&str> {
+    input
+        .get("file_path")
+        .or_else(|| input.get("notebook_path"))
+        .and_then(Value::as_str)
 }
 
 fn value_text(value: &Value) -> String {
@@ -376,6 +460,84 @@ mod tests {
             serde_json::json!({"type": "assistant", "message": {"id": "m", "content": content},
                 "parent_tool_use_id": null, "session_id": "s", "uuid": "u"}),
         )
+    }
+
+    /// A main request `id` whose prompt is `prompt` input tokens.
+    fn request(seq: u64, id: &str, prompt: u64, output: u64, content: Value) -> StoredEvent {
+        line(
+            seq,
+            serde_json::json!({"type": "assistant", "parent_tool_use_id": null, "session_id": "s",
+                "uuid": "u", "message": {"id": id, "model": "claude-opus-5-5", "content": content,
+                    "usage": {"input_tokens": prompt, "output_tokens": output}}}),
+        )
+    }
+
+    fn tool(id: &str, name: &str, path: &str) -> Value {
+        serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": {"file_path": path}})
+    }
+
+    fn result(id: &str, chars: usize) -> Value {
+        serde_json::json!([{"type": "tool_result", "tool_use_id": id, "content": "r".repeat(chars)}])
+    }
+
+    #[test]
+    fn the_seed_window_measures_the_last_five_exchanges() {
+        let mut events = vec![
+            user(1, Value::String("one".into())),
+            request(
+                2,
+                "m1",
+                10_000,
+                0,
+                serde_json::json!([tool("t1", "Read", "a.rs"), tool("t2", "Read", "b.rs")]),
+            ),
+            user(3, result("t1", 400)),
+            user(4, result("t2", 100)),
+        ];
+        for exchange in 2..=6u64 {
+            let seq = exchange * 10;
+            events.push(user(seq, Value::String(format!("message {exchange}"))));
+            events.push(request(
+                seq + 1,
+                &format!("m{exchange}"),
+                exchange * 10_000,
+                10,
+                serde_json::json!([]),
+            ));
+            if exchange == 3 {
+                // The second line of a response carries its final usage.
+                events.push(request(seq + 2, "m3", 30_000, 50, serde_json::json!([])));
+            }
+        }
+        events.push(user(70, Value::String("seven".into())));
+        events.push(request(
+            71,
+            "m7",
+            70_000,
+            10,
+            serde_json::json!([tool("t3", "Edit", "a.rs"), tool("t4", "Write", "c.rs")]),
+        ));
+
+        let window = History::from_events(&events).seed_window();
+        assert_eq!(window.start_prompt, Some(30_000));
+        assert_eq!(window.reread_chars, 400);
+        let outputs: Vec<u64> = window
+            .calls
+            .iter()
+            .map(|usage| usage.output_tokens)
+            .collect();
+        assert_eq!(outputs, [50, 10, 10, 10, 10]);
+
+        // A smaller prompt means the context was rebuilt: nothing before it is kept.
+        events.push(user(80, Value::String("after a compaction".into())));
+        events.push(request(81, "m8", 5_000, 10, serde_json::json!([])));
+        let window = History::from_events(&events).seed_window();
+        assert_eq!(window.start_prompt, Some(5_000));
+        assert_eq!(window.reread_chars, 0);
+        assert_eq!(window.calls.len(), 1);
+
+        let empty = History::from_events(&[]).seed_window();
+        assert_eq!((empty.start_prompt, empty.calls.len()), (None, 0));
     }
 
     #[test]

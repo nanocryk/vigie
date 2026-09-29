@@ -626,6 +626,7 @@ export function TranscriptView({
   background,
   onStopTask,
   bottomRequest,
+  end,
   overlay,
   panel,
 }: {
@@ -652,6 +653,8 @@ export function TranscriptView({
   onStopTask: (taskId: string) => Promise<void>;
   /** Each change scrolls the view to its bottom. */
   bottomRequest: number;
+  /** Closes the discussion, after the background tasks. */
+  end?: ReactNode;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
   overlay?: ReactNode;
   /** In front of the discussion, positioned by itself. */
@@ -834,6 +837,7 @@ export function TranscriptView({
           {background.length > 0 && (
             <BackgroundRows tasks={background} waiting={!turnOpen} onStop={onStopTask} />
           )}
+          {end}
         </div>
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-3">
