@@ -9,12 +9,14 @@ import {
   type FolderOffer,
   type GateFailure,
   type HostEvent,
+  type PlanReview,
   type RelayFailure,
   type RestartMode,
   type StopReason,
   type WireEvent,
   isRecord,
   parseCliLine,
+  stringOrNull,
 } from "@/wire";
 
 export type ToolStatus = "running" | "ok" | "error" | "unfinished";
@@ -220,8 +222,18 @@ export interface PendingAsk {
   folder: FolderOffer | null;
   /** The file an allow can grant for good. */
   file: FileOffer | null;
+  /** The plan of an `ExitPlanMode` ask, when one was found. */
+  plan: PlanReview | null;
   /** Task id of the subagent asking; null for the main agent. */
   agentId: string | null;
+}
+
+/** The plan an ask carries, else the one its input names (older CLIs). */
+function askPlan(toolName: string, plan: PlanReview | null, input: unknown): PlanReview | null {
+  if (toolName !== "ExitPlanMode") return null;
+  if (plan !== null) return plan;
+  if (!isRecord(input) || typeof input["plan"] !== "string") return null;
+  return { path: stringOrNull(input["planFilePath"]), text: input["plan"], previous: null };
 }
 
 export interface TranscriptState {
@@ -372,6 +384,13 @@ function firstLine(text: string | null): string | null {
   if (text === null) return null;
   const line = text.split("\n").find((candidate) => candidate.trim() !== "");
   return line === undefined ? null : line.replace(/^#+\s*/, "");
+}
+
+const PLAN_FILE = /[\\/]\.claude[\\/]plans[\\/]([^\\/]+\.md)$/i;
+
+/** The name of the plan file an edit-tool input targets, as `tidy-aurora.md`. */
+export function planFileName(input: unknown): string | null {
+  return field(input, "file_path")?.match(PLAN_FILE)?.[1] ?? null;
 }
 
 function questionCount(input: unknown): string | null {
@@ -718,6 +737,7 @@ class Draft {
           acceptEdits: event.accept_edits,
           folder: event.folder,
           file: event.file,
+          plan: askPlan(event.tool_name, event.plan, request?.input),
           agentId: event.agent_id,
         });
         return;

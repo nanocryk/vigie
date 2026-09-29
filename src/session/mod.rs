@@ -16,6 +16,7 @@ pub mod gauges;
 pub mod grant;
 mod handle;
 pub mod manager;
+pub mod plan;
 pub mod seed;
 
 pub use activity::{Activity, ActivityTracker, LiveStatus};

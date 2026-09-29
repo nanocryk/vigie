@@ -7,6 +7,7 @@
 
 mod catalog;
 mod events;
+mod plans;
 mod push;
 mod samples;
 mod sessions;
@@ -28,7 +29,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 15] = [
+const MIGRATIONS: [&str; 16] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -132,6 +133,13 @@ ALTER TABLE sessions ADD COLUMN restart_window_tokens INTEGER;
 ALTER TABLE sessions ADD COLUMN restart_seed_tokens INTEGER;
 ALTER TABLE sessions ADD COLUMN restart_reread_tokens INTEGER;
 ALTER TABLE sessions ADD COLUMN restart_other_cost REAL;
+"#,
+    // The plan text each plan file last showed for review, keyed by its path.
+    r#"
+CREATE TABLE plans (
+    path TEXT PRIMARY KEY,
+    text TEXT NOT NULL
+) STRICT;
 "#,
 ];
 
@@ -362,6 +370,7 @@ mod tests {
             [
                 "cli_catalog",
                 "events",
+                "plans",
                 "push_subscriptions",
                 "sessions",
                 "usage_closed_hours",

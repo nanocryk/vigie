@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode, createContext, useContext, useMemo, useState } from "react";
 
 import { DiffBlock } from "@/components/Diff";
+import { PlanView } from "@/components/PlanView";
 import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import { type Segment, broadReason, offerSegments } from "@/grant";
@@ -46,12 +47,6 @@ export function parseQuestions(input: unknown): Question[] | null {
     });
   }
   return questions;
-}
-
-function planText(input: unknown): string | null {
-  if (!isRecord(input)) return null;
-  const plan = input["plan"];
-  return typeof plan === "string" ? plan : null;
 }
 
 const BUTTON = "voice-ui rounded-[5px] px-4 py-2 text-sm disabled:opacity-50";
@@ -154,22 +149,27 @@ function InputView({ ask, cwd = null }: { ask: PendingAsk; cwd?: string | null }
 function CardFrame({
   title,
   queued,
+  scroll = "frame",
   children,
 }: {
   /** Null when the children draw their own header. */
   title: string | null;
   queued: number;
+  /** `content`: the frame never scrolls; a `min-h-0` child down its flex columns shrinks and scrolls instead. */
+  scroll?: "frame" | "content";
   children: ReactNode;
 }) {
   const goTo = useContext(GoToAgent);
   return (
-    <section className="bg-card border-primary/40 max-h-[50%] shrink-0 overflow-y-auto border-t-2 px-3 py-3">
-      <div className="mx-auto max-w-5xl space-y-3">
+    <section
+      className={`bg-card border-primary/40 flex max-h-[50%] shrink-0 flex-col border-t-2 px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
+    >
+      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col gap-3">
         {goTo !== null && (
           <button
             type="button"
             onClick={goTo.onGo}
-            className="border-primary text-primary voice-ui hover:bg-muted rounded-[5px] border px-2 py-1 text-xs"
+            className="border-primary text-primary voice-ui hover:bg-muted self-start rounded-[5px] border px-2 py-1 text-xs"
           >
             Go to agent: {goTo.name}
           </button>
@@ -322,7 +322,7 @@ function ApprovalCard({
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   // A failed answer remounts the swipe so it can be done again.
   const [attempt, setAttempt] = useState(0);
-  const plan = ask.toolName === "ExitPlanMode" ? planText(ask.input) : null;
+  const isPlan = ask.toolName === "ExitPlanMode";
   const offersAcceptEdits = ask.acceptEdits && !ask.danger.dangerous;
   const segments = useMemo(
     () => (ask.folder === null ? [] : offerSegments(ask.folder)),
@@ -353,11 +353,11 @@ function ApprovalCard({
 
   // The whole panel is the swipe surface; its own controls keep their taps.
   return (
-    <CardFrame title={null} queued={0}>
+    <CardFrame title={null} queued={0} scroll={isPlan ? "content" : "frame"}>
       {/* Keyed by the ask and the choices: another ask or another grant means a fresh gesture. */}
       <Swipe
         key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}:${alwaysForFile}`}
-        labels={plan !== null ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
+        labels={isPlan ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
         dangerous={danger.dangerous}
         onConfirm={confirm}
         beforeRight={
@@ -374,10 +374,10 @@ function ApprovalCard({
           )
         }
       >
-        <div className="space-y-3">
+        <div className="flex min-h-0 flex-col gap-3">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="voice-heading text-sm">
-              {plan !== null
+              {isPlan
                 ? "Plan approval"
                 : DIFF_TOOLS.has(ask.toolName)
                   ? "Allow this change?"
@@ -402,10 +402,8 @@ function ApprovalCard({
               </ul>
             </div>
           )}
-          {plan !== null ? (
-            <div className="bg-background voice-prose max-h-[40dvh] overflow-y-auto rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {plan}
-            </div>
+          {isPlan ? (
+            <PlanView plan={ask.plan} />
           ) : (
             <InputView ask={ask} cwd={cwd} />
           )}
@@ -450,7 +448,7 @@ function ApprovalCard({
               type="button"
               disabled={sending}
               onClick={() => setNoteOpen(true)}
-              className="text-primary voice-ui bg-card/60 rounded-[5px] px-2 py-1 text-sm disabled:opacity-50"
+              className="text-primary voice-ui bg-card/60 self-start rounded-[5px] px-2 py-1 text-sm disabled:opacity-50"
             >
               + Note
             </button>

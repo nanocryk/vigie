@@ -25,6 +25,7 @@ import {
   type Item,
   type TaskEndStatus,
   type ToolStatus,
+  planFileName,
   quietWork,
   relayFailureText,
   restartLabel,
@@ -203,9 +204,13 @@ function ToolRow({
   stamp: string | null;
   awaiting: boolean;
 }) {
+  const plan = DIFF_TOOLS.has(item.name) ? planFileName(item.input) : null;
   const diff = useMemo(
-    () => (DIFF_TOOLS.has(item.name) ? toolDiff({ ...item, path: item.summary }) : null),
-    [item],
+    () =>
+      DIFF_TOOLS.has(item.name) && plan === null
+        ? toolDiff({ ...item, path: item.summary })
+        : null,
+    [item, plan],
   );
   if (diff !== null && awaiting) {
     return (
@@ -228,8 +233,12 @@ function ToolRow({
     <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
       <summary className={TOOL_SUMMARY}>
         <StatusMark status={item.status} />
-        <span className="voice-ui shrink-0">{item.name}</span>
-        <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
+        <span className="voice-ui shrink-0">
+          {plan === null ? item.name : item.name === "Write" ? "Plan written" : "Plan edited"}
+        </span>
+        <span className="voice-code text-muted-foreground min-w-0 truncate">
+          {plan ?? item.summary}
+        </span>
         {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
       </summary>
       <div className="mt-1 mr-2 ml-9 space-y-2">

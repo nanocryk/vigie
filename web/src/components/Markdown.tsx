@@ -1,19 +1,20 @@
-import { memo } from "react";
-import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
+import { memo, useMemo } from "react";
+import ReactMarkdown, { type Components, type ExtraProps, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { highlight, languageFromTag } from "@/highlight";
 
-type HastElement = NonNullable<ExtraProps["node"]>;
+export type PluggableList = NonNullable<Options["remarkPlugins"]>;
+export type HastElement = NonNullable<ExtraProps["node"]>;
 type HastChild = HastElement["children"][number];
 
-function textOf(node: HastChild): string {
+export function textOf(node: HastChild): string {
   if (node.type === "text") return node.value;
   if (node.type === "element") return node.children.map(textOf).join("");
   return "";
 }
 
-function fenceLanguage(code: HastElement): string | null {
+export function fenceLanguage(code: HastElement): string | null {
   const classes = code.properties["className"];
   const list = Array.isArray(classes) ? classes : [classes];
   for (const name of list) {
@@ -24,7 +25,7 @@ function fenceLanguage(code: HastElement): string | null {
   return null;
 }
 
-function CodeBlock({ node }: ExtraProps) {
+export function CodeBlock({ node }: ExtraProps) {
   if (node === undefined) return null;
   const code = node.children.find(
     (child): child is HastElement => child.type === "element" && child.tagName === "code",
@@ -52,19 +53,34 @@ const COMPONENTS: Components = {
   ),
 };
 
-const PLUGINS = [remarkGfm];
+const PLUGINS: PluggableList = [remarkGfm];
 
-/** GFM markdown, raw HTML not rendered. `streaming` ends it with a blinking cursor. */
+/**
+ * GFM markdown, raw HTML not rendered. `streaming` ends it with a blinking cursor.
+ * `plugins` run after GFM; `components` override the defaults. Keep both stable.
+ */
 export const Markdown = memo(function Markdown({
   text,
   streaming = false,
+  plugins,
+  components,
 }: {
   text: string;
   streaming?: boolean;
+  plugins?: PluggableList;
+  components?: Components;
 }) {
+  const allPlugins = useMemo(
+    () => (plugins === undefined ? PLUGINS : [...PLUGINS, ...plugins]),
+    [plugins],
+  );
+  const allComponents = useMemo(
+    () => (components === undefined ? COMPONENTS : { ...COMPONENTS, ...components }),
+    [components],
+  );
   return (
     <div className="markdown" data-streaming={streaming ? "" : undefined}>
-      <ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={allPlugins} components={allComponents}>
         {text}
       </ReactMarkdown>
     </div>

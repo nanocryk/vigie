@@ -259,6 +259,15 @@ impl FolderSuggestion {
     }
 }
 
+/// Whether the absolute `file` sits directly in `folder`, ignoring case.
+pub fn directly_in(file: &str, folder: &str) -> bool {
+    Folder::parse(file)
+        .zip(Folder::parse(folder))
+        .is_some_and(|(file, folder)| {
+            file.parts.len() == folder.parts.len() + 1 && file.below(&folder).is_some()
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Root {
     /// Uppercase.

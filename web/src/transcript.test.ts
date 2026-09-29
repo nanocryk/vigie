@@ -22,6 +22,7 @@ import {
   applyEvents,
   emptyTranscript,
   parseTaskNotification,
+  planFileName,
   quietWork,
   relayFailureText,
   restartLabel,
@@ -290,6 +291,7 @@ describe("transcript from recordings", () => {
         acceptEdits: false,
         folder: null,
         file: null,
+        plan: null,
         agentId: null,
       },
     ]);
@@ -1020,6 +1022,51 @@ describe("subagents", () => {
       ["notice", "Agent stopped"],
     ]);
     expect(state.agents.get("t1")?.state).toBe("stopped");
+  });
+});
+
+describe("plan asks", () => {
+  it("take the host's plan, else the one an older CLI put in the input", () => {
+    const events = recordingEvents("plan", true);
+    const queued = events.findIndex(
+      (event) => event.kind === "host" && event.payload.event === "ask_queued",
+    );
+    const state = applyEvents(emptyTranscript, events.slice(0, queued + 1));
+    expect(state.asks.map((ask) => ask.plan)).toEqual([
+      {
+        path: "C:\\Users\\user\\.claude\\plans\\plan-creating-hello-txt-containing-tidy-aurora.md",
+        text: "Create `hello.txt` in the working dir with content `hi`.\nVerify by reading it back.\n",
+        previous: null,
+      },
+    ]);
+
+    const plan = { path: "C:\\p\\a.md", text: "# Two", previous: "# One" };
+    const hosted = applyEvents(emptyTranscript, [
+      {
+        session: SESSION,
+        seq: 1,
+        time: "t",
+        kind: "host",
+        payload: parseHostEvent({
+          event: "ask_queued",
+          request_id: "r",
+          tool_name: "ExitPlanMode",
+          tool_use_id: "t",
+          plan,
+        }),
+      },
+    ]);
+    expect(hosted.asks.map((ask) => ask.plan)).toEqual([plan]);
+  });
+
+  it("name the plan file an edit targets", () => {
+    expect(planFileName({ file_path: "C:\\Users\\u\\.claude\\plans\\tidy-aurora.md" })).toBe(
+      "tidy-aurora.md",
+    );
+    expect(planFileName({ file_path: "/home/u/.claude/plans/a.md" })).toBe("a.md");
+    expect(planFileName({ file_path: "/home/u/.claude/plans/deep/a.md" })).toBeNull();
+    expect(planFileName({ file_path: "/work/plans/a.md" })).toBeNull();
+    expect(planFileName({})).toBeNull();
   });
 });
 

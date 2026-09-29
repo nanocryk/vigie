@@ -22,6 +22,7 @@ use super::events::{
 };
 use super::grant::{self, FileOffer};
 use super::handle::Config;
+use super::plan::PlanTracker;
 use super::{danger, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
@@ -88,6 +89,8 @@ enum State {
 struct PendingAsk {
     request_id: String,
     request: CanUseTool,
+    /// The plan file an `ExitPlanMode` ask submits, when known.
+    plan_path: Option<String>,
 }
 
 /// A host control request awaiting its `control_response`.
@@ -134,6 +137,7 @@ pub struct Actor {
     agents: AgentTracker,
     background: BackgroundTracker,
     relays: RelayFilter,
+    plans: PlanTracker,
     /// In arrival order.
     asks: Vec<PendingAsk>,
     /// Files allowed with `always_for_file`; their later asks are answered here.
@@ -170,6 +174,7 @@ impl Actor {
             agents: AgentTracker::default(),
             background: BackgroundTracker::default(),
             relays: RelayFilter::default(),
+            plans: PlanTracker::from_env(),
             asks: Vec::new(),
             file_grants: Vec::new(),
             pending: HashMap::new(),
@@ -247,6 +252,7 @@ impl Actor {
             for verdict in self.relays.on_line(parsed) {
                 self.emit_verdict(verdict);
             }
+            self.plans.on_line(parsed);
             self.handle_line(parsed).await;
         }
     }
@@ -323,9 +329,18 @@ impl Actor {
                         .await;
                     return;
                 }
+                let plan = if ask.tool_name == EXIT_PLAN_MODE {
+                    self.plans
+                        .review(ask, self.history.as_ref())
+                        .await
+                        .map(Box::new)
+                } else {
+                    None
+                };
                 self.asks.push(PendingAsk {
                     request_id: request.request_id.clone(),
                     request: (**ask).clone(),
+                    plan_path: plan.as_ref().and_then(|plan| plan.path.clone()),
                 });
                 self.emit_host(HostEvent::AskQueued {
                     request_id: request.request_id.clone(),
@@ -335,6 +350,7 @@ impl Actor {
                     accept_edits: grant::offers_accept_edits(ask),
                     folder: grant::folder_offer(ask, dirs::home_dir().as_deref()).map(Box::new),
                     file,
+                    plan,
                     agent_id,
                 });
                 self.publish_status();
@@ -562,6 +578,13 @@ impl Actor {
             && !self.file_grants.iter().any(|grant| grant.same(&file))
         {
             self.file_grants.push(file);
+        }
+        // An approved plan is done with: the next plan in its file is new work.
+        if let Answer::Allow { .. } = &answer
+            && let Some(path) = ask.plan_path
+            && let Some(history) = &self.history
+        {
+            history.forget_plan(path);
         }
         let note = match &answer {
             Answer::Allow {

@@ -277,6 +277,15 @@ export interface FileOffer {
   path: string;
 }
 
+/** The plan an `ExitPlanMode` ask submits. */
+export interface PlanReview {
+  /** The plan file, when known. */
+  path: string | null;
+  text: string;
+  /** The text the previous review of `path` showed, since its last approval. */
+  previous: string | null;
+}
+
 /** `unknown` stands for a reason this client does not know. */
 export type RelayFailure =
   | "altered"
@@ -323,6 +332,7 @@ export type HostEvent =
       accept_edits: boolean;
       folder: FolderOffer | null;
       file: FileOffer | null;
+      plan: PlanReview | null;
       /** Task id of the subagent asking; null for the main agent. */
       agent_id: string | null;
     }
@@ -721,6 +731,13 @@ export function parseFileOffer(raw: unknown): FileOffer | null {
   return { kind, path };
 }
 
+export function parsePlanReview(raw: unknown): PlanReview | null {
+  if (!isRecord(raw)) return null;
+  const text = raw["text"];
+  if (typeof text !== "string") return null;
+  return { path: stringOrNull(raw["path"]), text, previous: stringOrNull(raw["previous"]) };
+}
+
 export function parseHostEvent(raw: unknown): HostEvent {
   if (!isRecord(raw)) return { event: "unknown", raw };
   const text = (key: string): string | null => {
@@ -758,6 +775,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         accept_edits: raw["accept_edits"] === true,
         folder: parseFolderOffer(raw["folder"]),
         file: parseFileOffer(raw["file"]),
+        plan: parsePlanReview(raw["plan"]),
         agent_id: text("agent_id"),
       };
     }
@@ -1068,7 +1086,7 @@ function parseTaskLine(raw: Record<string, unknown>): TaskLine | null {
   };
 }
 
-function stringOrNull(raw: unknown): string | null {
+export function stringOrNull(raw: unknown): string | null {
   return typeof raw === "string" ? raw : null;
 }
 

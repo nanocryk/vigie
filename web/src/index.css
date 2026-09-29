@@ -317,6 +317,62 @@
     :where(p, ul, ol, pre, blockquote, .md-table, h1, h2, h3, h4, h5, h6, hr):not(:first-child) {
     margin-top: 0.5rem;
   }
+  /* Plan changes since the last review: new words tinted, a red dot where words
+     went, a red line where lines went; a mark's tap shows the removed text. */
+  .markdown .plan-added {
+    background: var(--diff-added);
+    border-radius: 2px;
+  }
+  .markdown .plan-code-line {
+    display: block;
+    min-height: 1lh;
+  }
+  .markdown .plan-mark {
+    position: relative;
+  }
+  .markdown .plan-mark-dot {
+    display: inline-block;
+  }
+  .markdown .plan-mark-line {
+    display: block;
+  }
+  .markdown .plan-dot {
+    width: 1.125rem;
+    height: 1.125rem;
+    padding: 0.3125rem;
+    margin: -0.3125rem -0.125rem;
+    vertical-align: middle;
+    border-radius: 9999px;
+    background: var(--diff-removed-sign);
+    background-clip: content-box;
+  }
+  .markdown .plan-cut {
+    display: block;
+    width: 100%;
+    height: calc(2px + 0.5rem);
+    padding: 0.25rem 0;
+    background: var(--diff-removed-sign);
+    background-clip: content-box;
+    opacity: 0.45;
+  }
+  .markdown .plan-pop {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 10;
+    width: max-content;
+    max-width: min(24rem, 75vw);
+    margin-top: 0.125rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--diff-removed-sign);
+    border-radius: 5px;
+    background: var(--diff-removed);
+    color: var(--foreground);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
   .markdown p {
     white-space: pre-wrap;
   }

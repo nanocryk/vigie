@@ -192,16 +192,17 @@ export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: S
   };
 
   return (
-    <div className="space-y-2">
+    // Flex columns down to the children, so a `min-h-0` child can shrink in a bounded frame.
+    <div className="flex min-h-0 flex-col gap-2">
       <div
         ref={surface}
         // touch-action only reaches down to the nearest scroll container, so inner
         // scroll boxes (a long plan) need pan-y too or the browser takes the swipe.
-        className="relative touch-pan-y overflow-hidden rounded-[5px] border select-none [&_*]:touch-pan-y"
+        className="relative flex min-h-0 touch-pan-y flex-col overflow-hidden rounded-[5px] border select-none [&_*]:touch-pan-y"
         style={{ background: background(view) }}
       >
         <div
-          className="p-2"
+          className="flex min-h-0 flex-col p-2"
           style={{
             transform: `translateX(${view.offset}px)`,
             transition: view.dragging ? "none" : SPRING_BACK,

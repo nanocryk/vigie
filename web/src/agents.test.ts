@@ -52,6 +52,7 @@ function ask(agentId: string | null): PendingAsk {
     danger: { dangerous: false, reasons: [] },
     acceptEdits: false,
     folder: null,
+    plan: null,
     file: null,
     agentId,
   };

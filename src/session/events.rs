@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::agents::RelayOutcome;
 use super::danger::Danger;
 use super::grant::{FileOffer, FolderOffer};
+use super::plan::PlanReview;
 use crate::claude::child::Launch;
 use crate::claude::protocol::{Inbound, InitCommand, InitModel, PermissionMode};
 
@@ -66,6 +67,9 @@ pub enum HostEvent {
         /// The file of a Read or edit-tool ask, which the allow can grant.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<FileOffer>,
+        /// The plan an `ExitPlanMode` ask submits, when one was found.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<Box<PlanReview>>,
         /// Task id of the subagent asking; `None` for the main agent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
@@ -313,6 +317,7 @@ mod tests {
             accept_edits: false,
             folder: None,
             file: None,
+            plan: None,
             agent_id: None,
         };
         assert_eq!(
@@ -325,7 +330,7 @@ mod tests {
             "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
         .unwrap();
         assert!(matches!(stored, HostEvent::AskQueued {
-            danger, accept_edits: false, folder: None, file: None, agent_id: None, ..
+            danger, accept_edits: false, folder: None, file: None, plan: None, agent_id: None, ..
         } if danger == Danger::default()));
     }
 }
