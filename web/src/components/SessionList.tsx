@@ -12,7 +12,7 @@ import type { Client, ConnectionStatus } from "@/client";
 import { useSwipe } from "@/components/Swipe";
 import { Header, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
-import { folderName, formatAgo, stateLabel } from "@/format";
+import { folderName, formatAgo } from "@/format";
 import {
   type RowAction,
   type RowHighlight,
@@ -163,19 +163,27 @@ function revealBackground(action: RowAction, lean: number): string {
   return `color-mix(in oklch, ${fill} ${share}%, var(--muted))`;
 }
 
-function RowBody({ session, now, status }: { session: SessionView; now: number; status: string }) {
+/** Name and time, then the path; `busyLabel` takes the time's place while an action runs. */
+function RowBody({
+  session,
+  now,
+  busyLabel,
+}: {
+  session: SessionView;
+  now: number;
+  busyLabel: string | null;
+}) {
+  // A stopped discussion fades; its row's border turns dashed.
   return (
-    <>
+    <div className={session.live ? "" : "opacity-45"}>
       <div className="flex items-center gap-2">
-        <BusyDot busy={session.busy} />
         <span className="voice-heading min-w-0 flex-1 truncate">{folderName(session.cwd)}</span>
         <span className="text-muted-foreground voice-ui shrink-0 text-xs">
-          {formatAgo(session.updated_at, now)}
+          {busyLabel ?? formatAgo(session.updated_at, now)}
         </span>
       </div>
       <div className="text-muted-foreground voice-code truncate text-xs">{session.cwd}</div>
-      <div className="text-muted-foreground voice-ui text-xs">{status}</div>
-    </>
+    </div>
   );
 }
 
@@ -238,16 +246,13 @@ function ActionRow({
   const slidOut = action !== "kill" && view.fired !== null;
   const tap = useOpenOnTap(session.id, armed, view.fired !== null);
   const highlight = armed ? null : rowHighlight(session);
-  const status =
-    action === "restore"
-      ? pending
-        ? "Restoring..."
-        : "archived"
-      : pending && action === "kill"
+  const busyLabel = !pending
+    ? null
+    : action === "restore"
+      ? "Restoring..."
+      : action === "kill"
         ? "Stopping..."
-        : session.busy
-          ? "working"
-          : stateLabel(session.state);
+        : null;
   const button = !coarse && (
     <button
       type="button"
@@ -281,7 +286,7 @@ function ActionRow({
         <div
           ref={coarse ? surface : undefined}
           {...tap}
-          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${highlight !== null ? "border-transparent" : ""} ${action === "restore" ? "opacity-80" : ""}`}
+          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${highlight !== null ? "border-transparent" : ""} ${session.live || highlight !== null ? "" : "border-long-dash"}`}
           style={{
             transform: slidOut
               ? `translateX(${side === "left" ? "-110%" : "110%"})`
@@ -289,7 +294,7 @@ function ActionRow({
             transition: view.dragging ? "none" : SPRING_BACK,
           }}
         >
-          <RowBody session={session} now={now} status={status} />
+          <RowBody session={session} now={now} busyLabel={busyLabel} />
         </div>
         {coarse && armed && (
           <span className="bg-card voice-heading text-destructive pointer-events-none absolute top-1.5 right-2 rounded-[5px] px-2 py-0.5 text-sm shadow-sm">

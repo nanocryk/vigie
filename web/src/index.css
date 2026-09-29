@@ -503,6 +503,26 @@
   user-select: none;
 }
 
+/* A 1px edge of long dashes: `border-style: dashed` at 1px reads as dotted. */
+@utility border-long-dash {
+  --dash: repeating-linear-gradient(90deg, var(--border) 0 8px, transparent 8px 13px);
+  --dash-v: repeating-linear-gradient(180deg, var(--border) 0 8px, transparent 8px 13px);
+  border-color: transparent;
+  background-image: var(--dash), var(--dash), var(--dash-v), var(--dash-v);
+  background-size:
+    100% 1px,
+    100% 1px,
+    1px 100%,
+    1px 100%;
+  background-position:
+    top left,
+    bottom left,
+    top left,
+    top right;
+  background-repeat: no-repeat;
+  background-origin: border-box;
+}
+
 /* A ring and a glow around a Home row in `--row-pulse`, fading in and out slowly; steady under reduced motion. */
 @utility row-pulse {
   box-shadow:
