@@ -88,6 +88,7 @@ pub enum Inbound {
     RateLimitEvent(RateLimitEvent),
     ControlRequest(ControlRequest<CliRequest>),
     ControlResponse(ControlResponse),
+    ControlCancelRequest(ControlCancelRequest),
     #[serde(untagged)]
     Unknown(Value),
 }
@@ -644,6 +645,14 @@ impl<R> ControlRequest<R> {
     }
 }
 
+/// Withdraws the control request `request_id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlCancelRequest {
+    pub request_id: String,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
 /// Requests the CLI sends to the host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
@@ -743,6 +752,68 @@ pub enum HostRequest {
     },
     #[serde(untagged)]
     Other(Extra),
+}
+
+impl HostRequest {
+    pub fn initialize() -> Self {
+        Self::Initialize {
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn interrupt(cancel_queued: Option<bool>) -> Self {
+        Self::Interrupt {
+            cancel_queued,
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn set_permission_mode(mode: PermissionMode) -> Self {
+        Self::SetPermissionMode {
+            mode,
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn get_usage(skip_behaviors: Option<bool>) -> Self {
+        Self::GetUsage {
+            skip_behaviors,
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn get_context_usage() -> Self {
+        Self::GetContextUsage {
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn get_settings() -> Self {
+        Self::GetSettings {
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn set_model(model: Option<String>) -> Self {
+        Self::SetModel {
+            model,
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn apply_flag_settings(settings: Value) -> Self {
+        Self::ApplyFlagSettings {
+            settings,
+            extra: Extra::new(),
+        }
+    }
+
+    pub fn stop_task(task_id: impl Into<String>) -> Self {
+        Self::StopTask {
+            task_id: task_id.into(),
+            extra: Extra::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1198,7 +1269,9 @@ mod tests {
             },
             Inbound::Assistant(message) => blocks_fallback(&message.message.content),
             Inbound::User(message) => content_fallback(&message.message.content),
-            Inbound::Result(_) | Inbound::RateLimitEvent(_) => None,
+            Inbound::Result(_) | Inbound::RateLimitEvent(_) | Inbound::ControlCancelRequest(_) => {
+                None
+            }
             Inbound::ControlRequest(request) => {
                 matches!(request.request, CliRequest::Other(_)).then_some("cli request")
             }
@@ -1410,6 +1483,16 @@ mod tests {
     }
 
     #[test]
+    fn cancel_requests_are_typed() {
+        let line = serde_json::json!({"type": "control_cancel_request", "request_id": "cli-2"});
+        let typed: Inbound = serde_json::from_value(line.clone()).unwrap();
+        assert!(
+            matches!(&typed, Inbound::ControlCancelRequest(cancel) if cancel.request_id == "cli-2")
+        );
+        assert_eq!(serde_json::to_value(&typed).unwrap(), line);
+    }
+
+    #[test]
     fn odd_shaped_ask_fields_stay_an_ask() {
         let line = serde_json::json!({"type": "control_request", "request_id": "r1",
             "request": {"subtype": "can_use_tool", "tool_name": "Bash",
@@ -1458,13 +1541,8 @@ mod tests {
             serde_json::json!({"type": "user", "message": {"role": "user", "content": "hi"},
                 "parent_tool_use_id": null, "session_id": "s", "priority": "next"}),
         );
-        let interrupt = Outbound::ControlRequest(ControlRequest::new(
-            "r1",
-            HostRequest::Interrupt {
-                cancel_queued: None,
-                extra: Extra::new(),
-            },
-        ));
+        let interrupt =
+            Outbound::ControlRequest(ControlRequest::new("r1", HostRequest::interrupt(None)));
         assert_eq!(
             serde_json::to_value(&interrupt).unwrap(),
             serde_json::json!({"type": "control_request", "request_id": "r1",
@@ -1472,10 +1550,7 @@ mod tests {
         );
         let model = Outbound::ControlRequest(ControlRequest::new(
             "r2",
-            HostRequest::SetModel {
-                model: Some("sonnet".into()),
-                extra: Extra::new(),
-            },
+            HostRequest::set_model(Some("sonnet".into())),
         ));
         assert_eq!(
             serde_json::to_value(&model).unwrap(),
@@ -1484,23 +1559,15 @@ mod tests {
         );
         let effort = Outbound::ControlRequest(ControlRequest::new(
             "r3",
-            HostRequest::ApplyFlagSettings {
-                settings: serde_json::json!({"effortLevel": "high"}),
-                extra: Extra::new(),
-            },
+            HostRequest::apply_flag_settings(serde_json::json!({"effortLevel": "high"})),
         ));
         assert_eq!(
             serde_json::to_value(&effort).unwrap(),
             serde_json::json!({"type": "control_request", "request_id": "r3",
                 "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": "high"}}}),
         );
-        let stop = Outbound::ControlRequest(ControlRequest::new(
-            "r4",
-            HostRequest::StopTask {
-                task_id: "a1".into(),
-                extra: Extra::new(),
-            },
-        ));
+        let stop =
+            Outbound::ControlRequest(ControlRequest::new("r4", HostRequest::stop_task("a1")));
         assert_eq!(
             serde_json::to_value(&stop).unwrap(),
             serde_json::json!({"type": "control_request", "request_id": "r4",
