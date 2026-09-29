@@ -14,22 +14,26 @@ const SIGN: Record<LineKind, { text: string; className: string }> = {
   removed: { text: "-", className: "text-diff-removed-sign" },
 };
 
-/** Hunks with a line-number gutter, full-width colored rows, scrolling within the block. */
+/** Hunks with a line-number gutter, full-width colored rows, scrolling or wrapping within the block. */
 export function DiffBlock({
   diff,
   maxHeight = "max-h-[70dvh]",
   onNumber,
   onRemovedNumber,
+  wrap = false,
 }: {
   diff: FileDiff;
   /** A literal `max-h-*` class. */
   maxHeight?: string;
+  /** Long lines wrap instead of scrolling sideways. */
+  wrap?: boolean;
   /** Makes new-side line numbers tappable. */
   onNumber?: (line: number) => void;
   /** Makes removed lines' numbers tappable. */
   onRemovedNumber?: (line: number) => void;
 }) {
   const width = gutterWidth(diff.hunks);
+  const text = wrap ? "pr-3 min-w-0 whitespace-pre-wrap break-all" : "pr-3 whitespace-pre";
   const html = useMemo(
     () => diff.hunks.map((hunk) => highlightHunk(hunk, diff.language)),
     [diff],
@@ -38,7 +42,7 @@ export function DiffBlock({
     <div
       className={`bg-code-block voice-code overflow-auto rounded-[5px] py-1 text-xs leading-[1.45] ${maxHeight}`}
     >
-      <div className="w-max min-w-full">
+      <div className={wrap ? "w-full" : "w-max min-w-full"}>
         {diff.hunks.map((hunk, h) => (
           <div key={h} className={h > 0 ? "mt-3" : undefined}>
             {hunk.map((line, index) => {
@@ -49,7 +53,7 @@ export function DiffBlock({
                 <div
                   key={index}
                   data-new={line.kind === "removed" ? undefined : (line.number ?? undefined)}
-                  className={`flex min-h-[1.45em] ${ROW[line.kind]}`}
+                  className={`flex min-h-[1.45em] ${wrap ? "items-start" : ""} ${ROW[line.kind]}`}
                 >
                   {width > 0 &&
                     (tap !== undefined && line.number !== null ? (
@@ -76,12 +80,9 @@ export function DiffBlock({
                     {sign.text}
                   </span>
                   {lineHtml === null ? (
-                    <span className="pr-3 whitespace-pre">{line.text}</span>
+                    <span className={text}>{line.text}</span>
                   ) : (
-                    <span
-                      className="pr-3 whitespace-pre"
-                      dangerouslySetInnerHTML={{ __html: lineHtml }}
-                    />
+                    <span className={text} dangerouslySetInnerHTML={{ __html: lineHtml }} />
                   )}
                 </div>
               );

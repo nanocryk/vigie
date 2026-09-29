@@ -154,6 +154,7 @@ function FileSection({
           <DiffBlock
             diff={block}
             maxHeight=""
+            wrap
             {...(openFile === null ? {} : { onNumber: (line: number) => openFile(line) })}
             {...(file.status === "deleted" ? { onRemovedNumber: openFolder } : {})}
           />
