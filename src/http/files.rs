@@ -329,12 +329,15 @@ pub fn make_dir(parent: &str, name: &str) -> Result<String, FsError> {
     Ok(display_path(&path))
 }
 
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, FsError> + Send + 'static,
-) -> Result<T, FsError> {
+/// Runs filesystem work off the async runtime, as every route does.
+pub async fn blocking<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, E>
+where
+    T: Send + 'static,
+    E: From<io::Error> + Send + 'static,
+{
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|err| FsError::Io(io::Error::other(err)))?
+        .map_err(|err| E::from(io::Error::other(err)))?
 }
 
 #[derive(Deserialize)]

@@ -5,13 +5,14 @@ edition = "2024"
 description = "Phone-reachable chat UI driving Claude Code headlessly"
 
 [features]
-# The fake `claude` CLI that replays spike recordings, for tests only.
-fake-claude = []
+# What tests build on: the fake `claude` CLI replaying spike recordings, and
+# `AppState::for_tests`.
+test-support = []
 
 [[bin]]
 name = "fake-claude"
 path = "src/bin/fake_claude.rs"
-required-features = ["fake-claude"]
+required-features = ["test-support"]
 
 [dependencies]
 anyhow = "1"
@@ -46,5 +47,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
 tower = { version = "0.5", features = ["util"] }
-# Turns `fake-claude` on for the tests of this package.
-vigie2 = { path = ".", features = ["fake-claude"] }
+# Turns `test-support` on for the tests of this package.
+vigie2 = { path = ".", features = ["test-support"] }

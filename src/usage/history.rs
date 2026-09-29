@@ -187,7 +187,7 @@ mod tests {
                 used: Pct::new(pct),
                 resets_at: Timestamp::new(resets_at),
             },
-            Some("session"),
+            Some(uuid::Uuid::from_u128(1)),
             Timestamp::new(at),
         )
         .expect("record");

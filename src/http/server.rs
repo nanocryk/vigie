@@ -40,6 +40,44 @@ pub struct AppState {
     pub pusher: Arc<Pusher>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl AppState {
+    /// A state kept in `dir` that runs `program`, with `device` paired, served
+    /// over plain HTTP on `port` to `http://127.0.0.1:{port}`.
+    pub async fn for_tests(
+        dir: &std::path::Path,
+        program: crate::claude::child::Program,
+        device: &str,
+        port: u16,
+    ) -> anyhow::Result<Self> {
+        use crate::http::auth::{Device, Registry};
+        use crate::http::push::Vapid;
+        use crate::store::Store;
+
+        let registry = Registry::load(dir.join("devices.json"))?;
+        registry.insert(Device::new(
+            device.to_string(),
+            "test".into(),
+            chrono::Utc::now(),
+        ))?;
+        let auth = Arc::new(Auth::new(registry, false));
+        let store = Store::open(&dir.join("history.db"))?;
+        let vapid = Vapid::load_or_generate(dir)?;
+        let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);
+        let manager = SessionManager::start(store, program).await?;
+        Ok(Self {
+            auth,
+            pair_scheme: Arc::new("http".into()),
+            pair_port: port,
+            pair_extra_hosts: Arc::new(Vec::new()),
+            web_dir: Arc::new(dir.join("web")),
+            manager,
+            allowed_origins: Arc::new(BTreeSet::from([format!("http://127.0.0.1:{port}")])),
+            pusher,
+        })
+    }
+}
+
 /// Build the full HTTP router. Extracted from `serve` so tests can drive the
 /// exact production wiring without duplicating the route table.
 pub fn build_app(state: AppState) -> Router {
@@ -121,8 +159,6 @@ mod auth_gate_tests {
     //! tables in sync (one entry per route/method registered in that fn).
     use super::*;
     use crate::claude::child::Program;
-    use crate::http::auth::Registry;
-    use crate::store::Store;
     use axum::body::Body;
     use axum::extract::ConnectInfo;
     use axum::http::{Method, Request, StatusCode};
@@ -176,39 +212,15 @@ mod auth_gate_tests {
 
     async fn build_test_app() -> TestApp {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let dir = tmp.path().to_path_buf();
-        let registry = Registry::load(dir.join("devices.json")).expect("registry load");
         let device_cookie = "test-device-cookie".to_string();
-        registry
-            .insert(auth::Device::new(
-                device_cookie.clone(),
-                "test".into(),
-                chrono::Utc::now(),
-            ))
-            .expect("insert device");
-        let web_dir = dir.join("web");
+        let state = AppState::for_tests(tmp.path(), Program::claude(), &device_cookie, 0)
+            .await
+            .expect("test state");
+        let web_dir = state.web_dir.as_ref();
         std::fs::create_dir_all(web_dir.join("assets")).expect("mkdir web");
         std::fs::write(web_dir.join("index.html"), "<!doctype html>").expect("write index");
         std::fs::write(web_dir.join("assets").join("app.js"), "").expect("write asset");
-        let auth = Arc::new(Auth::new(registry, false));
-        let startup_token = auth.startup_token.clone();
-        let store = Store::open(&dir.join("history.db")).expect("open store");
-        let vapid = push::Vapid::load_or_generate(&dir).expect("vapid keys");
-        let pusher =
-            Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth)).expect("pusher"));
-        let manager = SessionManager::start(store, Program::claude())
-            .await
-            .expect("start manager");
-        let state = AppState {
-            pusher,
-            auth,
-            pair_scheme: Arc::new("http".into()),
-            pair_port: 0,
-            pair_extra_hosts: Arc::new(vec![]),
-            web_dir: Arc::new(web_dir),
-            manager,
-            allowed_origins: Arc::new(BTreeSet::new()),
-        };
+        let startup_token = state.auth.startup_token.clone();
         let router = build_app(state);
         TestApp {
             _tmp: tmp,

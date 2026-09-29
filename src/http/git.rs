@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::http::api::ApiError;
-use crate::http::files::{PathQuery, canonical, display_path, is_binary};
+use crate::http::files::{PathQuery, blocking, canonical, display_path, is_binary};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A file with more changed lines than this keeps its counts but not its lines.
@@ -435,7 +435,7 @@ pub async fn repo_diff(root: &Path) -> Result<RepoDiff, GitError> {
     let untracked = git(root, &["ls-files", "--others", "--exclude-standard", "-z"]).await?;
 
     let root_owned = root.to_path_buf();
-    let mut files = tokio::task::spawn_blocking(move || {
+    let mut files = blocking(move || {
         let mut files = parse_diff(&String::from_utf8_lossy(&patch));
         let paths = untracked
             .split(|byte| *byte == 0)
@@ -448,10 +448,9 @@ pub async fn repo_diff(root: &Path) -> Result<RepoDiff, GitError> {
                 index < UNTRACKED_READ_MAX,
             ));
         }
-        files
+        Ok::<_, GitError>(files)
     })
-    .await
-    .map_err(|err| GitError::Failed(err.to_string()))?;
+    .await?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(RepoDiff {
         root: display_path(root),
@@ -472,7 +471,10 @@ fn relative(root: &Path, path: &Path) -> Option<String> {
 
 /// One file's pending changes, or None when it has none.
 pub async fn file_diff(path: &Path) -> Result<Option<FileDiff>, GitError> {
-    let Some(root) = path.parent().and_then(repo_root) else {
+    let parent = path.parent().map(Path::to_path_buf);
+    let Some(root) =
+        blocking(move || Ok::<_, GitError>(parent.as_deref().and_then(repo_root))).await?
+    else {
         return Ok(None);
     };
     let Some(rel) = relative(&root, path) else {
@@ -491,9 +493,7 @@ pub async fn file_diff(path: &Path) -> Result<Option<FileDiff>, GitError> {
     )
     .await?;
     if !untracked.is_empty() {
-        return tokio::task::spawn_blocking(move || Some(untracked_file(&root, rel, true)))
-            .await
-            .map_err(|err| GitError::Failed(err.to_string()));
+        return blocking(move || Ok(Some(untracked_file(&root, rel, true)))).await;
     }
     let patch = patch(&root, &[&rel]).await?;
     Ok(parse_diff(&String::from_utf8_lossy(&patch))
@@ -556,7 +556,8 @@ pub fn parse_status(raw: &[u8]) -> Vec<Change> {
 }
 
 pub async fn repo_status(path: &Path) -> Result<RepoStatus, GitError> {
-    let Some(root) = repo_root(path) else {
+    let lookup = path.to_path_buf();
+    let Some(root) = blocking(move || Ok::<_, GitError>(repo_root(&lookup))).await? else {
         return Ok(RepoStatus {
             root: None,
             changes: Vec::new(),
@@ -575,13 +576,18 @@ pub async fn repo_status(path: &Path) -> Result<RepoStatus, GitError> {
 
 /// Changed paths of the repository containing a folder, for its listing.
 pub async fn status_route(Query(query): Query<PathQuery>) -> Result<Json<RepoStatus>, GitError> {
-    repo_status(&canonical(&query.path)?).await.map(Json)
+    let path = blocking(move || Ok::<_, GitError>(canonical(&query.path)?)).await?;
+    repo_status(&path).await.map(Json)
 }
 
 /// A file's pending changes, null when it has none or is outside a repository.
 pub async fn file_route(Query(query): Query<PathQuery>) -> Result<Response, GitError> {
-    let path = canonical(&query.path)?;
-    let root = path.parent().and_then(repo_root);
+    let (path, root) = blocking(move || {
+        let path = canonical(&query.path)?;
+        let root = path.parent().and_then(repo_root);
+        Ok::<_, GitError>((path, root))
+    })
+    .await?;
     let diff = file_diff(&path).await?;
     Ok(Json(json!({
         "root": root.as_deref().map(display_path),
@@ -592,10 +598,12 @@ pub async fn file_route(Query(query): Query<PathQuery>) -> Result<Response, GitE
 
 /// The repository containing a folder, or null.
 pub async fn root_route(Query(query): Query<PathQuery>) -> Response {
-    let root = tokio::task::spawn_blocking(move || {
-        canonical(&query.path)
-            .ok()
-            .and_then(|path| repo_root(&path))
+    let root = blocking(move || {
+        Ok::<_, GitError>(
+            canonical(&query.path)
+                .ok()
+                .and_then(|path| repo_root(&path)),
+        )
     })
     .await
     .ok()
@@ -609,7 +617,7 @@ pub struct RootQuery {
 }
 
 pub async fn diff_route(Query(query): Query<RootQuery>) -> Result<Json<RepoDiff>, GitError> {
-    let root = canonical_root(&query.root)?;
+    let root = blocking(move || canonical_root(&query.root)).await?;
     repo_diff(&root).await.map(Json)
 }
 

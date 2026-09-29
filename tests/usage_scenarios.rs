@@ -13,6 +13,10 @@ use vigie2::usage::{self, SessionContext, Snapshot, WindowReport};
 /// 2026-09-14 00:00:00 UTC, a Monday.
 const MONDAY: f64 = 1_789_344_000.0;
 const HOUR: f64 = 3600.0;
+const MAIN: Uuid = Uuid::from_u128(1);
+const COLD: Uuid = Uuid::from_u128(2);
+const FIRST: Uuid = Uuid::from_u128(3);
+const SECOND: Uuid = Uuid::from_u128(4);
 
 fn utc() -> FixedOffset {
     FixedOffset::east_opt(0).expect("utc offset")
@@ -37,7 +41,7 @@ impl Harness {
     fn refresh(
         &self,
         at: f64,
-        session: &str,
+        session: Uuid,
         five_hour: (f64, f64),
         seven_day: (f64, f64),
     ) -> Snapshot {
@@ -73,7 +77,7 @@ impl Harness {
         while at < to {
             five.0 += 14.0 * (300.0 / HOUR);
             seven.0 += 1.33 * (300.0 / HOUR);
-            self.refresh(at, "main", *five, *seven);
+            self.refresh(at, MAIN, *five, *seven);
             at += 300.0;
         }
     }
@@ -100,7 +104,7 @@ fn a_first_refresh_projects_both_windows() {
     let harness = Harness::new();
     let snapshot = harness.refresh(
         MONDAY + 9.0 * HOUR,
-        "main",
+        MAIN,
         (2.0, MONDAY + 14.0 * HOUR),
         (1.0, MONDAY + 7.0 * 86400.0),
     );
@@ -125,12 +129,12 @@ fn closing_the_editor_for_two_hours_does_not_inflate_the_rate() {
         &mut five,
         &mut seven,
     );
-    let before = harness.refresh(MONDAY + 10.0 * HOUR, "main", five, seven);
+    let before = harness.refresh(MONDAY + 10.0 * HOUR, MAIN, five, seven);
 
     // Two hours away from the keyboard, then back at the same pace.
     let resume = MONDAY + 12.0 * HOUR;
     harness.work(resume, resume + 600.0, &mut five, &mut seven);
-    let after = harness.refresh(resume + 600.0, "main", five, seven);
+    let after = harness.refresh(resume + 600.0, MAIN, five, seven);
 
     let before_rate = window(&before, WindowKind::FiveHour).rate;
     let after_rate = window(&after, WindowKind::FiveHour).rate;
@@ -151,12 +155,12 @@ fn a_window_reset_carries_nothing_across() {
         &mut five,
         &mut seven,
     );
-    let before = harness.refresh(MONDAY + 13.0 * HOUR, "main", five, seven);
+    let before = harness.refresh(MONDAY + 13.0 * HOUR, MAIN, five, seven);
     assert!(projected(&before, WindowKind::FiveHour) > 40.0);
 
     // The window resets: usage returns to zero against a new reset instant.
     let fresh = (0.5, MONDAY + 19.0 * HOUR);
-    let after = harness.refresh(MONDAY + 14.0 * HOUR + 300.0, "main", fresh, seven);
+    let after = harness.refresh(MONDAY + 14.0 * HOUR + 300.0, MAIN, fresh, seven);
 
     assert_eq!(
         harness.stored_samples(WindowKind::FiveHour, fresh.1),
@@ -174,7 +178,7 @@ fn a_window_whose_reset_has_passed_is_not_reported() {
     let harness = Harness::new();
     harness.refresh(
         MONDAY + 9.0 * HOUR,
-        "main",
+        MAIN,
         (40.0, MONDAY + 10.0 * HOUR),
         (5.0, MONDAY + 7.0 * 86400.0),
     );
@@ -193,12 +197,12 @@ fn a_stale_reading_at_session_start_leaves_no_trace() {
     // A cold-started session reports the previous window's 85% first, then
     // corrects itself on the next reading.
     let stale = Harness::new();
-    stale.refresh(start, "cold", (85.0, five_reset), seven);
-    let corrected = stale.refresh(start + 60.0, "cold", (3.0, five_reset), seven);
+    stale.refresh(start, COLD, (85.0, five_reset), seven);
+    let corrected = stale.refresh(start + 60.0, COLD, (3.0, five_reset), seven);
 
     // The same session without the bad first reading.
     let clean = Harness::new();
-    let honest = clean.refresh(start + 60.0, "cold", (3.0, five_reset), seven);
+    let honest = clean.refresh(start + 60.0, COLD, (3.0, five_reset), seven);
 
     assert_eq!(stale.stored_samples(WindowKind::FiveHour, five_reset), 1);
     let (corrected, honest) = (
@@ -220,7 +224,7 @@ fn a_first_ever_refresh_reads_as_on_budget() {
     // Both windows open at this instant, so the whole budget is still ahead.
     let snapshot = harness.refresh(
         start,
-        "first",
+        FIRST,
         (0.0, start + 5.0 * HOUR),
         (0.0, start + 7.0 * 86400.0),
     );
@@ -241,13 +245,8 @@ fn two_sessions_reporting_the_same_window_agree() {
     let five_reset = MONDAY + 14.0 * HOUR;
     let seven = (4.0, MONDAY + 7.0 * 86400.0);
 
-    harness.refresh(MONDAY + 9.0 * HOUR, "first", (10.0, five_reset), seven);
-    let both = harness.refresh(
-        MONDAY + 9.0 * HOUR + 5.0,
-        "second",
-        (10.0, five_reset),
-        seven,
-    );
+    harness.refresh(MONDAY + 9.0 * HOUR, FIRST, (10.0, five_reset), seven);
+    let both = harness.refresh(MONDAY + 9.0 * HOUR + 5.0, SECOND, (10.0, five_reset), seven);
 
     assert_eq!(
         harness.stored_samples(WindowKind::FiveHour, five_reset),
@@ -267,10 +266,10 @@ fn a_heavy_window_says_what_is_left_in_its_own_unit() {
     while at < MONDAY + 11.0 * HOUR {
         five.0 += 40.0 * (300.0 / HOUR);
         seven.0 += 15.0 * (300.0 / HOUR);
-        harness.refresh(at, "main", five, seven);
+        harness.refresh(at, MAIN, five, seven);
         at += 300.0;
     }
-    let snapshot = harness.refresh(at, "main", five, seven);
+    let snapshot = harness.refresh(at, MAIN, five, seven);
 
     let five_hour = window(&snapshot, WindowKind::FiveHour);
     assert!(five_hour.projected > 100.0, "{}", five_hour.projected);
@@ -291,7 +290,6 @@ fn a_heavy_window_says_what_is_left_in_its_own_unit() {
 fn the_model_mix_counts_each_message_once() {
     let harness = Harness::new();
     let id = Uuid::new_v4();
-    let session = id.to_string();
     // One message written as three content blocks, all carrying the same usage.
     let message = MessageTokens {
         message_id: "msg_1".into(),
@@ -302,7 +300,7 @@ fn the_model_mix_counts_each_message_once() {
     for _ in 0..3 {
         harness
             .db()
-            .record_message(&session, Timestamp::new(MONDAY), &message)
+            .record_message(id, Timestamp::new(MONDAY), &message)
             .expect("record message");
     }
     let subagent = MessageTokens {
@@ -313,7 +311,7 @@ fn the_model_mix_counts_each_message_once() {
     };
     harness
         .db()
-        .record_message(&session, Timestamp::new(MONDAY), &subagent)
+        .record_message(id, Timestamp::new(MONDAY), &subagent)
         .expect("record message");
 
     let context = SessionContext {
@@ -351,7 +349,7 @@ fn a_days_work_leaves_the_snapshot_well_formed_throughout() {
     while at < MONDAY + 13.0 * HOUR {
         five.0 += 14.0 * (300.0 / HOUR);
         seven.0 += 1.33 * (300.0 / HOUR);
-        let snapshot = harness.refresh(at, "main", five, seven);
+        let snapshot = harness.refresh(at, MAIN, five, seven);
         let projected = projected(&snapshot, WindowKind::SevenDay);
         assert!(
             projected.is_finite() && projected >= seven.0,

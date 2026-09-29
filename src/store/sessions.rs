@@ -39,7 +39,22 @@ pub enum Unread {
     Stopped,
 }
 
+impl SessionState {
+    /// The `state` column, as serde names the variant.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Exited { .. } => "exited",
+            Self::GateFailed { .. } => "gate_failed",
+        }
+    }
+}
+
 impl Unread {
+    const ALL: [Self; 2] = [Self::Finished, Self::Stopped];
+
+    /// The `unread` column, as serde names the variant.
     fn as_str(self) -> &'static str {
         match self {
             Self::Finished => "finished",
@@ -48,11 +63,10 @@ impl Unread {
     }
 
     fn parse(text: &str) -> Result<Self> {
-        match text {
-            "finished" => Ok(Self::Finished),
-            "stopped" => Ok(Self::Stopped),
-            other => bail!("unknown unread state {other}"),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|unread| unread.as_str() == text)
+            .with_context(|| format!("unknown unread state {text}"))
     }
 }
 
@@ -222,19 +236,17 @@ impl Store {
 
     pub fn set_state(&self, session: Uuid, state: SessionState) {
         self.write("session state", move |connection| {
-            let (name, exit_code, gate_failure) = match &state {
-                SessionState::Running => ("running", None, None),
-                SessionState::Stopped => ("stopped", None, None),
-                SessionState::Exited { code } => ("exited", *code, None),
+            let (exit_code, gate_failure) = match &state {
+                SessionState::Running | SessionState::Stopped => (None, None),
+                SessionState::Exited { code } => (*code, None),
                 SessionState::GateFailed { reason } => (
-                    "gate_failed",
                     None,
                     Some(serde_json::to_string(reason).map_err(json_error)?),
                 ),
             };
             connection.execute(
                 "UPDATE sessions SET state = ?2, exit_code = ?3, gate_failure = ?4 WHERE id = ?1",
-                params![session.to_string(), name, exit_code, gate_failure],
+                params![session.to_string(), state.name(), exit_code, gate_failure],
             )?;
             Ok(())
         });
@@ -487,6 +499,25 @@ impl RawSession {
 mod tests {
     use super::super::testing::{Fixture, fixture};
     use super::*;
+
+    #[test]
+    fn stored_names_are_the_serde_names() {
+        for unread in Unread::ALL {
+            assert_eq!(serde_json::to_value(unread).unwrap(), unread.as_str());
+            assert_eq!(Unread::parse(unread.as_str()).unwrap(), unread);
+        }
+        let states = [
+            SessionState::Running,
+            SessionState::Stopped,
+            SessionState::Exited { code: Some(1) },
+            SessionState::GateFailed {
+                reason: GateFailure::Overage,
+            },
+        ];
+        for state in states {
+            assert_eq!(serde_json::to_value(&state).unwrap()["kind"], state.name());
+        }
+    }
 
     fn context_reply(total_tokens: u64) -> ContextUsageResponse {
         serde_json::from_value(serde_json::json!({

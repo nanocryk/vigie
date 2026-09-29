@@ -1,6 +1,6 @@
 //! The `events` table: every event of every session, and pages of them.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,9 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    const ALL: [Self; 2] = [Self::Line, Self::Host];
+
+    /// The `kind` column, as serde names the variant.
     fn as_str(self) -> &'static str {
         match self {
             Self::Line => "line",
@@ -62,11 +65,10 @@ impl EventKind {
     }
 
     fn parse(text: &str) -> Result<Self> {
-        match text {
-            "line" => Ok(Self::Line),
-            "host" => Ok(Self::Host),
-            other => bail!("unknown event kind {other}"),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == text)
+            .with_context(|| format!("unknown event kind {text}"))
     }
 }
 
@@ -183,22 +185,22 @@ impl Store {
         };
         let at = Timestamp::from_datetime(event.time);
         self.write("event", move |connection| {
-            let session = session.to_string();
+            let id = session.to_string();
             connection.execute(
                 "INSERT INTO events (session_id, seq, time, kind, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![session, seq, time, kind.as_str(), payload],
+                params![id, seq, time, kind.as_str(), payload],
             )?;
             connection.execute(
                 "UPDATE sessions SET last_seq = ?2, updated_at = ?3,
                      permission_mode = COALESCE(?4, permission_mode)
                  WHERE id = ?1",
-                params![session, seq, time, permission_mode],
+                params![id, seq, time, permission_mode],
             )?;
             if let Some(gauge) = gauge {
-                gauge.apply(connection, &session, &time)?;
+                gauge.apply(connection, &id, &time)?;
             }
-            record_usage_inputs(connection, &session, at, &readings, message.as_ref())
+            record_usage_inputs(connection, session, at, &readings, message.as_ref())
         });
     }
 
@@ -345,7 +347,7 @@ impl Store {
 
 fn record_usage_inputs(
     connection: &Connection,
-    session: &str,
+    session: Uuid,
     at: Timestamp,
     readings: &[Reading],
     message: Option<&MessageTokens>,
@@ -395,6 +397,14 @@ mod tests {
     use crate::claude::child::Launch;
     use crate::session::gauges::{self, Cache};
     use crate::session::{Line, RestartMode};
+
+    #[test]
+    fn stored_kinds_are_the_serde_names() {
+        for kind in EventKind::ALL {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+            assert_eq!(EventKind::parse(kind.as_str()).unwrap(), kind);
+        }
+    }
 
     #[tokio::test]
     async fn gauges_follow_the_main_conversation_and_survive_a_reopen() {

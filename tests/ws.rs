@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,8 +25,7 @@ use uuid::Uuid;
 use vigie2::claude::child::{Effort, Launch};
 use vigie2::claude::protocol::PermissionMode;
 use vigie2::claude::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
-use vigie2::http::auth::{self, Auth, Device, Registry};
-use vigie2::http::push::{Pusher, Vapid};
+use vigie2::http::auth::{self, Auth};
 use vigie2::http::server::{AppState, build_app};
 use vigie2::http::wire::{
     Action, CACHE_COLD, ClientMessage, Command, SESSION_LIVE, ServerMessage, SessionList,
@@ -34,7 +33,7 @@ use vigie2::http::wire::{
 };
 use vigie2::session::manager::SessionManager;
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
-use vigie2::store::{EventKind, SessionState, Store};
+use vigie2::store::{EventKind, SessionState};
 
 use common::{TIMEOUT, fake};
 
@@ -76,30 +75,12 @@ impl Server {
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let registry = Registry::load(dir.path().join("devices.json")).unwrap();
-        registry
-            .insert(Device::new(DEVICE.into(), "test".into(), Utc::now()))
-            .unwrap();
-        let auth = Arc::new(Auth::new(registry, false));
-        let store = Store::open(&dir.path().join("history.db")).unwrap();
-        let vapid = Vapid::load_or_generate(dir.path()).unwrap();
-        let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth)).unwrap());
-        let manager = SessionManager::start(store, fake(&script_path))
-            .await
-            .unwrap();
-
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = AppState {
-            pusher,
-            auth: Arc::clone(&auth),
-            pair_scheme: Arc::new("http".into()),
-            pair_port: addr.port(),
-            pair_extra_hosts: Arc::new(Vec::new()),
-            web_dir: Arc::new(dir.path().join("web")),
-            manager: manager.clone(),
-            allowed_origins: Arc::new(BTreeSet::from([origin(addr)])),
-        };
+        let state = AppState::for_tests(dir.path(), fake(&script_path), DEVICE, addr.port())
+            .await
+            .unwrap();
+        let (auth, manager) = (Arc::clone(&state.auth), state.manager.clone());
         let router = build_app(state);
         let service = router
             .clone()

@@ -7,6 +7,7 @@
 
 use chrono::FixedOffset;
 use rusqlite::Connection;
+use uuid::Uuid;
 use vigie2::usage::db::UsageDb;
 use vigie2::usage::estimate::{Confidence, Estimate, Inputs, project};
 use vigie2::usage::history;
@@ -17,6 +18,8 @@ use vigie2::usage::window::{WindowKind, WindowState};
 
 /// 2026-09-14 00:00:00 UTC, a Monday.
 const MONDAY: f64 = 1_789_344_000.0;
+/// The simulated session every reading comes from.
+const SIM: Uuid = Uuid::from_u128(1);
 const STEP_SEC: f64 = 300.0;
 const DAY: f64 = 86400.0;
 const WEEK: f64 = 7.0 * DAY;
@@ -107,7 +110,7 @@ impl Simulation {
                 resets_at: Timestamp::new(resets_at),
             };
             self.db()
-                .record(kind, state, Some("sim"), now)
+                .record(kind, state, Some(SIM), now)
                 .expect("record");
         }
         history::refresh(&self.db(), now, &utc()).expect("refresh");

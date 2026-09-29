@@ -30,15 +30,18 @@ impl Store {
             }
         };
         self.write("usage sample", move |connection| {
-            let session = session.map(|id| id.to_string());
             connection.execute(
                 "INSERT INTO usage_samples (time, session_id, response) VALUES (?1, ?2, ?3)",
-                params![format_time(time), session, response],
+                params![
+                    format_time(time),
+                    session.map(|id| id.to_string()),
+                    response
+                ],
             )?;
             let db = UsageDb::new(connection);
             let at = Timestamp::from_datetime(time);
             for reading in readings {
-                db.record(reading.kind, reading.state, session.as_deref(), at)?;
+                db.record(reading.kind, reading.state, session, at)?;
             }
             Ok(())
         });

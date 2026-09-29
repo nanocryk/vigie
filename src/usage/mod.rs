@@ -247,7 +247,7 @@ fn session_report(
     context: &SessionContext,
     now: Timestamp,
 ) -> Result<SessionReport> {
-    let mix = Mix::from_messages(&db.session_messages(&context.id.to_string())?);
+    let mix = Mix::from_messages(&db.session_messages(context.id)?);
     let moment = Moment {
         cwd: Some(context.cwd.clone()),
         session_started: Some(Timestamp::from_datetime(context.created_at)),

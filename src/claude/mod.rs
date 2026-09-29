@@ -3,6 +3,6 @@
 
 pub mod child;
 pub mod protocol;
-#[cfg(any(test, feature = "fake-claude"))]
+#[cfg(any(test, feature = "test-support"))]
 pub mod replay;
 pub mod tools;

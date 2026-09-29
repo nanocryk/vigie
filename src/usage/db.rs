@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension as _, params};
+use uuid::Uuid;
 
 use crate::usage::slots::SlotId;
 use crate::usage::units::{Pct, Timestamp};
@@ -156,9 +157,10 @@ impl<'a> UsageDb<'a> {
         &self,
         kind: WindowKind,
         state: WindowState,
-        session: Option<&str>,
+        session: Option<Uuid>,
         now: Timestamp,
     ) -> Result<bool> {
+        let session = session.map(|id| id.to_string());
         let last: Option<(f64, f64)> = self
             .conn
             .query_row(
@@ -439,10 +441,11 @@ impl<'a> UsageDb<'a> {
     /// `assistant` line per content block, each carrying the message's usage.
     pub fn record_message(
         &self,
-        session: &str,
+        session: Uuid,
         at: Timestamp,
         message: &MessageTokens,
     ) -> Result<()> {
+        let session = session.to_string();
         self.conn.execute(
             "INSERT INTO usage_messages
                 (session_id, message_id, at, model, parent_tool_use_id, tokens)
@@ -462,7 +465,8 @@ impl<'a> UsageDb<'a> {
     }
 
     /// Every message a session spent tokens on, in arrival order.
-    pub fn session_messages(&self, session: &str) -> Result<Vec<MessageTokens>> {
+    pub fn session_messages(&self, session: Uuid) -> Result<Vec<MessageTokens>> {
+        let session = session.to_string();
         let mut statement = self.conn.prepare(
             "SELECT message_id, model, parent_tool_use_id, tokens FROM usage_messages
              WHERE session_id = ?1 ORDER BY at",
@@ -530,8 +534,12 @@ pub mod tests {
     use crate::usage::units::{Pct, Timestamp};
     use crate::usage::window::{WindowKind, WindowState};
     use rusqlite::Connection;
+    use uuid::Uuid;
 
     const NOW: f64 = 1_789_128_000.0;
+    const S1: Uuid = Uuid::from_u128(1);
+    const S2: Uuid = Uuid::from_u128(2);
+    const OTHER: Uuid = Uuid::from_u128(3);
 
     /// An in-memory database with every store migration applied.
     pub fn connection() -> Connection {
@@ -547,7 +555,7 @@ pub mod tests {
         }
     }
 
-    fn record(db: &UsageDb<'_>, kind: WindowKind, pct: f64, resets: f64, session: &str, at: f64) {
+    fn record(db: &UsageDb<'_>, kind: WindowKind, pct: f64, resets: f64, session: Uuid, at: f64) {
         db.record(kind, state(pct, resets), Some(session), Timestamp::new(at))
             .expect("record");
     }
@@ -559,14 +567,14 @@ pub mod tests {
         let resets = NOW + 3600.0;
         let kind = WindowKind::FiveHour;
         assert!(
-            db.record(kind, state(5.0, resets), Some("s1"), Timestamp::new(NOW))
+            db.record(kind, state(5.0, resets), Some(S1), Timestamp::new(NOW))
                 .expect("record")
         );
         assert!(
             !db.record(
                 kind,
                 state(5.0, resets),
-                Some("s1"),
+                Some(S1),
                 Timestamp::new(NOW + 10.0)
             )
             .expect("record")
@@ -576,7 +584,7 @@ pub mod tests {
             db.record(
                 kind,
                 state(6.0, resets),
-                Some("s1"),
+                Some(S1),
                 Timestamp::new(NOW + 60.0)
             )
             .expect("record")
@@ -603,8 +611,8 @@ pub mod tests {
         let connection = connection();
         let db = UsageDb::new(&connection);
         let resets = NOW + 3600.0;
-        record(&db, WindowKind::FiveHour, 5.0, resets, "s1", NOW);
-        record(&db, WindowKind::FiveHour, 7.0, resets, "s2", NOW + 5.0);
+        record(&db, WindowKind::FiveHour, 5.0, resets, S1, NOW);
+        record(&db, WindowKind::FiveHour, 7.0, resets, S2, NOW + 5.0);
         let samples = db
             .window_samples(WindowKind::FiveHour, Timestamp::new(resets))
             .expect("samples");
@@ -619,7 +627,7 @@ pub mod tests {
         let resets = NOW + 3600.0;
         // A cold-started session reports the previous window's 80% first.
         for (offset, pct) in [(0.0, 80.0), (60.0, 2.0), (120.0, 3.0), (180.0, 5.0)] {
-            record(&db, WindowKind::FiveHour, pct, resets, "s1", NOW + offset);
+            record(&db, WindowKind::FiveHour, pct, resets, S1, NOW + offset);
         }
         let samples = db
             .window_samples(WindowKind::FiveHour, Timestamp::new(resets))
@@ -632,13 +640,13 @@ pub mod tests {
     fn window_instances_are_kept_apart() {
         let connection = connection();
         let db = UsageDb::new(&connection);
-        record(&db, WindowKind::FiveHour, 90.0, NOW + 60.0, "s1", NOW);
+        record(&db, WindowKind::FiveHour, 90.0, NOW + 60.0, S1, NOW);
         record(
             &db,
             WindowKind::FiveHour,
             1.0,
             NOW + 18060.0,
-            "s1",
+            S1,
             NOW + 120.0,
         );
         let fresh = db
@@ -652,13 +660,13 @@ pub mod tests {
     fn samples_between_spans_instances_in_time_order() {
         let connection = connection();
         let db = UsageDb::new(&connection);
-        record(&db, WindowKind::FiveHour, 90.0, NOW + 60.0, "s1", NOW);
+        record(&db, WindowKind::FiveHour, 90.0, NOW + 60.0, S1, NOW);
         record(
             &db,
             WindowKind::FiveHour,
             1.0,
             NOW + 18060.0,
-            "s1",
+            S1,
             NOW + 120.0,
         );
         let spanning = db
@@ -678,9 +686,9 @@ pub mod tests {
         let connection = connection();
         let db = UsageDb::new(&connection);
         let resets = NOW + 3600.0;
-        record(&db, WindowKind::FiveHour, 5.0, resets, "s1", NOW);
-        record(&db, WindowKind::FiveHour, 9.0, resets, "s1", NOW + 60.0);
-        record(&db, WindowKind::FiveHour, 9.5, resets, "other", NOW + 70.0);
+        record(&db, WindowKind::FiveHour, 5.0, resets, S1, NOW);
+        record(&db, WindowKind::FiveHour, 9.0, resets, S1, NOW + 60.0);
+        record(&db, WindowKind::FiveHour, 9.5, resets, OTHER, NOW + 70.0);
         let latest = db
             .latest_reading(WindowKind::FiveHour)
             .expect("latest")
@@ -707,10 +715,10 @@ pub mod tests {
             WindowKind::FiveHour,
             5.0,
             resets,
-            "s1",
+            S1,
             NOW - 20.0 * 86400.0,
         );
-        record(&db, WindowKind::FiveHour, 6.0, resets, "s1", NOW);
+        record(&db, WindowKind::FiveHour, 6.0, resets, S1, NOW);
 
         let removed = db
             .prune_if_due(Timestamp::new(NOW), 14)
@@ -783,14 +791,14 @@ pub mod tests {
             tokens,
         };
         for tokens in [100, 250, 250] {
-            db.record_message("s1", Timestamp::new(NOW), &message(tokens))
+            db.record_message(S1, Timestamp::new(NOW), &message(tokens))
                 .expect("record message");
         }
         assert_eq!(
-            db.session_messages("s1").expect("messages"),
+            db.session_messages(S1).expect("messages"),
             vec![message(250)]
         );
-        assert!(db.session_messages("s2").expect("messages").is_empty());
+        assert!(db.session_messages(S2).expect("messages").is_empty());
     }
 
     #[test]
@@ -798,8 +806,8 @@ pub mod tests {
         let connection = connection();
         let db = UsageDb::new(&connection);
         db.ensure_started(Timestamp::new(NOW)).expect("start");
-        record(&db, WindowKind::FiveHour, 5.0, NOW + 60.0, "s1", NOW);
-        record(&db, WindowKind::SevenDay, 2.0, NOW + 86400.0, "s1", NOW);
+        record(&db, WindowKind::FiveHour, 5.0, NOW + 60.0, S1, NOW);
+        record(&db, WindowKind::SevenDay, 2.0, NOW + 86400.0, S1, NOW);
         let summary = db.summary().expect("summary");
         assert_eq!(summary.readings, 2);
         assert_eq!(summary.instances[&WindowKind::FiveHour], 1);
