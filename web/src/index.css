@@ -482,14 +482,21 @@
   font-weight: 400;
 }
 
-/* One to three dots in a loop; all three, still, under reduced motion. */
-@utility thinking-dots {
-  display: inline-block;
-  overflow: hidden;
-  vertical-align: bottom;
-  width: 3ch;
+/* Three dots brightening and rising in turn; all three, still, under reduced motion. */
+@layer components {
+  .working-dots {
+    display: inline-flex;
+  }
   @media (prefers-reduced-motion: no-preference) {
-    animation: thinking-dots 1.2s steps(3, jump-none) infinite;
+    .working-dots > span {
+      animation: working-dot 1.2s ease-in-out infinite;
+    }
+    .working-dots > span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    .working-dots > span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
   }
 }
 
@@ -551,12 +558,16 @@
   }
 }
 
-@keyframes thinking-dots {
-  from {
-    width: 1ch;
+@keyframes working-dot {
+  0%,
+  70%,
+  100% {
+    opacity: 0.25;
+    transform: none;
   }
-  to {
-    width: 3ch;
+  35% {
+    opacity: 1;
+    transform: translateY(-0.15em);
   }
 }
 

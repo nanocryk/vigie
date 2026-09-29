@@ -23,6 +23,7 @@ import {
   emptyTranscript,
   relayFailureText,
   restartLabel,
+  quietWork,
   toolSummary,
   toolTimeVisible,
 } from "@/transcript";
@@ -1052,5 +1053,52 @@ describe("toolSummary", () => {
     expect(toolSummary("Bash", { command: "npm test", run_in_background: true })).toBe(
       "npm test (background)",
     );
+  });
+});
+
+describe("quietWork", () => {
+  const user: Item = {
+    kind: "user",
+    key: "u",
+    text: "go",
+    delivery: "handled",
+    clientId: null,
+    time: null,
+  };
+  const tool = (status: "running" | "ok"): Item => ({
+    kind: "tool",
+    key: "t",
+    toolUseId: "t",
+    name: "Bash",
+    summary: "ls",
+    input: {},
+    status,
+    output: null,
+    result: undefined,
+    endTime: null,
+    attached: null,
+    time: null,
+  });
+  const claude = (streaming: boolean): Item => ({
+    kind: "claude",
+    key: "c",
+    text: "hi",
+    streaming,
+    time: null,
+  });
+
+  it("shows while a turn runs with nothing moving on screen", () => {
+    expect(quietWork([user], true)).toBe(true);
+    expect(quietWork([user, tool("ok")], true)).toBe(true);
+    expect(quietWork([user, claude(false)], true)).toBe(true);
+    expect(quietWork([user], false)).toBe(false);
+  });
+
+  it("hides behind a running tool, live thinking or streaming text", () => {
+    expect(quietWork([user, tool("running")], true)).toBe(false);
+    expect(quietWork([user, { kind: "thinking", key: "k", text: "", time: null }], true)).toBe(
+      false,
+    );
+    expect(quietWork([user, claude(true)], true)).toBe(false);
   });
 });

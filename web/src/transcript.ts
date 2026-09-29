@@ -146,6 +146,18 @@ export function toolTimeVisible(items: readonly Item[], index: number): boolean 
   return previous === null || Math.floor(previous / 60_000) !== Math.floor(item.time / 60_000);
 }
 
+/**
+ * A turn runs with nothing on screen showing it: no tool running, no live
+ * thinking, no text streaming. The discussion then ends with animated dots.
+ */
+export function quietWork(items: readonly Item[], turnOpen: boolean): boolean {
+  if (!turnOpen) return false;
+  if (items.some((item) => item.kind === "tool" && item.status === "running")) return false;
+  const last = items.at(-1);
+  if (last?.kind === "thinking") return false;
+  return !(last?.kind === "claude" && last.streaming);
+}
+
 export interface PendingAsk {
   requestId: string;
   toolName: string;

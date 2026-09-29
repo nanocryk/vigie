@@ -20,6 +20,7 @@ import {
   type Delivery,
   type Item,
   type ToolStatus,
+  quietWork,
   relayFailureText,
   restartLabel,
   toolTimeVisible,
@@ -41,6 +42,17 @@ export interface PendingSend {
 
 const BUBBLE = "min-w-0 rounded-[5px] px-3 py-2 text-sm";
 
+/** Three dots animated in turn: work is going on. */
+function Dots() {
+  return (
+    <span className="working-dots" aria-hidden>
+      <span>.</span>
+      <span>.</span>
+      <span>.</span>
+    </span>
+  );
+}
+
 function UserBubble({ children, dim }: { children: ReactNode; dim?: boolean }) {
   return (
     <div
@@ -59,7 +71,7 @@ const STATUS_TEXT: Record<ToolStatus, string> = {
 };
 
 const STATUS_CLASS: Record<ToolStatus, string> = {
-  running: "text-primary animate-pulse",
+  running: "text-primary",
   ok: "text-muted-foreground",
   error: "text-destructive",
   unfinished: "text-muted-foreground",
@@ -85,7 +97,7 @@ const TOOL_SUMMARY =
 function StatusMark({ status }: { status: ToolStatus }) {
   return (
     <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[status]}`}>
-      {STATUS_TEXT[status]}
+      {status === "running" ? <Dots /> : STATUS_TEXT[status]}
     </span>
   );
 }
@@ -328,7 +340,8 @@ const ItemView = memo(function ItemView({
       if (item.text === "") {
         return thinkingNow ? (
           <div className="text-muted-foreground voice-ui px-1 text-xs">
-            thinking<span className="thinking-dots">...</span>
+            thinking
+            <Dots />
           </div>
         ) : null;
       }
@@ -337,7 +350,8 @@ const ItemView = memo(function ItemView({
           <summary className="voice-ui cursor-pointer">
             {thinkingNow ? (
               <>
-                thinking<span className="thinking-dots">...</span>
+                thinking
+                <Dots />
               </>
             ) : (
               "thought"
@@ -665,6 +679,14 @@ export function TranscriptView({
           {pending.map((send) => (
             <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
           ))}
+          {pending.length === 0 && quietWork(items, turnOpen) && (
+            <div
+              aria-label="Claude is working"
+              className="text-muted-foreground voice-ui px-1 text-sm leading-none"
+            >
+              <Dots />
+            </div>
+          )}
         </div>
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-3">
