@@ -192,10 +192,12 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Scratch discussions
 
-- A discussion can start without a project, in a new folder under a configurable scratch root.
+- A discussion can start without a project, in a new folder under the scratch root `~/.vigie2/scratch`, named by the local date and two random words (`2026-09-29-amber-fox`).
+- A session is scratch while its folder sits directly in the scratch root; nothing else marks it.
+- Home has a Scratch section under the session list, with a New scratch button that creates the folder and opens the empty session, its composer focused. Scratch sessions are listed there, not in the main list, with the same swipes. Archived ones join the shared Archived section.
 - A scratch folder can be promoted when the idea turns out interesting: vigie2 moves it to a chosen destination. vigie2 implements promotion itself; `/cd` is unavailable under `-p`.
 - Scratch folders are never deleted automatically; deletion is a manual action.
-- Scratch sessions start in a looser default permission mode than project sessions.
+- Scratch sessions start in `acceptEdits`; project sessions start in `default`.
 
 ## Account usage
 
@@ -264,7 +266,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
 - When an idle child is reaped.
 - Server to client events: raw CLI lines plus thin host events; their exact shape and the SQLite schema.
-- Scratch permission mode: which one.
 - Auth gate (refuse API-key billing) and the rest of the billing kill switch.
 - Projects Home design, including how projects and scratch discussions are laid out.
 - Which folder or file counts as related to a session (its cwd, the last file referenced, files it edited).

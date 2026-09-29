@@ -292,6 +292,8 @@ pub struct SessionView {
     pub restart: Option<RestartMeasure>,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
+    /// Its folder sits directly in the scratch root.
+    pub scratch: bool,
     /// Stored model and effort, passed at every launch; `None` lets the CLI pick.
     pub model: Option<String>,
     pub effort: Option<Effort>,
@@ -312,7 +314,7 @@ pub struct SessionView {
 
 impl SessionView {
     /// `live` is `None` when the child is not running.
-    pub fn new(row: SessionRow, live: Option<LiveView>) -> Self {
+    pub fn new(row: SessionRow, live: Option<LiveView>, scratch: bool) -> Self {
         let status = live.as_ref().map(|live| live.status);
         let (agents, background) = live
             .map(|live| (live.agents, live.background))
@@ -333,6 +335,7 @@ impl SessionView {
             calls_per_message: row.calls_per_message,
             restart: row.restart,
             archived_at: row.archived_at,
+            scratch,
             model: row.settings.model,
             effort: row.settings.effort,
             settings_changed_at: row.settings_changed_at,

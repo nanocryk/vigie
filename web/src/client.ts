@@ -269,14 +269,31 @@ export class Client {
     }
   });
 
-  async createSession(cwd: string): Promise<CreateResult> {
+  /** Sessions this client created whose composer has not taken the focus yet. */
+  private readonly created = new Set<string>();
+
+  /** True once for a session this client created: its composer takes the focus. */
+  takeCreated(id: string): boolean {
+    return this.created.delete(id);
+  }
+
+  createSession(cwd: string): Promise<CreateResult> {
+    return this.create("api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd }),
+    });
+  }
+
+  /** Starts a session in a new scratch folder. */
+  createScratch(): Promise<CreateResult> {
+    return this.create("api/sessions/scratch", { method: "POST" });
+  }
+
+  private async create(url: string, init: RequestInit): Promise<CreateResult> {
     let response: Response;
     try {
-      response = await fetch("api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
-      });
+      response = await fetch(url, init);
     } catch (err) {
       return { ok: false, error: `Request failed: ${errorMessage(err)}` };
     }
@@ -295,6 +312,7 @@ export class Client {
     }
     try {
       const session = parseSessionView(body, "created session");
+      this.created.add(session.id);
       void this.refreshSessions();
       return { ok: true, session };
     } catch (err) {

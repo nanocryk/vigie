@@ -64,7 +64,7 @@ impl AppState {
         let store = Store::open(&dir.join("history.db"))?;
         let vapid = Vapid::load_or_generate(dir)?;
         let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);
-        let manager = SessionManager::start(store, program, dir.join("uploads")).await?;
+        let manager = SessionManager::start(store, program, dir).await?;
         Ok(Self {
             auth,
             pair_scheme: Arc::new("http".into()),
@@ -93,6 +93,7 @@ pub fn build_app(state: AppState) -> Router {
             "/api/sessions",
             get(api::list_sessions).post(api::create_session),
         )
+        .route("/api/sessions/scratch", post(api::create_scratch))
         .route(
             "/api/sessions/{id}/upload",
             post(upload::upload_route).layer(DefaultBodyLimit::max(upload::MAX_UPLOAD_BYTES)),

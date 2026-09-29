@@ -40,6 +40,7 @@ const session = (patch: Partial<SessionView>): SessionView => ({
   calls_per_message: null,
   restart: null,
   archived_at: null,
+  scratch: false,
   model: null,
   effort: null,
   settings_changed_at: null,

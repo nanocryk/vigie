@@ -27,6 +27,7 @@ const session = (id: string, patch: Partial<SessionView> = {}): SessionView => (
   calls_per_message: null,
   restart: null,
   archived_at: null,
+  scratch: false,
   model: null,
   effort: null,
   settings_changed_at: null,
@@ -72,6 +73,17 @@ describe("homeSections", () => {
     ]);
     expect(sections.active.map((entry) => entry.id)).toEqual(["a", "b"]);
     expect(sections.archived.map((entry) => entry.id)).toEqual(["new", "old"]);
+  });
+
+  it("lists active scratch sessions apart, archived ones with the others", () => {
+    const sections = homeSections([
+      session("a"),
+      session("s1", { scratch: true }),
+      session("s2", { scratch: true, archived_at: "2026-09-27T11:00:00Z" }),
+    ]);
+    expect(sections.active.map((entry) => entry.id)).toEqual(["a"]);
+    expect(sections.scratch.map((entry) => entry.id)).toEqual(["s1"]);
+    expect(sections.archived.map((entry) => entry.id)).toEqual(["s2"]);
   });
 });
 

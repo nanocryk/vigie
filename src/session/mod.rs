@@ -19,6 +19,7 @@ mod handle;
 pub mod manager;
 pub mod mcp;
 pub mod plan;
+pub mod scratch;
 pub mod seed;
 
 pub use activity::{Activity, ActivityTracker, LiveStatus};

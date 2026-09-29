@@ -55,7 +55,7 @@ impl Env {
 
     async fn manager(&self, recording: &Path) -> SessionManager {
         let store = Store::open(&self.db).expect("open store");
-        SessionManager::start(store, fake(recording), self.dir.path().join("uploads"))
+        SessionManager::start(store, fake(recording), self.dir.path())
             .await
             .expect("start manager")
     }
@@ -420,6 +420,29 @@ async fn a_failed_context_ask_changes_nothing() {
         "the failed reply was stored"
     );
     assert_clean_exit(stored.last().unwrap());
+}
+
+#[tokio::test]
+async fn a_scratch_session_gets_a_new_folder_and_accepts_edits() {
+    let env = Env::new();
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let session = manager.create_scratch().await.unwrap();
+    let id = session.id();
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    drop((session, manager));
+
+    let manager = env.manager(&script).await;
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(
+        row.cwd.parent(),
+        Some(env.dir.path().join("scratch").as_path())
+    );
+    assert!(row.cwd.is_dir());
+    assert_eq!(row.permission_mode, Some(PermissionMode::AcceptEdits));
+    assert!(manager.is_scratch(&row.cwd));
+    assert!(!manager.is_scratch(&env.cwd));
 }
 
 #[tokio::test]

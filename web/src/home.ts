@@ -2,21 +2,26 @@ import type { Side, SwipeRules } from "@/swipe";
 import type { SessionView } from "@/wire";
 
 export interface HomeSections {
-  /** In the server's order, most recently updated first. */
+  /** In the server's order, most recently updated first; scratch sessions left out. */
   active: SessionView[];
-  /** Most recently archived first. */
+  /** Active scratch sessions, in the server's order. */
+  scratch: SessionView[];
+  /** Most recently archived first, scratch sessions included. */
   archived: SessionView[];
 }
 
 export function homeSections(sessions: readonly SessionView[]): HomeSections {
   const active: SessionView[] = [];
+  const scratch: SessionView[] = [];
   const archived: { session: SessionView; at: number }[] = [];
   for (const session of sessions) {
-    if (session.archived_at === null) active.push(session);
-    else archived.push({ session, at: Date.parse(session.archived_at) });
+    if (session.archived_at !== null) {
+      archived.push({ session, at: Date.parse(session.archived_at) });
+    } else if (session.scratch) scratch.push(session);
+    else active.push(session);
   }
   archived.sort((a, b) => b.at - a.at);
-  return { active, archived: archived.map((entry) => entry.session) };
+  return { active, scratch, archived: archived.map((entry) => entry.session) };
 }
 
 /** `sessions` in the order of the ids in `previous`, with ids not in it first, in their given order. */

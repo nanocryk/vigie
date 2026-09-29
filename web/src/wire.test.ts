@@ -168,6 +168,7 @@ describe("parseSessionList", () => {
             live: true,
             busy: false,
             asks: 2,
+            scratch: false,
             permission_mode: "plan",
             cache: { last_request_at: "2026-09-27T12:00:00Z", ttl_secs: 3600 },
             context: {
@@ -189,6 +190,7 @@ describe("parseSessionList", () => {
             live: false,
             busy: false,
             asks: 0,
+            scratch: true,
             archived_at: "2026-09-27T13:00:00Z",
           },
         ],
@@ -197,6 +199,7 @@ describe("parseSessionList", () => {
     );
     expect(list.map((session) => session.archived_at)).toEqual([null, "2026-09-27T13:00:00Z"]);
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
+    expect(list.map((session) => session.scratch)).toEqual([false, true]);
     expect(list[0]?.permission_mode).toBe("plan");
     expect(list[1]?.permission_mode).toBeNull();
     expect(list.map((session) => session.asks)).toEqual([2, 0]);

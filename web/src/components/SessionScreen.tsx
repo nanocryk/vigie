@@ -158,6 +158,7 @@ function Composer({
   onStop,
   onMenu,
   onMenuToggle,
+  takeFocus,
 }: {
   /** The draft slot of the discussion on screen. */
   session: string;
@@ -176,6 +177,8 @@ function Composer({
   onMenu: () => void;
   /** Opens or closes the menu (the desktop button). */
   onMenuToggle: () => void;
+  /** True when the input takes the focus on mount. */
+  takeFocus: () => boolean;
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
   const [files, setFiles] = useState<ComposerFile[]>(() => draftFiles.get(session) ?? []);
@@ -188,6 +191,9 @@ function Composer({
     return () => {
       mounted.current = false;
     };
+  }, []);
+  useEffect(() => {
+    if (takeFocus()) area.current?.focus();
   }, []);
 
   // An upload may end after the composer left the screen: the draft's files still change.
@@ -1235,6 +1241,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               key={draftSlot}
               session={draftSlot}
               uploadTo={id}
+              takeFocus={() => client.takeCreated(id)}
               placeholder={
                 viewing === null
                   ? "Message Claude"

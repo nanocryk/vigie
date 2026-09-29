@@ -324,6 +324,32 @@ function SwipeHint({ side, text }: { side: "left" | "right"; text: string }) {
   );
 }
 
+function NewScratch({ client }: { client: Client }) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = async () => {
+    setStarting(true);
+    setError(null);
+    const result = await client.createScratch();
+    setStarting(false);
+    if (result.ok) navigate({ kind: "session", id: result.session.id });
+    else setError(result.error);
+  };
+  return (
+    <>
+      <button
+        type="button"
+        disabled={starting}
+        onClick={() => void start()}
+        className="bg-card hover:bg-muted voice-ui rounded-[5px] border px-3 py-1 text-sm disabled:opacity-50"
+      >
+        {starting ? "Starting..." : "New scratch"}
+      </button>
+      {error !== null && <p className="text-destructive voice-ui w-full text-xs">{error}</p>}
+    </>
+  );
+}
+
 function Sessions({
   client,
   sessions,
@@ -337,6 +363,7 @@ function Sessions({
   const sections = homeSections(sessions);
   // Rows keep their order while Home is visible, so none moves under a tap.
   const activeOrder = useRef<string[]>([]);
+  const scratchOrder = useRef<string[]>([]);
   const archivedOrder = useRef<string[]>([]);
   const [, setHidden] = useState(0);
   useEffect(() => {
@@ -352,8 +379,10 @@ function Sessions({
   }, []);
   const frozen = document.visibilityState === "visible";
   const active = frozen ? keepOrder(activeOrder.current, sections.active) : sections.active;
+  const scratch = frozen ? keepOrder(scratchOrder.current, sections.scratch) : sections.scratch;
   const archived = frozen ? keepOrder(archivedOrder.current, sections.archived) : sections.archived;
   activeOrder.current = active.map((session) => session.id);
+  scratchOrder.current = scratch.map((session) => session.id);
   archivedOrder.current = archived.map((session) => session.id);
   return (
     <>
@@ -369,6 +398,22 @@ function Sessions({
           </ul>
         </div>
       )}
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-muted-foreground voice-ui px-2 text-sm">Scratch</h2>
+          <NewScratch client={client} />
+        </div>
+        {scratch.length > 0 && (
+          <div className="space-y-1">
+            {active.length === 0 && <SwipeHint side="left" text="Kill / Archive" />}
+            <ul className="space-y-2">
+              {scratch.map((session) => (
+                <Entry key={session.id} client={client} session={session} now={now} />
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
       {archived.length > 0 && (
         <section className="space-y-2">
           <button
@@ -420,8 +465,6 @@ export function SessionList({ client }: { client: Client }) {
           )}
           {snapshot.sessions === null ? (
             <p className="text-muted-foreground text-sm">Loading sessions...</p>
-          ) : snapshot.sessions.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No sessions yet.</p>
           ) : (
             <Sessions client={client} sessions={snapshot.sessions} now={now} />
           )}

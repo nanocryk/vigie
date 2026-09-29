@@ -66,9 +66,12 @@ Claude attaches files to its own reply with the `set_attachments {paths}` tool o
 
 `GET /api/catalog` is what all discussions share, persisted: `models` and `commands` (shaped as in `catalog`) from the latest `initialize` of any Claude start, `terminal_commands` (names of the commands that only work in the terminal) from the latest `system/init`, and `defaults {model, effort}`, what `get_settings` reports applying for a child launched without a model or effort whose discussion still has none. Each is null until first reported. With `models` or `defaults` unknown at launch, the server starts one Claude in its state folder to read them (`initialize` and `get_settings`, no user message), then stops it; a failure waits for the next launch.
 
+`POST /api/sessions {cwd}` starts a session in `cwd`, an existing absolute folder (else 400 `bad_cwd`), in permission mode `default`. `POST /api/sessions/scratch` (no body) creates a new folder in `~/.vigie2/scratch` and starts a session there in `acceptEdits`. Both answer 201 with the session, shaped as in `GET /api/sessions`.
+
 Each session of `GET /api/sessions` carries:
 
 - `archived_at`: null while not archived.
+- `scratch`: its folder sits directly in the scratch root.
 - `model` and `effort`: null when the CLI picks.
 - `settings_changed_at`: null unless a model or effort change awaits its first main request.
 - `applied_model` and `applied_effort`: what the CLI reports applying through `get_settings`, asked when the child starts, after each turn and after a change, e.g. `claude-opus-5-5[1m]` and `medium`; kept once the child stops, null while unknown.

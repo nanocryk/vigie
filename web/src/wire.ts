@@ -37,6 +37,8 @@ export interface SessionView {
   restart: RestartMeasure | null;
   /** Null while the discussion is not archived. */
   archived_at: string | null;
+  /** Its folder sits directly in the scratch root. */
+  scratch: boolean;
   /** Stored model and effort every launch passes; null lets the CLI pick. */
   model: string | null;
   effort: string | null;
@@ -534,6 +536,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     calls_per_message: optNum(value, "calls_per_message", label),
     restart: parseRestart(value["restart"], `${label}.restart`),
     archived_at: optStr(value, "archived_at", label),
+    scratch: bool(value, "scratch", label),
     model: optStr(value, "model", label),
     effort: optStr(value, "effort", label),
     settings_changed_at: optStr(value, "settings_changed_at", label),

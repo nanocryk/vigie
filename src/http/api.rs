@@ -66,14 +66,30 @@ pub async fn create_session(
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_cwd"));
     }
     let created = async {
-        let id = state.manager.create(request.cwd).await?.id();
-        let row = state.manager.store().require_session(id).await?;
-        anyhow::Ok(SessionView::new(row, state.manager.live_view(id).await))
+        let session = state.manager.create(request.cwd).await?;
+        created_view(&state.manager, session.id()).await
     };
     let view = created
         .await
         .map_err(|err| ApiError::internal("create session", err))?;
     Ok((StatusCode::CREATED, Json(view)).into_response())
+}
+
+pub async fn create_scratch(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let created = async {
+        let session = state.manager.create_scratch().await?;
+        created_view(&state.manager, session.id()).await
+    };
+    let view = created
+        .await
+        .map_err(|err| ApiError::internal("create scratch session", err))?;
+    Ok((StatusCode::CREATED, Json(view)).into_response())
+}
+
+async fn created_view(manager: &SessionManager, id: uuid::Uuid) -> anyhow::Result<SessionView> {
+    let row = manager.store().require_session(id).await?;
+    let scratch = manager.is_scratch(&row.cwd);
+    Ok(SessionView::new(row, manager.live_view(id).await, scratch))
 }
 
 pub async fn usage(State(state): State<AppState>) -> Result<Response, ApiError> {
@@ -121,7 +137,8 @@ async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionVi
         .into_iter()
         .map(|row| {
             let live = live.remove(&row.id);
-            SessionView::new(row, live)
+            let scratch = manager.is_scratch(&row.cwd);
+            SessionView::new(row, live, scratch)
         })
         .collect())
 }

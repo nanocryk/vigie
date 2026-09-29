@@ -1,7 +1,7 @@
 //! The live sessions and the history store behind them.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ use crate::session::gauges::{self, MainRequest};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
-use crate::session::{attachments, seed};
+use crate::session::{attachments, scratch, seed};
 use crate::store::{SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 use crate::usage::{SessionContext, Snapshot};
 
@@ -44,6 +44,8 @@ struct Inner {
     program: Program,
     /// Holds one uploads folder per session, named by its id.
     uploads: PathBuf,
+    /// Holds the folders of scratch sessions.
+    scratch: PathBuf,
     /// Sessions spawned by this manager, closed ones included until reopened.
     live: Mutex<HashMap<Uuid, Session>>,
     signals: Signals,
@@ -181,13 +183,15 @@ impl Drop for Inner {
 impl SessionManager {
     /// Sessions the store still records as running are marked stopped: none has a
     /// child after a restart. Each resumes on `open`.
-    /// `uploads` holds the files attached to messages, one folder per session.
-    pub async fn start(store: Store, program: Program, uploads: PathBuf) -> Result<Self> {
+    /// `state` holds `uploads`, the files attached to messages, one folder per
+    /// session, and `scratch`, the folders of scratch sessions.
+    pub async fn start(store: Store, program: Program, state: &Path) -> Result<Self> {
         store.stop_running().await?;
         let inner = Arc::new_cyclic(|inner| Inner {
             store,
             program,
-            uploads,
+            uploads: state.join("uploads"),
+            scratch: state.join("scratch"),
             live: Mutex::new(HashMap::new()),
             signals: Signals::new(),
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
@@ -215,6 +219,11 @@ impl SessionManager {
     /// Where the files attached to session `id`'s messages are kept.
     pub fn uploads_dir(&self, id: Uuid) -> PathBuf {
         self.inner.uploads.join(id.to_string())
+    }
+
+    /// `cwd` sits directly in the scratch root.
+    pub fn is_scratch(&self, cwd: &Path) -> bool {
+        cwd.parent() == Some(self.inner.scratch.as_path())
     }
 
     /// Records what client connection `viewer` shows. An active viewer on a
@@ -318,10 +327,21 @@ impl SessionManager {
 
     /// Starts a new Claude session in `cwd`, with the same id on both sides.
     pub async fn create(&self, cwd: PathBuf) -> Result<Session> {
+        self.create_in(cwd, PermissionMode::Default).await
+    }
+
+    /// Starts a new Claude session in a new folder of the scratch root, in `acceptEdits`.
+    pub async fn create_scratch(&self) -> Result<Session> {
+        let root = self.inner.scratch.clone();
+        let cwd = tokio::task::spawn_blocking(move || scratch::create_folder(&root)).await??;
+        self.create_in(cwd, PermissionMode::AcceptEdits).await
+    }
+
+    async fn create_in(&self, cwd: PathBuf, mode: PermissionMode) -> Result<Session> {
         let id = Uuid::new_v4();
         let mut live = self.inner.live.lock().await;
         let session = self.spawn(Config {
-            permission_mode: Some(PermissionMode::Default),
+            permission_mode: Some(mode),
             ..self.config(id, cwd, Launch::New(id))
         })?;
         live.insert(id, session.clone());
