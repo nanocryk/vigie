@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import type { Client } from "@/client";
-import { DiffView, PANEL } from "@/components/DiffView";
+import { type DiffFocus, DiffView, PANEL } from "@/components/DiffView";
 import { Markdown } from "@/components/Markdown";
 import { ConnectionDot } from "@/components/SessionList";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
@@ -44,7 +44,17 @@ import {
   useExplorer,
 } from "@/files";
 import { folderName, formatAgo } from "@/format";
-import { repoRoot } from "@/git";
+import {
+  type FolderMarks,
+  type GutterMarks,
+  type RowMark,
+  baseName,
+  fetchFileDiff,
+  fetchStatus,
+  folderMarks,
+  gutterMarks,
+  repoRoot,
+} from "@/git";
 import { highlightLines, languageFromPath } from "@/highlight";
 import { goHome, navigate, pushEntry, routeHash } from "@/route";
 import type { SessionView } from "@/wire";
@@ -458,12 +468,20 @@ function Breadcrumb({ folder, go }: { folder: string | null; go: (path: string |
   );
 }
 
+const ROW_MARK: Record<RowMark, string> = {
+  added: "inset 3px 0 0 var(--color-git-added)",
+  modified: "inset 3px 0 0 var(--color-git-modified)",
+};
+
 function EntryRow({
   entry,
+  mark,
   now,
   open,
 }: {
   entry: Entry;
+  /** Pending git changes in this file, or inside this folder. */
+  mark: RowMark | undefined;
   now: number;
   open: (entry: Entry) => void;
 }) {
@@ -484,6 +502,7 @@ function EntryRow({
       <button
         type="button"
         onClick={() => open(entry)}
+        style={{ boxShadow: mark === undefined ? undefined : ROW_MARK[mark] }}
         className={`${ROW} ${entry.hidden ? "opacity-55" : ""}`}
       >
         {icon}
@@ -562,6 +581,7 @@ function FolderView({
   onCreated,
   go,
   openFile,
+  openDiff,
 }: {
   tab: ExplorerTab & { folder: string };
   showHidden: boolean;
@@ -569,10 +589,38 @@ function FolderView({
   onCreated: () => void;
   go: (path: string | null) => void;
   openFile: (path: string) => void;
+  /** Opens the diff of `root`, scrolled to `focus`. */
+  openDiff: (root: string, focus: DiffFocus) => void;
 }) {
   const [listing, setListing] = useState<Listing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [marks, setMarks] = useState<(FolderMarks & { root: string }) | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetchStatus(tab.folder)
+        .then((status) => {
+          if (!alive) return;
+          setMarks(
+            status.root === null
+              ? null
+              : { ...folderMarks(status, tab.folder), root: status.root },
+          );
+        })
+        .catch(() => {});
+    };
+    load();
+    const wake = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [tab.folder, reload]);
   const now = useNow();
   const scroller = useRef<HTMLDivElement>(null);
   const scroll = useRef(tab.scroll);
@@ -678,9 +726,32 @@ function FolderView({
               </li>
             )}
             {shown.map((entry) => (
-              <EntryRow key={entry.name} entry={entry} now={now} open={open} />
+              <EntryRow
+                key={entry.name}
+                entry={entry}
+                mark={marks?.rows.get(entry.name)}
+                now={now}
+                open={open}
+              />
             ))}
-            {shown.length === 0 && !creating && (
+            {marks?.deleted.map((path) => (
+              <li key={`deleted:${path}`}>
+                <button
+                  type="button"
+                  onClick={() => openDiff(marks.root, { path, line: null })}
+                  title="Deleted: show in the diff"
+                  style={{ boxShadow: "inset 3px 0 0 var(--color-git-deleted)" }}
+                  className={`${ROW} bg-git-deleted/15 hover:bg-git-deleted/25`}
+                >
+                  <FileIcon className="text-git-deleted" />
+                  <span className="voice-ui text-muted-foreground min-w-0 flex-1 truncate">
+                    {baseName(path)}
+                  </span>
+                  <span className="text-git-deleted voice-ui shrink-0 text-xs">deleted</span>
+                </button>
+              </li>
+            ))}
+            {shown.length === 0 && (marks?.deleted.length ?? 0) === 0 && !creating && (
               <li className="text-muted-foreground voice-ui px-3 py-6 text-center text-sm">
                 {hiddenCount > 0 ? `Only hidden items (${hiddenCount})` : "Empty folder"}
               </li>
@@ -699,30 +770,104 @@ function FolderView({
 
 // ---- File viewer ----
 
-function TextBody({ path, text }: { path: string; text: string }) {
+const FLASH_MS = 1600;
+
+/** The number cell's marks as inset shadows, so marked and plain cells keep one size. */
+function markShadow(line: number, count: number, marks: GutterMarks | null): string | undefined {
+  if (marks === null) return undefined;
+  const shadows: string[] = [];
+  if (marks.added.has(line)) shadows.push("inset 3px 0 0 var(--color-git-added)");
+  if (marks.modified.has(line)) shadows.push("inset 3px 0 0 var(--color-git-modified)");
+  if (marks.removedAbove.has(line)) shadows.push("inset 0 2px 0 var(--color-git-deleted)");
+  if (line === count && marks.removedAbove.has(count + 1)) {
+    shadows.push("inset 0 -2px 0 var(--color-git-deleted)");
+  }
+  return shadows.length === 0 ? undefined : shadows.join(", ");
+}
+
+function isMarked(line: number, count: number, marks: GutterMarks): boolean {
+  return (
+    marks.added.has(line) ||
+    marks.modified.has(line) ||
+    marks.removedAbove.has(line) ||
+    (line === count && marks.removedAbove.has(count + 1))
+  );
+}
+
+function TextBody({
+  path,
+  text,
+  marks,
+  target,
+  onMark,
+}: {
+  path: string;
+  text: string;
+  /** Pending git changes to mark in the line-number column. */
+  marks: GutterMarks | null;
+  /** A line to bring into view and flash. */
+  target: number | null;
+  /** A marked line number was tapped. */
+  onMark: (line: number) => void;
+}) {
   const lines = useMemo(() => {
     const language = text.length <= HIGHLIGHT_MAX_CHARS ? languageFromPath(path) : null;
     return highlightLines(text, language) ?? null;
   }, [path, text]);
   const plain = useMemo(() => (lines === null ? text.split("\n") : null), [lines, text]);
   const count = lines?.length ?? plain?.length ?? 0;
+  const body = useRef<HTMLDivElement>(null);
+  const [flash, setFlash] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (target === null) return;
+    body.current?.querySelector(`[data-line="${target}"]`)?.scrollIntoView({ block: "center" });
+    setFlash(target);
+    const timer = setTimeout(() => setFlash(null), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [target]);
+
   return (
-    <div className="voice-code grid grid-cols-[auto_1fr] text-[13px] leading-5">
-      {Array.from({ length: count }, (_, index) => (
-        <div key={index} className="contents">
-          <span className="text-muted-foreground/60 border-r pr-2 pl-3 text-right select-none">
-            {index + 1}
-          </span>
-          {lines !== null ? (
-            <span
-              className="pr-3 pl-3 break-all whitespace-pre-wrap"
-              dangerouslySetInnerHTML={{ __html: lines[index] ?? "" }}
-            />
-          ) : (
-            <span className="pr-3 pl-3 break-all whitespace-pre-wrap">{plain?.[index] ?? ""}</span>
-          )}
-        </div>
-      ))}
+    <div ref={body} className="voice-code grid grid-cols-[auto_1fr] text-[13px] leading-5">
+      {Array.from({ length: count }, (_, index) => {
+        const number = index + 1;
+        const lit = flash === number ? "bg-git-modified/25" : "";
+        return (
+          <div key={index} className="contents">
+            {marks !== null && isMarked(number, count, marks) ? (
+              <button
+                type="button"
+                data-line={number}
+                onClick={() => onMark(number)}
+                title="Show in the diff"
+                style={{ boxShadow: markShadow(number, count, marks) }}
+                className={`text-muted-foreground hover:text-primary cursor-pointer border-r pr-2 pl-3 text-right transition-colors duration-700 select-none hover:underline ${lit}`}
+              >
+                {number}
+              </button>
+            ) : (
+              <span
+                data-line={number}
+                className={`text-muted-foreground/60 border-r pr-2 pl-3 text-right transition-colors duration-700 select-none ${lit}`}
+              >
+                {number}
+              </span>
+            )}
+            {lines !== null ? (
+              <span
+                className={`pr-3 pl-3 break-all whitespace-pre-wrap transition-colors duration-700 ${lit}`}
+                dangerouslySetInnerHTML={{ __html: lines[index] ?? "" }}
+              />
+            ) : (
+              <span
+                className={`pr-3 pl-3 break-all whitespace-pre-wrap transition-colors duration-700 ${lit}`}
+              >
+                {plain?.[index] ?? ""}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -754,17 +899,58 @@ function ImageBody({ path, size }: { path: string; size: number }) {
 
 function FileViewer({
   path,
+  line,
   backTo,
   close,
+  onJumped,
+  showInDiff,
 }: {
   path: string;
+  /** A line to bring into view and flash once shown. */
+  line: number | null;
   /** Where closing leads: `Folder` or `Diff`. */
   backTo: string;
   close: () => void;
+  /** The jump to `line` is taken; the tab stops asking for it. */
+  onJumped: () => void;
+  /** Opens the diff of `root` at the repository path `path`, line `line`. */
+  showInDiff: (root: string, focus: DiffFocus) => void;
 }) {
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [raw, setRaw] = useState(false);
+  const [target] = useState(line);
+  // A line to reach shows the source, which has line numbers.
+  const [raw, setRaw] = useState(line !== null);
+  const [changes, setChanges] = useState<{ root: string; path: string; marks: GutterMarks } | null>(
+    null,
+  );
+
+  const jumpedRef = useRef(onJumped);
+  useEffect(() => {
+    jumpedRef.current = onJumped;
+  });
+  useEffect(() => {
+    if (target !== null) jumpedRef.current();
+  }, [target]);
+
+  useEffect(() => {
+    let alive = true;
+    setChanges(null);
+    fetchFileDiff(path)
+      .then((found) => {
+        if (!alive) return;
+        setChanges(
+          found === null
+            ? null
+            : { root: found.root, path: found.file.path, marks: gutterMarks(found.file) },
+        );
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+
   useEffect(() => {
     let alive = true;
     setView(null);
@@ -835,7 +1021,15 @@ function FileViewer({
               </div>
             ) : (
               <div className="py-2">
-                <TextBody path={view.path} text={view.text} />
+                <TextBody
+                  path={view.path}
+                  text={view.text}
+                  marks={changes?.marks ?? null}
+                  target={target}
+                  onMark={(line) => {
+                    if (changes !== null) showInDiff(changes.root, { path: changes.path, line });
+                  }}
+                />
               </div>
             ))}
           {view?.kind === "image" && <ImageBody path={view.path} size={view.size} />}
@@ -937,17 +1131,27 @@ export function Explorer({ client }: { client: Client }) {
     };
   }, [tab.folder]);
 
+  // Where the diff scrolls once open: a folder's pending deletion, or a file view's marked line.
+  const [diffFocus, setDiffFocus] = useState<DiffFocus | null>(null);
+
   const go = (folder: string | null) =>
     changeExplorer((current) =>
-      updateTab(current, tab.id, { folder, diff: null, file: null, scroll: 0 }),
+      updateTab(current, tab.id, { folder, diff: null, file: null, line: null, scroll: 0 }),
     );
-  const openFile = (file: string) =>
-    changeExplorer((current) => updateTab(current, tab.id, { file }));
-  const closeFile = () => changeExplorer((current) => updateTab(current, tab.id, { file: null }));
-  const openDiff = (root: string) =>
-    changeExplorer((current) => updateTab(current, tab.id, { diff: root }));
+  const openFile = (file: string, line: number | null = null) => {
+    setDiffFocus(null);
+    changeExplorer((current) => updateTab(current, tab.id, { file, line }));
+  };
+  const closeFile = () =>
+    changeExplorer((current) => updateTab(current, tab.id, { file: null, line: null }));
+  const openDiff = (root: string, focus: DiffFocus | null = null) => {
+    setDiffFocus(focus);
+    changeExplorer((current) =>
+      updateTab(current, tab.id, { diff: root, file: null, line: null }),
+    );
+  };
   const closeDiff = () =>
-    changeExplorer((current) => updateTab(current, tab.id, { diff: null, file: null }));
+    changeExplorer((current) => updateTab(current, tab.id, { diff: null, file: null, line: null }));
   const view = tab.file !== null ? "file" : tab.diff !== null ? "diff" : "folder";
 
   const start = async (folder: string) => {
@@ -1036,11 +1240,22 @@ export function Explorer({ client }: { client: Client }) {
         <FileViewer
           key={`${tab.id}:${tab.file}`}
           path={tab.file}
+          line={tab.line}
           backTo={tab.diff !== null ? "Diff" : "Folder"}
           close={closeFile}
+          onJumped={() => changeExplorer((current) => updateTab(current, tab.id, { line: null }))}
+          showInDiff={openDiff}
         />
       ) : tab.diff !== null ? (
-        <DiffView key={`${tab.id}:${tab.diff}`} root={tab.diff} close={closeDiff} openFile={openFile} />
+        <DiffView
+          key={`${tab.id}:${tab.diff}`}
+          keepKey={`${tab.id}:${tab.diff}`}
+          root={tab.diff}
+          focus={diffFocus}
+          close={closeDiff}
+          openFile={openFile}
+          openFolder={go}
+        />
       ) : (
         <>
           {folder === null ? (
@@ -1056,6 +1271,7 @@ export function Explorer({ client }: { client: Client }) {
               onCreated={() => setCreating(false)}
               go={go}
               openFile={openFile}
+              openDiff={openDiff}
             />
           )}
           {folder !== null && (

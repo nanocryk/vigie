@@ -11,6 +11,8 @@ import {
   isInside,
   joinPath,
   newFreeTab,
+  openSessionDiff,
+  openSessionFolder,
   openSessionTab,
   parseFileView,
   parseListing,
@@ -109,6 +111,13 @@ describe("tabs", () => {
     state = openSessionTab(state, "s1", "C:\\p");
     expect(state.active).toBe(id);
     expect(activeTab(state).folder).toBe("C:\\other");
+  });
+
+  it("opens a session's folder view even when its diff was left open", () => {
+    let state = openSessionDiff(initialState(), "s1", "C:\\p", "C:\\p");
+    state = updateTab(state, state.active, { folder: "C:\\p\\src", file: "C:\\p\\src\\a.ts" });
+    state = openSessionFolder(selectLastFree(state), "s1", "C:\\p");
+    expect(activeTab(state)).toMatchObject({ folder: "C:\\p\\src", diff: null, file: null });
   });
 
   it("drops the tabs of sessions no longer live", () => {

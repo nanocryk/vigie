@@ -99,28 +99,54 @@ function parseLine(raw: unknown, label: string): ChangeLine {
   };
 }
 
+function parseChangedFile(item: unknown, at: string): ChangedFile {
+  const file = record(item, at);
+  const status = str(file, "status", at);
+  if (!isStatus(status)) throw new Error(`${at}.status: unknown: ${JSON.stringify(status)}`);
+  return {
+    path: str(file, "path", at),
+    oldPath: optStr(file, "old_path", at),
+    status,
+    added: count(file, "added", at),
+    removed: count(file, "removed", at),
+    note: optStr(file, "note", at),
+    hunks: list(file, "hunks", at).map((hunk, h) =>
+      list(record(hunk, `${at}.hunks[${h}]`), "lines", `${at}.hunks[${h}]`).map((line, l) =>
+        parseLine(line, `${at}.hunks[${h}].lines[${l}]`),
+      ),
+    ),
+  };
+}
+
 export function parseRepoDiff(raw: unknown, label: string): RepoDiff {
   const value = record(raw, label);
   return {
     root: str(value, "root", label),
-    files: list(value, "files", label).map((item, index) => {
-      const at = `${label}.files[${index}]`;
-      const file = record(item, at);
-      const status = str(file, "status", at);
-      if (!isStatus(status)) throw new Error(`${at}.status: unknown: ${JSON.stringify(status)}`);
-      return {
-        path: str(file, "path", at),
-        oldPath: optStr(file, "old_path", at),
-        status,
-        added: count(file, "added", at),
-        removed: count(file, "removed", at),
-        note: optStr(file, "note", at),
-        hunks: list(file, "hunks", at).map((hunk, h) =>
-          list(record(hunk, `${at}.hunks[${h}]`), "lines", `${at}.hunks[${h}]`).map((line, l) =>
-            parseLine(line, `${at}.hunks[${h}].lines[${l}]`),
-          ),
-        ),
-      };
+    files: list(value, "files", label).map((item, index) =>
+      parseChangedFile(item, `${label}.files[${index}]`),
+    ),
+  };
+}
+
+export type StatusKind = "modified" | "added" | "deleted";
+
+export interface RepoStatus {
+  root: string | null;
+  changes: { path: string; kind: StatusKind }[];
+}
+
+export function parseRepoStatus(raw: unknown, label: string): RepoStatus {
+  const value = record(raw, label);
+  return {
+    root: optStr(value, "root", label),
+    changes: list(value, "changes", label).map((item, index) => {
+      const at = `${label}.changes[${index}]`;
+      const change = record(item, at);
+      const kind = str(change, "kind", at);
+      if (kind !== "modified" && kind !== "added" && kind !== "deleted") {
+        throw new Error(`${at}.kind: unknown: ${JSON.stringify(kind)}`);
+      }
+      return { path: str(change, "path", at), kind };
     }),
   };
 }
@@ -162,6 +188,110 @@ export async function fetchRepoDiff(root: string): Promise<RepoDiff> {
   const response = await fetch(`api/git/diff?root=${encodeURIComponent(root)}`);
   await check(response);
   return parseRepoDiff(await response.json(), "diff");
+}
+
+/** A file's pending changes and its repository, null when it has none or is outside one. */
+export async function fetchFileDiff(
+  path: string,
+): Promise<{ root: string; file: ChangedFile } | null> {
+  const response = await fetch(`api/git/file?path=${encodeURIComponent(path)}`);
+  await check(response);
+  const body = record(await response.json(), "file diff");
+  const root = optStr(body, "root", "file diff");
+  const diff = body["diff"];
+  if (root === null || diff === null || diff === undefined) return null;
+  return { root, file: parseChangedFile(diff, "file diff.diff") };
+}
+
+/** Changed paths of the repository containing `folder`. */
+export async function fetchStatus(folder: string): Promise<RepoStatus> {
+  const response = await fetch(`api/git/status?path=${encodeURIComponent(folder)}`);
+  await check(response);
+  return parseRepoStatus(await response.json(), "status");
+}
+
+export interface GutterMarks {
+  added: ReadonlySet<number>;
+  modified: ReadonlySet<number>;
+  /** Lines with removed lines just above them; past the last line for a removal at the end. */
+  removedAbove: ReadonlySet<number>;
+}
+
+/**
+ * New-side line marks from a file's hunks. A change block (lines between two
+ * context lines) with removals and additions marks its additions modified;
+ * with additions only, added; with removals only, a rule above where they were.
+ */
+export function gutterMarks(file: ChangedFile): GutterMarks {
+  const added = new Set<number>();
+  const modified = new Set<number>();
+  const removedAbove = new Set<number>();
+  for (const hunk of file.hunks) {
+    let removed = 0;
+    let additions: number[] = [];
+    let previousNew = 0;
+    const flush = (nextNew: number) => {
+      if (additions.length > 0) {
+        for (const line of additions) (removed > 0 ? modified : added).add(line);
+      } else if (removed > 0) {
+        removedAbove.add(nextNew);
+      }
+      removed = 0;
+      additions = [];
+    };
+    for (const line of hunk) {
+      if (line.kind === "removed") {
+        removed += 1;
+      } else if (line.kind === "added") {
+        if (line.new !== null) additions.push(line.new);
+      } else {
+        flush(line.new ?? previousNew + 1);
+      }
+      if (line.new !== null) previousNew = line.new;
+    }
+    flush(previousNew + 1);
+  }
+  return { added, modified, removedAbove };
+}
+
+export type RowMark = "added" | "modified";
+
+export interface FolderMarks {
+  /** Entry name to its mark: a file's own change, or a folder's summary. */
+  rows: ReadonlyMap<string, RowMark>;
+  /** Repository paths of deleted files directly in the folder. */
+  deleted: string[];
+}
+
+/** Marks for the entries of `folder` from its repository's changes. */
+export function folderMarks(status: RepoStatus, folder: string): FolderMarks {
+  const rows = new Map<string, RowMark>();
+  const deleted: string[] = [];
+  if (status.root === null) return { rows, deleted };
+  const windows = /^[A-Za-z]:/.test(status.root) || status.root.startsWith("\\\\");
+  const fold = (text: string) => (windows ? text.toLowerCase() : text);
+  const root = status.root.replace(/[\\/]+$/, "");
+  if (!fold(folder).startsWith(fold(root))) return { rows, deleted };
+  const rel = folder.slice(root.length).replace(/^[\\/]+|[\\/]+$/g, "").replaceAll("\\", "/");
+  const prefix = rel === "" ? "" : `${rel}/`;
+  const folders = new Map<string, boolean>();
+  for (const change of status.changes) {
+    if (!fold(change.path).startsWith(fold(prefix))) continue;
+    const below = change.path.slice(prefix.length);
+    const slash = below.indexOf("/");
+    if (slash < 0) {
+      if (change.kind === "deleted") deleted.push(change.path);
+      else rows.set(below, change.kind);
+      continue;
+    }
+    const name = below.slice(0, slash);
+    // A folder stays green only while everything changed inside it is new.
+    folders.set(name, (folders.get(name) ?? true) && change.kind === "added");
+  }
+  for (const [name, allAdded] of folders) {
+    if (!rows.has(name)) rows.set(name, allAdded ? "added" : "modified");
+  }
+  return { rows, deleted };
 }
 
 const LOCKFILES = new Set([

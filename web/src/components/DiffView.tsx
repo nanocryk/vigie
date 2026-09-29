@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { DiffBlock } from "@/components/Diff";
 import { folderName } from "@/format";
@@ -58,18 +58,40 @@ function fileId(path: string): string {
   return `diff-${encodeURIComponent(path)}`;
 }
 
+export interface DiffFocus {
+  /** Relative to the repository root. */
+  path: string;
+  /** A new-side line, or null for the file's top. */
+  line: number | null;
+}
+
+/** Outlines the row a jump lands on, for a moment. */
+const FLASH = ["outline-2", "-outline-offset-2", "outline-git-modified"];
+const FLASH_MS = 1600;
+
+interface Kept {
+  diff: RepoDiff;
+  flipped: ReadonlyMap<string, boolean>;
+  scroll: number;
+}
+
+/** Per tab and repository, so coming back from a file lands where the diff was left. */
+const kept = new Map<string, Kept>();
+
 /** Collapsed files: the automatic choice unless the user flipped it. */
-function useCollapsed(files: readonly ChangedFile[]) {
-  const [flipped, setFlipped] = useState<ReadonlyMap<string, boolean>>(new Map());
+function useCollapsed(files: readonly ChangedFile[], initial: ReadonlyMap<string, boolean>) {
+  const [flipped, setFlipped] = useState<ReadonlyMap<string, boolean>>(initial);
   const collapsed = useCallback(
     (file: ChangedFile) => flipped.get(file.path) ?? startsCollapsed(file),
     [flipped],
   );
-  const set = (path: string, value: boolean) =>
-    setFlipped((current) => new Map(current).set(path, value));
+  const set = useCallback(
+    (path: string, value: boolean) => setFlipped((current) => new Map(current).set(path, value)),
+    [],
+  );
   const setAll = (value: boolean) =>
     setFlipped(new Map(files.map((file) => [file.path, value])));
-  return { collapsed, set, setAll };
+  return { collapsed, flipped, set, setAll };
 }
 
 function FileSection({
@@ -77,11 +99,15 @@ function FileSection({
   collapsed,
   toggle,
   openFile,
+  openFolder,
 }: {
   file: ChangedFile;
   collapsed: boolean;
   toggle: () => void;
-  openFile: (() => void) | null;
+  /** Opens the file, at a line when given; null for a deleted file. */
+  openFile: ((line: number | null) => void) | null;
+  /** Opens the folder that held a deleted file. */
+  openFolder: () => void;
 }) {
   const block = useMemo(() => (collapsed ? null : blockDiff(file)), [collapsed, file]);
   const folder = dirName(file.path);
@@ -113,7 +139,7 @@ function FileSection({
         {openFile !== null && (
           <button
             type="button"
-            onClick={openFile}
+            onClick={() => openFile(null)}
             title="Open the file"
             className="text-muted-foreground hover:bg-muted hover:text-foreground voice-ui shrink-0 rounded-[5px] px-1.5 text-xs"
           >
@@ -124,13 +150,20 @@ function FileSection({
       {!collapsed &&
         (file.note !== null ? (
           <p className="text-muted-foreground voice-ui px-3 py-2 text-xs">{file.note}</p>
-        ) : file.status === "deleted" ? (
-          <p className="text-muted-foreground voice-ui px-3 py-2 text-xs">File deleted.</p>
         ) : block !== null && block.hunks.length > 0 ? (
-          <DiffBlock diff={block} maxHeight="" />
+          <DiffBlock
+            diff={block}
+            maxHeight=""
+            {...(openFile === null ? {} : { onNumber: (line: number) => openFile(line) })}
+            {...(file.status === "deleted" ? { onRemovedNumber: openFolder } : {})}
+          />
         ) : (
           <p className="text-muted-foreground voice-ui px-3 py-2 text-xs">
-            {file.status === "renamed" ? "Renamed, content unchanged." : "No line changes."}
+            {file.status === "renamed"
+              ? "Renamed, content unchanged."
+              : file.status === "deleted"
+                ? "Empty file deleted."
+                : "No line changes."}
           </p>
         ))}
     </section>
@@ -138,20 +171,47 @@ function FileSection({
 }
 
 export function DiffView({
+  keepKey,
   root,
+  focus,
   close,
   openFile,
+  openFolder,
 }: {
+  /** Identifies what to keep across remounts: the tab and the repository. */
+  keepKey: string;
   root: string;
+  /** A file, and a new-side line in it, to scroll to once loaded. */
+  focus: DiffFocus | null;
   close: () => void;
-  openFile: (path: string) => void;
+  openFile: (path: string, line: number | null) => void;
+  /** Leaves the diff for a folder. */
+  openFolder: (path: string) => void;
 }) {
-  const [diff, setDiff] = useState<RepoDiff | null>(null);
+  const [restore] = useState(() => kept.get(keepKey) ?? null);
+  const [diff, setDiff] = useState<RepoDiff | null>(restore?.diff ?? null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const scroll = useRef(restore?.scroll ?? 0);
   const files = useMemo(() => diff?.files ?? [], [diff]);
-  const { collapsed, set, setAll } = useCollapsed(files);
+  const { collapsed, flipped, set, setAll } = useCollapsed(files, restore?.flipped ?? new Map());
+
+  useLayoutEffect(() => {
+    if (restore !== null && scroller.current !== null) scroller.current.scrollTop = restore.scroll;
+  }, [restore]);
+
+  const latest = useRef({ diff, flipped });
+  useEffect(() => {
+    latest.current = { diff, flipped };
+  });
+  useEffect(
+    () => () => {
+      const { diff: last, flipped: lastFlipped } = latest.current;
+      if (last !== null) kept.set(keepKey, { diff: last, flipped: lastFlipped, scroll: scroll.current });
+    },
+    [keepKey],
+  );
 
   const load = useCallback(() => {
     setLoading(true);
@@ -189,6 +249,30 @@ export function DiffView({
     });
   };
 
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current || focus === null || diff === null) return;
+    focused.current = true;
+    const target = diff.files.find((file) => file.path === focus.path);
+    if (target === undefined) return;
+    set(target.path, false);
+    // Two frames: the expanded file renders before its rows are looked up.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const section = document.getElementById(fileId(target.path));
+        const row =
+          focus.line === null ? null : section?.querySelector(`[data-new="${focus.line}"]`);
+        if (row === null || row === undefined) {
+          section?.scrollIntoView({ block: "start" });
+          return;
+        }
+        row.scrollIntoView({ block: "center" });
+        row.classList.add(...FLASH);
+        setTimeout(() => row.classList.remove(...FLASH), FLASH_MS);
+      }),
+    );
+  }, [diff, focus, set]);
+
   return (
     <>
       <div className="shrink-0 border-b px-3 py-1.5">
@@ -217,7 +301,13 @@ export function DiffView({
           </button>
         </div>
       </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div
+        ref={scroller}
+        onScroll={(event) => {
+          scroll.current = event.currentTarget.scrollTop;
+        }}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+      >
         <div className={`${PANEL} space-y-3 p-3`}>
           {error !== null && <p className="text-destructive voice-ui text-sm">{error}</p>}
           {diff === null && error === null && (
@@ -273,8 +363,13 @@ export function DiffView({
                   openFile={
                     file.status === "deleted"
                       ? null
-                      : () => openFile(absolutePath(diff?.root ?? root, file.path))
+                      : (line) => openFile(absolutePath(diff?.root ?? root, file.path), line)
                   }
+                  openFolder={() => {
+                    const base = diff?.root ?? root;
+                    const folder = dirName(file.path);
+                    openFolder(folder === "" ? base : absolutePath(base, folder));
+                  }}
                 />
               ))}
             </>

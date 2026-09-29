@@ -68,12 +68,7 @@ pub fn repo_root(path: &Path) -> Option<PathBuf> {
 }
 
 fn canonical_root(raw: &str) -> Result<PathBuf, GitError> {
-    let path = Path::new(raw);
-    if !path.is_absolute() {
-        return Err(GitError::NotFound);
-    }
-    let path = std::fs::canonicalize(path)?;
-    repo_root(&path).ok_or(GitError::NotARepo)
+    repo_root(&canonical(raw)?).ok_or(GitError::NotARepo)
 }
 
 async fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
@@ -407,26 +402,36 @@ fn untracked_file(root: &Path, path: String, read: bool) -> FileDiff {
     file.cap()
 }
 
-/// HEAD against the working tree, untracked files included, sorted by path.
-pub async fn repo_diff(root: &Path) -> Result<RepoDiff, GitError> {
+/// What the working tree is compared to: HEAD, or the empty tree before the first commit.
+async fn base(root: &Path) -> &'static str {
     let has_head = git(root, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .await
         .is_ok();
-    let base = if has_head { "HEAD" } else { EMPTY_TREE };
-    let patch = git(
-        root,
-        &[
-            "diff",
-            base,
-            "--no-color",
-            "--no-ext-diff",
-            "--find-renames",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "-U3",
-        ],
-    )
-    .await?;
+    if has_head { "HEAD" } else { EMPTY_TREE }
+}
+
+/// `git diff` against `base`, limited to `paths` when given.
+async fn patch(root: &Path, paths: &[&str]) -> Result<Vec<u8>, GitError> {
+    let mut args = vec![
+        "diff",
+        base(root).await,
+        "--no-color",
+        "--no-ext-diff",
+        "--find-renames",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "-U3",
+    ];
+    if !paths.is_empty() {
+        args.push("--");
+        args.extend_from_slice(paths);
+    }
+    git(root, &args).await
+}
+
+/// HEAD against the working tree, untracked files included, sorted by path.
+pub async fn repo_diff(root: &Path) -> Result<RepoDiff, GitError> {
+    let patch = patch(root, &[]).await?;
     let untracked = git(root, &["ls-files", "--others", "--exclude-standard", "-z"]).await?;
 
     let root_owned = root.to_path_buf();
@@ -454,9 +459,148 @@ pub async fn repo_diff(root: &Path) -> Result<RepoDiff, GitError> {
     })
 }
 
+/// `path` relative to `root`, `/`-separated as git writes it.
+fn relative(root: &Path, path: &Path) -> Option<String> {
+    let parts: Vec<String> = path
+        .strip_prefix(root)
+        .ok()?
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    Some(parts.join("/"))
+}
+
+/// One file's pending changes, or None when it has none.
+pub async fn file_diff(path: &Path) -> Result<Option<FileDiff>, GitError> {
+    let Some(root) = path.parent().and_then(repo_root) else {
+        return Ok(None);
+    };
+    let Some(rel) = relative(&root, path) else {
+        return Ok(None);
+    };
+    let untracked = git(
+        &root,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            &rel,
+        ],
+    )
+    .await?;
+    if !untracked.is_empty() {
+        return tokio::task::spawn_blocking(move || Some(untracked_file(&root, rel, true)))
+            .await
+            .map_err(|err| GitError::Failed(err.to_string()));
+    }
+    let patch = patch(&root, &[&rel]).await?;
+    Ok(parse_diff(&String::from_utf8_lossy(&patch))
+        .into_iter()
+        .next())
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChangeKind {
+    Modified,
+    Added,
+    Deleted,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct Change {
+    /// Relative to the repository root, `/`-separated.
+    pub path: String,
+    pub kind: ChangeKind,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RepoStatus {
+    /// Null outside a repository, with no changes.
+    pub root: Option<String>,
+    pub changes: Vec<Change>,
+}
+
+/// Parses `git status --porcelain=v1 -z`: `XY path`, a rename followed by its old path.
+pub fn parse_status(raw: &[u8]) -> Vec<Change> {
+    let mut changes = Vec::new();
+    let mut records = raw
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        let [index, tree, b' ', path @ ..] = record else {
+            continue;
+        };
+        let path = String::from_utf8_lossy(path).into_owned();
+        let kind = match (index, tree) {
+            (b'?', _) | (b'A', _) if *tree != b'D' => ChangeKind::Added,
+            (b'D', _) | (_, b'D') => ChangeKind::Deleted,
+            _ => ChangeKind::Modified,
+        };
+        changes.push(Change { path, kind });
+        if matches!(index, b'R' | b'C') {
+            let old = records.next();
+            if *index == b'R'
+                && let Some(old) = old
+            {
+                changes.push(Change {
+                    path: String::from_utf8_lossy(old).into_owned(),
+                    kind: ChangeKind::Deleted,
+                });
+            }
+        }
+    }
+    changes
+}
+
+pub async fn repo_status(path: &Path) -> Result<RepoStatus, GitError> {
+    let Some(root) = repo_root(path) else {
+        return Ok(RepoStatus {
+            root: None,
+            changes: Vec::new(),
+        });
+    };
+    let raw = git(
+        &root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    .await?;
+    Ok(RepoStatus {
+        root: Some(display_path(&root)),
+        changes: parse_status(&raw),
+    })
+}
+
+fn canonical(raw: &str) -> Result<PathBuf, GitError> {
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err(GitError::NotFound);
+    }
+    Ok(std::fs::canonicalize(path)?)
+}
+
 #[derive(Deserialize)]
 pub struct PathQuery {
     pub path: String,
+}
+
+/// Changed paths of the repository containing a folder, for its listing.
+pub async fn status_route(Query(query): Query<PathQuery>) -> Result<Json<RepoStatus>, GitError> {
+    repo_status(&canonical(&query.path)?).await.map(Json)
+}
+
+/// A file's pending changes, null when it has none or is outside a repository.
+pub async fn file_route(Query(query): Query<PathQuery>) -> Result<Response, GitError> {
+    let path = canonical(&query.path)?;
+    let root = path.parent().and_then(repo_root);
+    let diff = file_diff(&path).await?;
+    Ok(Json(json!({
+        "root": root.as_deref().map(display_path),
+        "diff": diff,
+    }))
+    .into_response())
 }
 
 /// The repository containing a folder, or null.
@@ -579,6 +723,29 @@ Binary files /dev/null and b/img.png differ
         assert_eq!(header_path("a/x y b/x y").as_deref(), Some("x y"));
     }
 
+    #[test]
+    fn parses_status_records_and_renames() {
+        let raw =
+            b" M src/a.rs\0?? new.md\0A  staged.rs\0 D gone.rs\0AD brief.rs\0R  to.rs\0from.rs\0";
+        let parsed = parse_status(raw);
+        let changes: Vec<(&str, ChangeKind)> = parsed
+            .iter()
+            .map(|change| (change.path.as_str(), change.kind))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                ("src/a.rs", ChangeKind::Modified),
+                ("new.md", ChangeKind::Added),
+                ("staged.rs", ChangeKind::Added),
+                ("gone.rs", ChangeKind::Deleted),
+                ("brief.rs", ChangeKind::Deleted),
+                ("to.rs", ChangeKind::Modified),
+                ("from.rs", ChangeKind::Deleted),
+            ]
+        );
+    }
+
     fn run(dir: &Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .arg("-C")
@@ -624,6 +791,33 @@ Binary files /dev/null and b/img.png differ
                 ("a.txt", FileStatus::Modified, 1, 1),
                 ("sub/new.md", FileStatus::Added, 1, 0),
             ]
+        );
+
+        let one = file_diff(&dir.join("a.txt"))
+            .await
+            .expect("file diff")
+            .expect("a.txt changed");
+        assert_eq!((one.added, one.removed), (1, 1));
+        let new = file_diff(&dir.join("sub").join("new.md"))
+            .await
+            .expect("file diff")
+            .expect("new.md is new");
+        assert_eq!(new.status, FileStatus::Added);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").expect("write");
+        assert!(
+            file_diff(&dir.join("a.txt"))
+                .await
+                .expect("file diff")
+                .is_none()
+        );
+
+        let status = repo_status(&dir.join("sub")).await.expect("status");
+        assert_eq!(
+            status.changes,
+            [Change {
+                path: "sub/new.md".to_string(),
+                kind: ChangeKind::Added
+            }]
         );
     }
 }

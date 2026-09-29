@@ -18,10 +18,16 @@ const SIGN: Record<LineKind, { text: string; className: string }> = {
 export function DiffBlock({
   diff,
   maxHeight = "max-h-[70dvh]",
+  onNumber,
+  onRemovedNumber,
 }: {
   diff: FileDiff;
   /** A literal `max-h-*` class. */
   maxHeight?: string;
+  /** Makes new-side line numbers tappable. */
+  onNumber?: (line: number) => void;
+  /** Makes removed lines' numbers tappable. */
+  onRemovedNumber?: (line: number) => void;
 }) {
   const width = gutterWidth(diff.hunks);
   const html = useMemo(
@@ -38,16 +44,34 @@ export function DiffBlock({
             {hunk.map((line, index) => {
               const sign = SIGN[line.kind];
               const lineHtml = html[h]?.[index] ?? null;
+              const tap = line.kind === "removed" ? onRemovedNumber : onNumber;
               return (
-                <div key={index} className={`flex min-h-[1.45em] ${ROW[line.kind]}`}>
-                  {width > 0 && (
-                    <span
-                      className="text-muted-foreground shrink-0 pl-2 text-right select-none"
-                      style={{ width: `calc(${width}ch + 0.5rem)` }}
-                    >
-                      {line.number ?? ""}
-                    </span>
-                  )}
+                <div
+                  key={index}
+                  data-new={line.kind === "removed" ? undefined : (line.number ?? undefined)}
+                  className={`flex min-h-[1.45em] ${ROW[line.kind]}`}
+                >
+                  {width > 0 &&
+                    (tap !== undefined && line.number !== null ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (line.number !== null) tap(line.number);
+                        }}
+                        title={line.kind === "removed" ? "Open its folder" : `Open at line ${line.number}`}
+                        className="text-muted-foreground hover:text-primary shrink-0 cursor-pointer pl-2 text-right select-none hover:underline"
+                        style={{ width: `calc(${width}ch + 0.5rem)` }}
+                      >
+                        {line.number}
+                      </button>
+                    ) : (
+                      <span
+                        className="text-muted-foreground shrink-0 pl-2 text-right select-none"
+                        style={{ width: `calc(${width}ch + 0.5rem)` }}
+                      >
+                        {line.number ?? ""}
+                      </span>
+                    ))}
                   <span className={`w-[3ch] shrink-0 text-center select-none ${sign.className}`}>
                     {sign.text}
                   </span>

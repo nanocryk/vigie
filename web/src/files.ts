@@ -288,6 +288,8 @@ export interface ExplorerTab {
   diff: string | null;
   /** The open file, shown over the diff and the folder. */
   file: string | null;
+  /** A line of the open file to bring into view and flash, once. */
+  line: number | null;
   scroll: number;
 }
 
@@ -306,7 +308,15 @@ function newId(): string {
 }
 
 function freeTab(): ExplorerTab {
-  return { id: newId(), owner: { kind: "free" }, folder: null, diff: null, file: null, scroll: 0 };
+  return {
+    id: newId(),
+    owner: { kind: "free" },
+    folder: null,
+    diff: null,
+    file: null,
+    line: null,
+    scroll: 0,
+  };
 }
 
 export function initialState(): ExplorerState {
@@ -365,7 +375,7 @@ export function closeTab(state: ExplorerState, id: string): ExplorerState {
 export function updateTab(
   state: ExplorerState,
   id: string,
-  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "scroll">>,
+  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "line" | "scroll">>,
 ): ExplorerState {
   return {
     ...state,
@@ -385,9 +395,16 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
     folder: root,
     diff: null,
     file: null,
+    line: null,
     scroll: 0,
   };
   return selectTab({ ...state, tabs: [...state.tabs, tab] }, tab.id);
+}
+
+/** Activates the session's tab on its folder view, the diff and any file closed. */
+export function openSessionFolder(state: ExplorerState, session: string, root: string): ExplorerState {
+  const next = openSessionTab(state, session, root);
+  return updateTab(next, next.active, { diff: null, file: null, line: null });
 }
 
 /** Activates the session's tab on the pending changes of `repo`. */
@@ -423,7 +440,7 @@ function parseOwner(raw: unknown): TabOwner | null {
 
 function parseTab(raw: unknown): ExplorerTab | null {
   if (!isRecord(raw)) return null;
-  const { id, folder, diff, file, scroll } = raw;
+  const { id, folder, diff, file, line, scroll } = raw;
   const owner = parseOwner(raw["owner"]);
   if (typeof id !== "string" || owner === null) return null;
   return {
@@ -432,6 +449,7 @@ function parseTab(raw: unknown): ExplorerTab | null {
     folder: typeof folder === "string" ? folder : null,
     diff: typeof diff === "string" ? diff : null,
     file: typeof file === "string" ? file : null,
+    line: typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null,
     scroll: typeof scroll === "number" && Number.isFinite(scroll) ? scroll : 0,
   };
 }
@@ -508,7 +526,7 @@ export function explorerState(): ExplorerState {
 /** One level up: the open file closes, else the diff, else the folder's parent, else Places. */
 export function goUp(state: ExplorerState): ExplorerState {
   const tab = activeTab(state);
-  if (tab.file !== null) return updateTab(state, tab.id, { file: null });
+  if (tab.file !== null) return updateTab(state, tab.id, { file: null, line: null });
   if (tab.diff !== null) return updateTab(state, tab.id, { diff: null });
   if (tab.folder === null) return state;
   const path = crumbs(tab.folder);

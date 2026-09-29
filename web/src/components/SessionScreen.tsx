@@ -57,7 +57,7 @@ import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { DiffIcon, FolderIcon } from "@/components/Explorer";
-import { changeExplorer, openSessionDiff, openSessionTab } from "@/files";
+import { changeExplorer, openSessionDiff, openSessionFolder } from "@/files";
 import { repoRoot } from "@/git";
 import { folderName, stateLabel } from "@/format";
 import { navigate } from "@/route";
@@ -818,7 +818,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               <button
                 type="button"
                 onClick={() => {
-                  changeExplorer((state) => openSessionTab(state, view.id, view.cwd));
+                  changeExplorer((state) => openSessionFolder(state, view.id, view.cwd));
                   navigate({ kind: "files" });
                 }}
                 title={view.cwd}
