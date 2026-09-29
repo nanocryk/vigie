@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -12,11 +12,12 @@ use tracing::{info, warn};
 
 use vigie2::BASE_PATH_SLASH;
 use vigie2::claude::child::Program;
-use vigie2::http::auth::{Auth, Registry, state_dir};
+use vigie2::http::auth::{Auth, Registry};
 use vigie2::http::net;
 use vigie2::http::push::{self, Pusher};
 use vigie2::http::server::{AppState, build_app};
 use vigie2::session::manager::{Probe, SessionManager};
+use vigie2::state_dir;
 use vigie2::store::Store;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7879";
@@ -100,9 +101,87 @@ struct ServerConfig {
 
 fn load_config(path: &Path) -> Result<ServerConfig> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(ServerConfig::default()),
         Err(err) => Err(err).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+/// How the server speaks TLS.
+enum Tls {
+    /// `--http`: plaintext, loopback only.
+    Off,
+    /// A certificate generated and kept in the state directory.
+    SelfSigned,
+    Provided {
+        cert: PathBuf,
+        key: PathBuf,
+    },
+}
+
+/// `ServeArgs` over `config.json`: a flag wins over the config, which wins over the default.
+struct Settings {
+    bind: SocketAddr,
+    tls: Tls,
+    /// `host[:port]`, without scheme or trailing slash.
+    public_hosts: Vec<String>,
+    allow_origins: Vec<String>,
+    print_token: bool,
+}
+
+impl Settings {
+    fn resolve(args: ServeArgs, config: ServerConfig) -> Result<Self> {
+        let bind = args
+            .bind
+            .or(config.bind)
+            .unwrap_or_else(|| DEFAULT_BIND.parse().expect("valid default bind"));
+        if args.http && !bind.ip().is_loopback() {
+            bail!(
+                "--http refused on non-loopback bind {bind}: vigie2 never carries session data over plaintext off-loopback",
+            );
+        }
+        let provided = match (args.cert.or(config.cert), args.key.or(config.key)) {
+            (Some(cert), Some(key)) => Some(Tls::Provided { cert, key }),
+            (None, None) => None,
+            _ => bail!(
+                "cert and key must be provided together (either both flags or both in config.json)"
+            ),
+        };
+        let tls = if args.http {
+            Tls::Off
+        } else {
+            provided.unwrap_or(Tls::SelfSigned)
+        };
+        let public_hosts = if args.public_host.is_empty() {
+            config.public_hosts
+        } else {
+            args.public_host
+        };
+        let allow_origins = if args.allow_origin.is_empty() {
+            config.allow_origins
+        } else {
+            args.allow_origin
+        };
+        Ok(Self {
+            bind,
+            tls,
+            public_hosts: public_hosts
+                .iter()
+                .map(|host| strip_url_scheme(host).trim_end_matches('/').to_string())
+                .collect(),
+            allow_origins,
+            print_token: !args.no_print_token,
+        })
+    }
+
+    fn tls_on(&self) -> bool {
+        !matches!(self.tls, Tls::Off)
+    }
+
+    fn scheme(&self) -> &'static str {
+        if self.tls_on() { "https" } else { "http" }
     }
 }
 
@@ -128,48 +207,17 @@ async fn main() -> Result<()> {
 }
 
 fn run_revoke_all() -> Result<()> {
-    let dir = state_dir()?;
-    let registry = Registry::load(dir.join("devices.json"))?;
+    let registry = Registry::load(state_dir::path()?.join("devices.json"))?;
     let count = registry.revoke_all()?;
     println!("Revoked {count} device(s).");
     Ok(())
 }
 
-async fn serve(mut args: ServeArgs) -> Result<()> {
-    let dir = state_dir()?;
-    let config = load_config(&dir.join("config.json"))?;
-
-    let bind: SocketAddr = args
-        .bind
-        .or(config.bind)
-        .unwrap_or_else(|| DEFAULT_BIND.parse().expect("valid default bind"));
-
-    if args.http && !is_loopback(&bind) {
-        anyhow::bail!(
-            "--http refused on non-loopback bind {bind}: vigie2 never carries session data over plaintext off-loopback",
-        );
-    }
-
-    if args.cert.is_none() && config.cert.is_some() {
-        args.cert = config.cert.clone();
-    }
-    if args.key.is_none() && config.key.is_some() {
-        args.key = config.key.clone();
-    }
-    if args.cert.is_some() != args.key.is_some() {
-        anyhow::bail!(
-            "cert and key must be provided together (either both flags or both in config.json)"
-        );
-    }
-    if args.public_host.is_empty() {
-        args.public_host = config.public_hosts.clone();
-    }
-    for h in &mut args.public_host {
-        *h = strip_url_scheme(h).trim_end_matches('/').to_string();
-    }
-    if args.allow_origin.is_empty() {
-        args.allow_origin = config.allow_origins.clone();
-    }
+async fn serve(args: ServeArgs) -> Result<()> {
+    let dir = state_dir::path()?;
+    let settings = Settings::resolve(args, load_config(&dir.join("config.json"))?)?;
+    let bind = settings.bind;
+    let scheme = settings.scheme();
 
     let web_dir = PathBuf::from(WEB_DIST);
     if !web_dir.join("index.html").is_file() {
@@ -178,8 +226,7 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
 
     let devices_path = dir.join("devices.json");
     let registry = Registry::load(devices_path.clone())?;
-    let tls_on = !args.http;
-    let auth = Arc::new(Auth::new(registry, tls_on));
+    let auth = Arc::new(Auth::new(registry, settings.tls_on()));
 
     // `vigie2 auth revoke-all` rewrites devices.json from a second process.
     // Reloading here is what makes the panic button reach a running server.
@@ -196,9 +243,6 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
 
     let reachable_ips = net::all_reachable_ipv4();
     info!(interfaces = ?net::enumerate(), "network interfaces");
-
-    let scheme = if tls_on { "https" } else { "http" };
-    let loopback_origin = format!("{scheme}://127.0.0.1:{}", bind.port());
 
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
@@ -228,41 +272,40 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
         auth: Arc::clone(&auth),
         pair_scheme: Arc::new(scheme.to_string()),
         pair_port: bind.port(),
-        pair_extra_hosts: Arc::new(args.public_host.clone()),
+        pair_extra_hosts: Arc::new(settings.public_hosts.clone()),
         web_dir: Arc::new(web_dir),
         manager: manager.clone(),
-        allowed_origins: Arc::new(allowed_origins(scheme, bind, &reachable_ips, &args)),
+        allowed_origins: Arc::new(allowed_origins(&settings, &reachable_ips)),
     };
 
     let app = build_app(state);
 
-    if !args.no_print_token {
+    if settings.print_token {
+        let loopback_origin = format!("{scheme}://127.0.0.1:{}", bind.port());
         eprintln!("\nvigie2 listening on {scheme}://{bind}{BASE_PATH_SLASH}");
         eprintln!("Pair URL (single use, valid until this process exits):");
         eprintln!(
             "  {loopback_origin}{BASE_PATH_SLASH}#auth={}",
             auth.startup_token
         );
-        for host in &args.public_host {
+        for host in &settings.public_hosts {
             eprintln!(
                 "  {scheme}://{host}{BASE_PATH_SLASH}#auth={}",
                 auth.startup_token
             );
         }
         eprintln!();
-        if !reachable_ips.is_empty() && !is_loopback(&bind) {
+        if !reachable_ips.is_empty() && !bind.ip().is_loopback() {
             eprintln!("Reachable interfaces:");
             for ip in &reachable_ips {
                 eprintln!("  {scheme}://{ip}:{}{BASE_PATH_SLASH}", bind.port());
             }
             eprintln!();
         }
-        if !tls_on {
+        if !settings.tls_on() {
             eprintln!("WARNING: --http is set; traffic is plaintext.\n");
         }
     }
-
-    let sans_extra: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
 
     let (stop_sender, stop) = watch::channel(false);
     tokio::spawn(async move {
@@ -279,8 +322,9 @@ async fn serve(mut args: ServeArgs) -> Result<()> {
         }
     });
 
-    let served: Result<()> = if tls_on {
-        let (cert_path, key_path) = resolve_tls(&args, bind, &dir, &sans_extra)?;
+    let served: Result<()> = if settings.tls_on() {
+        let extra_sans: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
+        let (cert_path, key_path) = resolve_tls(&settings, &dir, &extra_sans)?;
         let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .with_context(|| format!("load TLS from {}", cert_path.display()))?;
@@ -327,12 +371,8 @@ async fn stopped(mut stop: watch::Receiver<bool>) {
 
 /// Origins a WebSocket upgrade is accepted from: the bind address, loopback,
 /// every reachable interface, the public hosts, and `--allow-origin`.
-fn allowed_origins(
-    scheme: &str,
-    bind: SocketAddr,
-    reachable_ips: &[IpAddr],
-    args: &ServeArgs,
-) -> BTreeSet<String> {
+fn allowed_origins(settings: &Settings, reachable_ips: &[IpAddr]) -> BTreeSet<String> {
+    let (scheme, bind) = (settings.scheme(), settings.bind);
     let port = bind.port();
     let mut allowed: BTreeSet<String> = [
         format!("{scheme}://{bind}"),
@@ -344,21 +384,13 @@ fn allowed_origins(
     for ip in reachable_ips {
         allowed.insert(format!("{scheme}://{ip}:{port}"));
     }
-    for origin in &args.allow_origin {
+    for origin in &settings.allow_origins {
         allowed.insert(origin.trim_end_matches('/').to_string());
     }
-    for host in &args.public_host {
-        if host.contains(':') {
-            allowed.insert(format!("{scheme}://{host}"));
-        } else {
-            allowed.insert(format!("{scheme}://{host}:{port}"));
-        }
+    for host in &settings.public_hosts {
+        allowed.insert(net::origin(scheme, host, port));
     }
     allowed
-}
-
-fn is_loopback(addr: &SocketAddr) -> bool {
-    addr.ip().is_loopback()
 }
 
 /// Watch a single file for external mutation, running `on_change` on every
@@ -390,16 +422,17 @@ where
         return None;
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (changed_sender, mut changed) = tokio::sync::mpsc::unbounded_channel::<()>();
     let target = path.clone();
-    let watcher_result = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
-        if event.paths.iter().any(|p| p == &target) {
-            let _ = tx.send(());
-        }
-    });
+    let watcher_result =
+        notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+            let Ok(event) = result else { return };
+            if event.paths.iter().any(|event_path| event_path == &target) {
+                let _ = changed_sender.send(());
+            }
+        });
     let mut watcher = match watcher_result {
-        Ok(w) => w,
+        Ok(watcher) => watcher,
         Err(err) => {
             warn!(%err, label, "watcher: build failed");
             return None;
@@ -411,7 +444,7 @@ where
     }
 
     tokio::spawn(async move {
-        while let Some(()) = rx.recv().await {
+        while let Some(()) = changed.recv().await {
             on_change();
         }
     });
@@ -420,14 +453,15 @@ where
     Some(watcher)
 }
 
+/// The certificate and key to serve: the provided ones, or a self-signed pair
+/// regenerated whenever the names it must cover change.
 fn resolve_tls(
-    args: &ServeArgs,
-    bind: SocketAddr,
+    settings: &Settings,
     state_dir: &Path,
     extra_sans: &[String],
 ) -> Result<(PathBuf, PathBuf)> {
-    if let (Some(cert), Some(key)) = (args.cert.clone(), args.key.clone()) {
-        return Ok((cert, key));
+    if let Tls::Provided { cert, key } = &settings.tls {
+        return Ok((cert.clone(), key.clone()));
     }
     let tls_dir = state_dir.join("tls");
     std::fs::create_dir_all(&tls_dir).with_context(|| format!("mkdir {}", tls_dir.display()))?;
@@ -439,16 +473,16 @@ fn resolve_tls(
     desired.insert("localhost".to_string());
     desired.insert("127.0.0.1".to_string());
     desired.insert("::1".to_string());
-    desired.insert(bind.ip().to_string());
+    desired.insert(settings.bind.ip().to_string());
     for san in extra_sans {
         desired.insert(san.clone());
     }
-    for origin in &args.allow_origin {
+    for origin in &settings.allow_origins {
         if let Some(host) = origin_host(origin) {
             desired.insert(host);
         }
     }
-    for host in &args.public_host {
+    for host in &settings.public_hosts {
         if let Some(host) = origin_host(host) {
             desired.insert(host);
         }
@@ -456,37 +490,33 @@ fn resolve_tls(
 
     let cached: Option<BTreeSet<String>> = std::fs::read(&sans_path)
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let need_regen =
-        !cert_path.exists() || !key_path.exists() || cached.as_ref().is_none_or(|c| c != &desired);
+    let need_regen = !cert_path.exists()
+        || !key_path.exists()
+        || cached.as_ref().is_none_or(|cached| cached != &desired);
 
     if need_regen {
         let names: Vec<String> = desired.iter().cloned().collect();
         info!(sans = ?names, "generating self-signed TLS cert");
         let generated = rcgen::generate_simple_self_signed(names).context("rcgen")?;
         std::fs::write(&cert_path, generated.cert.pem())?;
-        std::fs::write(&key_path, generated.signing_key.serialize_pem())?;
+        state_dir::write_private(&key_path, generated.signing_key.serialize_pem())?;
         std::fs::write(&sans_path, serde_json::to_vec_pretty(&desired)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
-        }
     }
     Ok((cert_path, key_path))
 }
 
-fn strip_url_scheme(s: &str) -> &str {
-    s.strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s)
+fn strip_url_scheme(text: &str) -> &str {
+    text.strip_prefix("https://")
+        .or_else(|| text.strip_prefix("http://"))
+        .unwrap_or(text)
 }
 
 fn origin_host(origin: &str) -> Option<String> {
     let rest = strip_url_scheme(origin);
     let host = rest.split('/').next()?;
-    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let host = host.rsplit_once(':').map_or(host, |(host, _)| host);
     if host.is_empty() {
         None
     } else {
@@ -533,5 +563,75 @@ mod tests {
     fn origin_host_empty_returns_none() {
         assert_eq!(origin_host(""), None);
         assert_eq!(origin_host("http://"), None);
+    }
+
+    fn args() -> ServeArgs {
+        ServeArgs {
+            bind: None,
+            cert: None,
+            key: None,
+            http: false,
+            public_host: Vec::new(),
+            allow_origin: Vec::new(),
+            no_print_token: false,
+        }
+    }
+
+    #[test]
+    fn flags_win_over_the_config_and_hosts_lose_their_scheme() {
+        let config = ServerConfig {
+            bind: Some("0.0.0.0:9000".parse().unwrap()),
+            cert: Some("config.pem".into()),
+            key: Some("config.key".into()),
+            public_hosts: vec!["https://config.example/".into()],
+            allow_origins: vec!["https://config.example".into()],
+        };
+        let settings = Settings::resolve(
+            ServeArgs {
+                public_host: vec!["https://flag.example:8443/".into()],
+                ..args()
+            },
+            config,
+        )
+        .unwrap();
+        assert_eq!(settings.bind, "0.0.0.0:9000".parse().unwrap());
+        assert!(
+            matches!(&settings.tls, Tls::Provided { cert, .. } if cert == Path::new("config.pem"))
+        );
+        assert_eq!(settings.public_hosts, ["flag.example:8443"]);
+        assert_eq!(settings.allow_origins, ["https://config.example"]);
+    }
+
+    #[test]
+    fn settings_refuse_plaintext_off_loopback_and_a_lone_cert() {
+        let plaintext = ServeArgs {
+            bind: Some("0.0.0.0:7879".parse().unwrap()),
+            http: true,
+            ..args()
+        };
+        assert!(Settings::resolve(plaintext, ServerConfig::default()).is_err());
+        let lone_cert = ServeArgs {
+            cert: Some("cert.pem".into()),
+            ..args()
+        };
+        assert!(Settings::resolve(lone_cert, ServerConfig::default()).is_err());
+        let loopback = Settings::resolve(
+            ServeArgs {
+                http: true,
+                ..args()
+            },
+            ServerConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(loopback.scheme(), "http");
+    }
+
+    #[test]
+    fn a_malformed_config_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"bind": "not an address"}"#).unwrap();
+        assert!(load_config(&path).is_err());
+        assert!(load_config(&dir.path().join("absent.json")).is_ok());
     }
 }

@@ -25,7 +25,7 @@ pub use events::{EventKind, PageStart, StoredEvent};
 pub use samples::UsageSample;
 pub use sessions::{SessionRow, SessionState, Unread};
 
-use crate::usage;
+use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
 const MIGRATIONS: [&str; 13] = [
@@ -138,8 +138,7 @@ pub struct Store {
 impl Store {
     /// `~/.vigie2/history.db`.
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("no home dir")?;
-        Ok(home.join(".vigie2").join("history.db"))
+        Ok(state_dir::path()?.join("history.db"))
     }
 
     /// Opens or creates the database, migrates it, and starts the writer thread.

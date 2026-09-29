@@ -56,6 +56,15 @@ pub fn all_reachable_ipv4() -> Vec<IpAddr> {
         .collect()
 }
 
+/// `scheme://host`, with `:port` unless `host` already names one.
+pub fn origin(scheme: &str, host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("{scheme}://{host}")
+    } else {
+        format!("{scheme}://{host}:{port}")
+    }
+}
+
 fn classify(v4: Ipv4Addr) -> IfaceKind {
     if v4.is_loopback() {
         IfaceKind::Loopback
