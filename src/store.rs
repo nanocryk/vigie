@@ -867,6 +867,13 @@ impl Store {
         .await
     }
 
+    /// Like `session`, failing for an unknown one.
+    pub async fn require_session(&self, id: Uuid) -> Result<SessionRow> {
+        self.session(id)
+            .await?
+            .with_context(|| format!("unknown session {id}"))
+    }
+
     /// Up to `limit` events with a seq above `after`, in seq order.
     pub async fn events_after(
         &self,

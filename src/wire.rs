@@ -13,8 +13,9 @@ use crate::agents::AgentView;
 use crate::background::BackgroundView;
 use crate::child::Effort;
 use crate::gauges::{Cache, Context};
+use crate::manager::LiveView;
 use crate::protocol::PermissionMode;
-use crate::session::{Activity, Answer, Event, EventBody, LiveStatus, RestartMode, StopReason};
+use crate::session::{Activity, Answer, Event, EventBody, RestartMode, StopReason};
 use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
 
 /// Ack error of a `send` or an `answer` refused on a cold cache.
@@ -298,13 +299,12 @@ pub struct SessionView {
 }
 
 impl SessionView {
-    /// `status` is `None` when the child is not running.
-    pub fn new(
-        row: SessionRow,
-        status: Option<LiveStatus>,
-        agents: Vec<AgentView>,
-        background: Vec<BackgroundView>,
-    ) -> Self {
+    /// `live` is `None` when the child is not running.
+    pub fn new(row: SessionRow, live: Option<LiveView>) -> Self {
+        let status = live.as_ref().map(|live| live.status);
+        let (agents, background) = live
+            .map(|live| (live.agents, live.background))
+            .unwrap_or_default();
         Self {
             id: row.id,
             cwd: row.cwd,

@@ -117,18 +117,14 @@ pub async fn version(State(state): State<AppState>) -> Response {
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {
-    let statuses = manager.statuses().await;
-    let mut agents = manager.agents().await;
-    let mut background = manager.background().await;
+    let mut live = manager.live_views().await;
     Ok(manager
         .list()
         .await?
         .into_iter()
         .map(|row| {
-            let status = statuses.get(&row.id).copied();
-            let row_agents = agents.remove(&row.id).unwrap_or_default();
-            let row_background = background.remove(&row.id).unwrap_or_default();
-            SessionView::new(row, status, row_agents, row_background)
+            let live = live.remove(&row.id);
+            SessionView::new(row, live)
         })
         .collect())
 }

@@ -546,10 +546,10 @@ async fn until_asks(
         loop {
             assert_eq!(changes.recv().await.unwrap(), id);
             if manager
-                .statuses()
+                .live_views()
                 .await
                 .get(&id)
-                .is_some_and(|status| status.asks == asks)
+                .is_some_and(|live| live.status.asks == asks)
             {
                 return;
             }
@@ -593,7 +593,7 @@ async fn pending_asks_are_counted_and_announced() {
 
     stop(&session).await;
     assert_eq!(session.status().borrow().asks, 0);
-    assert!(!manager.statuses().await.contains_key(&id));
+    assert!(!manager.live_views().await.contains_key(&id));
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
     assert_clean_exit(stored.last().unwrap());
