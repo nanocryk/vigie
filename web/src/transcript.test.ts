@@ -216,6 +216,33 @@ describe("transcript from recordings", () => {
     });
   });
 
+  it("claude_attached puts the files on the turn's last Claude text only", () => {
+    const events = recordingEvents("cd");
+    const files = ["C:\\p\\shot.png", "C:\\p\\notes.md"];
+    const host = (seq: number, payload: unknown): WireEvent => ({
+      session: SESSION,
+      seq,
+      time: "t",
+      kind: "host",
+      payload: parseHostEvent(payload),
+    });
+    const state = applyEvents(emptyTranscript, [
+      ...events,
+      host(events.length + 1, { event: "claude_attached", attachments: files }),
+    ]);
+    const replies = state.items.filter((item) => item.kind === "claude");
+    expect(replies.map((item) => item.attachments)).toEqual([undefined, files]);
+    expect(state.items.at(-1)).toMatchObject({ kind: "claude", attachments: files });
+
+    // A turn with no Claude text since the user's message drops them.
+    const next = applyEvents(state, [
+      host(events.length + 2, { event: "user_sent", text: "again", client_id: "c9" }),
+      host(events.length + 3, { event: "claude_attached", attachments: ["C:\\p\\other.png"] }),
+    ]);
+    expect(next.items.filter((item) => item.kind === "claude")).toEqual(replies);
+    expect(next.items.at(-1)).toMatchObject({ kind: "user", text: "again" });
+  });
+
   it("cd: a command the CLI answers locally is marked handled", () => {
     const state = transcript("cd");
     expect(state.items.map(shape)).toEqual([

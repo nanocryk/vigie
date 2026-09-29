@@ -814,6 +814,9 @@ class Draft {
         this.asks = this.asks.filter((ask) => ask.requestId !== event.request_id);
         this.requests.delete(event.request_id);
         return;
+      case "claude_attached":
+        this.attachToReply(event.attachments);
+        return;
       case "permission_mode":
         this.permissionMode = event.mode;
         return;
@@ -1088,6 +1091,17 @@ class Draft {
       return;
     }
     this.add({ kind: "notice", key, tone: "info", text: "System message", detail: text });
+  }
+
+  /** Puts `paths` on the last Claude text since the last user message; dropped when there is none. */
+  private attachToReply(paths: readonly string[]): void {
+    for (let index = this.items.length - 1; index >= 0; index -= 1) {
+      const item = this.items[index];
+      if (item?.kind === "user") return;
+      if (item?.kind !== "claude") continue;
+      this.items[index] = { ...item, ...attached(paths) };
+      return;
+    }
   }
 
   private toolResult(

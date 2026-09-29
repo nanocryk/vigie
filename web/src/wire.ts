@@ -382,6 +382,8 @@ export type HostEvent =
       outcome: RelayOutcome;
     }
   | { event: "ask_resolved"; request_id: string }
+  /** The files Claude attached to its reply; follows the `result` line ending the turn. */
+  | { event: "claude_attached"; attachments: string[] }
   | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
   /** A stop for `reason` began; a CLI interrupt that follows comes from it. */
@@ -782,6 +784,8 @@ export function parseHostEvent(raw: unknown): HostEvent {
             client_id: text("client_id"),
           };
     }
+    case "claude_attached":
+      return { event: "claude_attached", attachments: stringList(raw["attachments"]) };
     case "permission_mode": {
       const mode = text("mode");
       return mode === null ? { event: "unknown", raw } : { event: "permission_mode", mode };
