@@ -23,7 +23,7 @@ use super::events::{
 use super::grant::{self, FileOffer};
 use super::handle::Config;
 use super::plan::PlanTracker;
-use super::{danger, seed};
+use super::{attachments, danger, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
     CanUseTool, CliRequest, ControlRequest, ControlResponse, HostRequest, Inbound,
@@ -45,7 +45,7 @@ const OVERAGE_LIMIT: &str = "overage";
 
 pub enum Command {
     Send {
-        text: String,
+        message: attachments::Message,
         seed: Option<String>,
         client_id: Option<String>,
         reply: oneshot::Sender<Result<()>>,
@@ -61,7 +61,7 @@ pub enum Command {
     },
     Relay {
         task_id: String,
-        text: String,
+        message: attachments::Message,
         client_id: Option<String>,
         reply: oneshot::Sender<Result<()>>,
     },
@@ -142,6 +142,8 @@ pub struct Actor {
     asks: Vec<PendingAsk>,
     /// Files allowed with `always_for_file`; their later asks are answered here.
     file_grants: Vec<FileOffer>,
+    /// Reads of files in it are answered here.
+    uploads: Option<PathBuf>,
     /// Keyed by request id.
     pending: HashMap<String, PendingRequest>,
     /// Last mode announced with `HostEvent::PermissionMode`.
@@ -177,6 +179,7 @@ impl Actor {
             plans: PlanTracker::from_env(),
             asks: Vec::new(),
             file_grants: Vec::new(),
+            uploads: config.uploads,
             pending: HashMap::new(),
             permission_mode: None,
             next_request: 0,
@@ -321,10 +324,13 @@ impl Actor {
                     .as_ref()
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                if let Some(granted) = file
-                    .as_ref()
-                    .filter(|file| self.file_grants.iter().any(|grant| grant.same(file)))
-                {
+                if let Some(granted) = file.as_ref().filter(|file| {
+                    self.file_grants.iter().any(|grant| grant.same(file))
+                        || self
+                            .uploads
+                            .as_deref()
+                            .is_some_and(|uploads| file.reads_within(uploads))
+                }) {
                     self.auto_allow(&request.request_id, ask, granted.clone(), agent_id)
                         .await;
                     return;
@@ -454,12 +460,12 @@ impl Actor {
     async fn on_command(&mut self, command: Command) {
         match command {
             Command::Send {
-                text,
+                message,
                 seed,
                 client_id,
                 reply,
             } => {
-                let _ = reply.send(self.send_user(text, seed, client_id, None).await);
+                let _ = reply.send(self.send_user(message, seed, client_id, None).await);
             }
             Command::Control { request, reply } => {
                 let request_id = self.next_request_id();
@@ -485,11 +491,11 @@ impl Actor {
             }
             Command::Relay {
                 task_id,
-                text,
+                message,
                 client_id,
                 reply,
             } => {
-                let _ = reply.send(self.relay(task_id, text, client_id).await);
+                let _ = reply.send(self.relay(task_id, message, client_id).await);
             }
             Command::Stop(reason) => self.begin_stop(reason),
         }
@@ -497,22 +503,24 @@ impl Actor {
 
     async fn send_user(
         &mut self,
-        text: String,
+        message: attachments::Message,
         seed: Option<String>,
         client_id: Option<String>,
         priority: Option<Priority>,
     ) -> Result<()> {
+        let composed = message.composed();
         // Emitted before the write, so it precedes the CLI's echo in seq order.
-        if seed.is_none() || !text.trim().is_empty() {
+        if seed.is_none() || !message.is_blank() {
             self.emit_host(HostEvent::UserSent {
-                text: text.clone(),
+                text: message.text,
+                attachments: message.attachments,
                 client_id,
                 mid_turn: self.tracker.turn(),
             });
         }
         let written = match &seed {
-            Some(seed) => seed::first_message(seed, &text),
-            None => text,
+            Some(seed) => seed::first_message(seed, &composed),
+            None => composed,
         };
         self.write_user(written, priority).await
     }
@@ -520,7 +528,7 @@ impl Actor {
     async fn relay(
         &mut self,
         task_id: String,
-        text: String,
+        message: attachments::Message,
         client_id: Option<String>,
     ) -> Result<()> {
         let agent = self
@@ -528,10 +536,12 @@ impl Actor {
             .find(&task_id)
             .ok_or_else(|| anyhow!("no agent {task_id} in this Claude process"))?;
         let (name, agent_tool_use_id) = (agent.name.clone(), agent.tool_use_id.clone());
+        let text = message.composed();
         let wrapped = agents::wrap(&name, &task_id, &text);
         // Emitted before the write, so it precedes the CLI's echo in seq order.
         let sent = self.emit(EventBody::Host(HostEvent::RelaySent {
-            text: text.clone(),
+            text: message.text,
+            attachments: message.attachments,
             client_id,
             task_id: task_id.clone(),
             agent_tool_use_id: agent_tool_use_id.clone(),
@@ -598,7 +608,7 @@ impl Actor {
         });
         self.publish_status();
         if let Some(note) = note {
-            self.send_user(note, None, None, Some(Priority::Next))
+            self.send_user(note.into(), None, None, Some(Priority::Next))
                 .await?;
         }
         Ok(())

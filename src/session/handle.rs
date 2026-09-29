@@ -14,6 +14,7 @@ use uuid::Uuid;
 use super::activity::LiveStatus;
 use super::actor::{Actor, Command, Views};
 use super::agents::{AgentState, AgentView};
+use super::attachments;
 use super::background::BackgroundView;
 use super::events::{Answer, Event, StopReason};
 use crate::claude::child::{self, Child, Effort, Launch, ModelSettings, Program};
@@ -41,6 +42,8 @@ pub struct Config {
     pub permission_mode: Option<PermissionMode>,
     /// `--model` and `--effort` for the child.
     pub settings: ModelSettings,
+    /// The session's uploads folder, whose files the child reads without asking.
+    pub uploads: Option<PathBuf>,
 }
 
 /// Handle to a session actor. The actor stops the child when every handle is dropped.
@@ -130,18 +133,18 @@ impl Session {
         self.background.clone()
     }
 
-    /// Writes `agents::wrap` of `text` to the main agent for agent `task_id`,
-    /// after a `RelaySent` event; fails for an agent the child did not start.
+    /// Writes `agents::wrap` of the composed message to the main agent for agent
+    /// `task_id`, after a `RelaySent` event; fails for an agent the child did not start.
     pub async fn relay(
         &self,
         task_id: impl Into<String>,
-        text: impl Into<String>,
+        message: impl Into<attachments::Message>,
         client_id: Option<String>,
     ) -> Result<()> {
-        let (task_id, text) = (task_id.into(), text.into());
+        let (task_id, message) = (task_id.into(), message.into());
         self.call(|reply| Command::Relay {
             task_id,
-            text,
+            message,
             client_id,
             reply,
         })
@@ -175,10 +178,14 @@ impl Session {
 
     /// Resolves once the message is written to the child. `client_id` is echoed in
     /// the `UserSent` event.
-    pub async fn send(&self, text: impl Into<String>, client_id: Option<String>) -> Result<()> {
-        let text = text.into();
+    pub async fn send(
+        &self,
+        message: impl Into<attachments::Message>,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let message = message.into();
         self.call(|reply| Command::Send {
-            text,
+            message,
             seed: None,
             client_id,
             reply,
@@ -186,17 +193,17 @@ impl Session {
         .await
     }
 
-    /// Writes `seed::first_message(seed, text)`; the `UserSent` event carries
-    /// `text` alone, and none is emitted when `text` is blank.
+    /// Writes `seed::first_message(seed, composed message)`; the `UserSent` event
+    /// carries the message alone, and none is emitted when it is blank.
     pub async fn send_seeded(
         &self,
         seed: String,
-        text: impl Into<String>,
+        message: impl Into<attachments::Message>,
         client_id: Option<String>,
     ) -> Result<()> {
-        let text = text.into();
+        let message = message.into();
         self.call(|reply| Command::Send {
-            text,
+            message,
             seed: Some(seed),
             client_id,
             reply,

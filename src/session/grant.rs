@@ -102,6 +102,16 @@ impl FileOffer {
                 .is_some_and(|(mine, theirs)| mine.same(&theirs))
     }
 
+    /// A read of a file inside `folder`, compared as Windows compares paths.
+    pub fn reads_within(&self, folder: &Path) -> bool {
+        self.kind == FileKind::Read
+            && Folder::parse(&self.path)
+                .zip(folder.to_str().and_then(Folder::parse))
+                .is_some_and(|(file, folder)| {
+                    file.below(&folder).is_some_and(|rest| !rest.is_empty())
+                })
+    }
+
     /// The session rule allowing this file: `Read(//c/a/b.md)` or `Edit(//c/a/b.md)`.
     fn rule(&self) -> Option<PermissionUpdate> {
         let file = Folder::parse(&self.path)?;
@@ -708,6 +718,25 @@ mod tests {
             path: r"C:\Users\user\.claude\plans\y.md".into(),
             ..edit.clone()
         }));
+    }
+
+    #[test]
+    fn reads_within_a_folder_only_below_it() {
+        let folder = Path::new(r"C:\Users\user\.vigie2\uploads\s1");
+        let read = |path: &str| FileOffer {
+            kind: FileKind::Read,
+            path: path.into(),
+        };
+        assert!(read(r"c:\users\USER\.vigie2\uploads\s1\a.png").reads_within(folder));
+        assert!(read(r"C:\Users\user\.vigie2\uploads\s1\sub\b.txt").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie2\uploads\s1").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie2\uploads\s2\a.png").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie2\uploads\s1\..\s2\a.png").reads_within(folder));
+        let edit = FileOffer {
+            kind: FileKind::Edit,
+            ..read(r"C:\Users\user\.vigie2\uploads\s1\a.png")
+        };
+        assert!(!edit.reads_within(folder));
     }
 
     #[test]

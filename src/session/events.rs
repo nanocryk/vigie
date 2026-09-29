@@ -46,6 +46,9 @@ pub enum HostEvent {
     /// A user message about to be written to the child; `client_id` names the command that sent it.
     UserSent {
         text: String,
+        /// Paths of the attached files; the child got them after `text`, see `attachments::compose`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
         /// Sent while a turn ran, so it starts no exchange of its own.
@@ -86,6 +89,8 @@ pub enum HostEvent {
     /// A message for a subagent, about to be written to the main agent as `wrapped`.
     RelaySent {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
         task_id: String,

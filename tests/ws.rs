@@ -382,6 +382,7 @@ fn say(session: Uuid, text: &str, rewarm: bool, client_id: &str) -> ClientMessag
         client_id,
         Action::Send {
             text: text.into(),
+            attachments: Vec::new(),
             rewarm,
         },
     )
@@ -718,6 +719,7 @@ async fn a_blank_restart_reaches_subscribers_without_a_child() {
             Action::Restart {
                 mode: RestartMode::Blank,
                 text: None,
+                attachments: Vec::new(),
             },
         ))
         .await;
@@ -908,6 +910,7 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
             Action::Restart {
                 mode: RestartMode::Blank,
                 text: None,
+                attachments: Vec::new(),
             },
         ))
         .await;
@@ -1052,6 +1055,7 @@ async fn a_restart_or_a_send_unarchives() {
             Action::Restart {
                 mode: RestartMode::Blank,
                 text: None,
+                attachments: Vec::new(),
             },
         ))
         .await;
@@ -1299,6 +1303,7 @@ async fn clear_restarts_blank_whatever_the_cache() {
             Action::Restart {
                 mode: RestartMode::Clear,
                 text: None,
+                attachments: Vec::new(),
             },
         ))
         .await;
@@ -1328,6 +1333,7 @@ async fn a_restart_starts_on_the_stored_settings_and_ends_the_settings_change() 
             Action::Restart {
                 mode: RestartMode::Blank,
                 text: Some("hello".into()),
+                attachments: Vec::new(),
             },
         ))
         .await;
@@ -1434,6 +1440,7 @@ async fn long_discussion(server: &Server) -> (Uuid, Vec<Event>) {
     for exchange in 0..6 {
         bodies.push(EventBody::Host(HostEvent::UserSent {
             text: format!("message {exchange}"),
+            attachments: Vec::new(),
             client_id: None,
             mid_turn: false,
         }));

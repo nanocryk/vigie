@@ -109,6 +109,9 @@ impl From<Subscription> for ClientMessage {
 pub enum Action {
     Send {
         text: String,
+        /// Paths of the attached files.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         /// Goes through on a cold cache.
         #[serde(default)]
         rewarm: bool,
@@ -118,6 +121,8 @@ pub enum Action {
     Relay {
         task_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         /// Goes through on a cold cache.
         #[serde(default)]
         rewarm: bool,
@@ -156,6 +161,8 @@ pub enum Action {
         mode: RestartMode,
         #[serde(default)]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
     },
     Kill {
         #[serde(default)]

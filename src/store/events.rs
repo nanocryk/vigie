@@ -482,6 +482,7 @@ mod tests {
             seq,
             HostEvent::UserSent {
                 text: text.into(),
+                attachments: Vec::new(),
                 client_id: None,
                 mid_turn: false,
             },
@@ -576,6 +577,7 @@ mod tests {
                 13,
                 HostEvent::UserSent {
                     text: "also".into(),
+                    attachments: Vec::new(),
                     client_id: None,
                     mid_turn: true,
                 },

@@ -246,7 +246,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
-    let manager = SessionManager::start(store, Program::claude()).await?;
+    let uploads = store_path.with_file_name("uploads");
+    let manager = SessionManager::start(store, Program::claude(), uploads).await?;
     let probe_dir = store_path.with_file_name("probe");
     tokio::spawn({
         let manager = manager.clone();

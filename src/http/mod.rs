@@ -8,5 +8,6 @@ pub mod git;
 pub mod net;
 pub mod push;
 pub mod server;
+pub mod upload;
 pub mod wire;
 pub mod ws;

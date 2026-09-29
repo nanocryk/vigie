@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::http::auth::{Auth, AuthedDevice};
 use crate::http::wire::{Action, ClientMessage, Command, ServerMessage, Subscription, WireEvent};
+use crate::session::attachments;
 use crate::session::manager::SessionManager;
 use crate::session::{Event, EventBody, HostEvent, Session};
 
@@ -253,7 +254,11 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
         action,
     } = command;
     match action {
-        Action::Send { text, rewarm } => {
+        Action::Send {
+            text,
+            attachments: files,
+            rewarm,
+        } => {
             manager.unarchive(session).await?;
             if !rewarm {
                 manager.ensure_warm(session).await?;
@@ -261,7 +266,7 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
             manager
                 .open(session)
                 .await?
-                .send(text, Some(client_id))
+                .send(attachments::Message::new(text, files), Some(client_id))
                 .await
         }
         Action::Interrupt => {
@@ -271,6 +276,7 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
         Action::Relay {
             task_id,
             text,
+            attachments: files,
             rewarm,
         } => {
             if !rewarm {
@@ -278,7 +284,11 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
             }
             running(manager, session)
                 .await?
-                .relay(task_id, text, Some(client_id))
+                .relay(
+                    task_id,
+                    attachments::Message::new(text, files),
+                    Some(client_id),
+                )
                 .await
         }
         Action::StopTask { task_id } => running(manager, session).await?.stop_task(task_id).await,
@@ -299,10 +309,15 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
         }
         Action::SetPermissionMode { mode } => manager.set_permission_mode(session, mode).await,
         Action::SetSettings { model, effort } => manager.set_settings(session, model, effort).await,
-        Action::Restart { mode, text } => {
+        Action::Restart {
+            mode,
+            text,
+            attachments: files,
+        } => {
             manager.unarchive(session).await?;
+            let message = attachments::Message::new(text.unwrap_or_default(), files);
             manager
-                .restart(session, mode, text.unwrap_or_default(), Some(client_id))
+                .restart(session, mode, message, Some(client_id))
                 .await
         }
         Action::Kill { reason } => manager.kill(session, reason).await,

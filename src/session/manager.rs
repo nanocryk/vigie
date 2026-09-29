@@ -20,10 +20,10 @@ use crate::session::advice::RestartMeasure;
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{self, MainRequest};
-use crate::session::seed;
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
+use crate::session::{attachments, seed};
 use crate::store::{SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread};
 use crate::usage::{SessionContext, Snapshot};
 
@@ -42,6 +42,8 @@ pub struct SessionManager {
 struct Inner {
     store: Store,
     program: Program,
+    /// Holds one uploads folder per session, named by its id.
+    uploads: PathBuf,
     /// Sessions spawned by this manager, closed ones included until reopened.
     live: Mutex<HashMap<Uuid, Session>>,
     signals: Signals,
@@ -179,11 +181,13 @@ impl Drop for Inner {
 impl SessionManager {
     /// Sessions the store still records as running are marked stopped: none has a
     /// child after a restart. Each resumes on `open`.
-    pub async fn start(store: Store, program: Program) -> Result<Self> {
+    /// `uploads` holds the files attached to messages, one folder per session.
+    pub async fn start(store: Store, program: Program, uploads: PathBuf) -> Result<Self> {
         store.stop_running().await?;
         let inner = Arc::new_cyclic(|inner| Inner {
             store,
             program,
+            uploads,
             live: Mutex::new(HashMap::new()),
             signals: Signals::new(),
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
@@ -206,6 +210,11 @@ impl SessionManager {
 
     pub fn store(&self) -> &Store {
         &self.inner.store
+    }
+
+    /// Where the files attached to session `id`'s messages are kept.
+    pub fn uploads_dir(&self, id: Uuid) -> PathBuf {
+        self.inner.uploads.join(id.to_string())
     }
 
     /// Records what client connection `viewer` shows. An active viewer on a
@@ -497,7 +506,7 @@ impl SessionManager {
         &self,
         id: Uuid,
         mode: RestartMode,
-        text: String,
+        message: attachments::Message,
         client_id: Option<String>,
     ) -> Result<()> {
         let mut live = self.inner.live.lock().await;
@@ -529,7 +538,7 @@ impl SessionManager {
                 }),
             },
         );
-        let launches = mode == RestartMode::Continue || !text.trim().is_empty();
+        let launches = mode == RestartMode::Continue || !message.is_blank();
         let session = if launches {
             let session = self.spawn(Config {
                 last_seq: seq,
@@ -545,8 +554,8 @@ impl SessionManager {
         drop(live);
         self.inner.signals.session(id);
         match (session, seed) {
-            (Some(session), Some(seed)) => session.send_seeded(seed.text, text, client_id).await,
-            (Some(session), None) => session.send(text, client_id).await,
+            (Some(session), Some(seed)) => session.send_seeded(seed.text, message, client_id).await,
+            (Some(session), None) => session.send(message, client_id).await,
             (None, _) => Ok(()),
         }
     }
@@ -591,6 +600,7 @@ impl SessionManager {
             last_seq: 0,
             permission_mode: None,
             settings: ModelSettings::default(),
+            uploads: Some(self.uploads_dir(id)),
         }
     }
 

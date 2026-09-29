@@ -50,6 +50,10 @@ struct Harness {
 
 impl Harness {
     fn start(recording: &Path) -> Self {
+        Self::start_with_uploads(recording, None)
+    }
+
+    fn start_with_uploads(recording: &Path, uploads: Option<std::path::PathBuf>) -> Self {
         let cwd = tempfile::tempdir().expect("tempdir");
         let claude_session = Uuid::new_v4();
         let config = Config {
@@ -61,6 +65,7 @@ impl Harness {
             last_seq: 0,
             permission_mode: None,
             settings: ModelSettings::default(),
+            uploads,
         };
         let (session, events) = Session::spawn(config).expect("spawn session");
         Self {
@@ -213,9 +218,11 @@ async fn basic_turns_and_usage() {
         .until(|event| match &event.body {
             EventBody::Host(HostEvent::UserSent {
                 text,
+                attachments,
                 client_id,
                 mid_turn,
             }) => {
+                assert!(attachments.is_empty());
                 assert!(sent_seq.is_none(), "user_sent emitted twice");
                 assert!(!mid_turn, "no turn ran before the first message");
                 assert_eq!(text, "Reply with exactly: ok");
@@ -817,6 +824,7 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         sent,
         HostEvent::UserSent {
             text: "(Note attached to my approval of your Bash call) Then run the tests.".into(),
+            attachments: Vec::new(),
             client_id: None,
             mid_turn: true,
         }
@@ -1099,5 +1107,53 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
         always_for_file: false,
     };
     harness.session.answer(request_id, allow).await.unwrap();
+    harness.finish().await;
+}
+
+/// A read in the session's uploads folder is allowed by the host; an edit there,
+/// and a read in another session's folder, still ask.
+const UPLOADS_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\uploads\\s1\\ab12-shot.png"}, "tool_use_id": "t1"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\uploads\\s1\\ab12-shot.png"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\uploads\\s1\\ab12-shot.png"}, "tool_use_id": "t2"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\uploads\\s1\\ab12-shot.png"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\uploads\\s2\\cd34-other.png"}, "tool_use_id": "t3"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\uploads\\s2\\cd34-other.png"}}}}}
+"#;
+
+#[cfg(windows)]
+#[tokio::test]
+async fn reads_in_the_uploads_folder_are_allowed_by_the_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("uploads.ndjson");
+    std::fs::write(&path, UPLOADS_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start_with_uploads(&path, Some(r"C:\x\uploads\s1".into()));
+    let allowed = harness
+        .until_host(|host| matches!(host, HostEvent::AutoAllowed { .. }))
+        .await;
+    assert!(matches!(allowed, HostEvent::AutoAllowed { request_id, .. } if request_id == "cli-1"));
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: false,
+    };
+    for expected in ["cli-2", "cli-3"] {
+        let HostEvent::AskQueued { request_id, .. } = harness
+            .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+            .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(request_id, expected);
+        harness
+            .session
+            .answer(request_id, allow.clone())
+            .await
+            .unwrap();
+    }
     harness.finish().await;
 }

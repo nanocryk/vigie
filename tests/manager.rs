@@ -16,6 +16,7 @@ use vigie2::claude::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
     CANNED_DEFAULT_MODEL, Direction, Recording,
 };
+use vigie2::session::attachments;
 use vigie2::session::gauges::ContextSource;
 use vigie2::session::manager::{Notice, NoticeKind, Probe, SessionManager};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
@@ -54,7 +55,7 @@ impl Env {
 
     async fn manager(&self, recording: &Path) -> SessionManager {
         let store = Store::open(&self.db).expect("open store");
-        SessionManager::start(store, fake(recording))
+        SessionManager::start(store, fake(recording), self.dir.path().join("uploads"))
             .await
             .expect("start manager")
     }
@@ -724,11 +725,12 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
                 row.created_at.with_timezone(&chrono::Local).date_naive(),
             );
     drop(store);
+    let attached = vec![r"C:\uploads\a.png".to_string()];
     let script = env.script(
         "seeded.ndjson",
         &user_script(&vigie2::session::seed::first_message(
             &expected_seed.text,
-            "next step",
+            &attachments::compose("next step", &attached),
         )),
     );
 
@@ -738,7 +740,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         .restart(
             id,
             RestartMode::Continue,
-            "next step".into(),
+            attachments::Message::new("next step".into(), attached.clone()),
             Some("c1".into()),
         )
         .await
@@ -775,6 +777,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         sent,
         [HostEvent::UserSent {
             text: "next step".into(),
+            attachments: attached,
             client_id: Some("c1".into()),
             mid_turn: false,
         }]

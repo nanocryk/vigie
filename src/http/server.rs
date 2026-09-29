@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     http::{HeaderValue, header},
     middleware::{Next, from_fn, from_fn_with_state},
     response::{IntoResponse, Redirect, Response},
@@ -16,7 +16,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::http::auth::{self, Auth};
 use crate::http::push::{self, Pusher};
-use crate::http::{api, files, git, ws};
+use crate::http::{api, files, git, upload, ws};
 use crate::session::manager::SessionManager;
 
 /// Path prefix everything is served under. Android builds a WebAPK's intent
@@ -64,7 +64,7 @@ impl AppState {
         let store = Store::open(&dir.join("history.db"))?;
         let vapid = Vapid::load_or_generate(dir)?;
         let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);
-        let manager = SessionManager::start(store, program).await?;
+        let manager = SessionManager::start(store, program, dir.join("uploads")).await?;
         Ok(Self {
             auth,
             pair_scheme: Arc::new("http".into()),
@@ -92,6 +92,10 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/sessions",
             get(api::list_sessions).post(api::create_session),
+        )
+        .route(
+            "/api/sessions/{id}/upload",
+            post(upload::upload_route).layer(DefaultBodyLimit::max(upload::MAX_UPLOAD_BYTES)),
         )
         .route("/api/usage", get(api::usage))
         .route("/api/catalog", get(api::catalog))
@@ -176,6 +180,7 @@ mod auth_gate_tests {
             (Method::DELETE, "/api/devices/anything"),
             (Method::GET, "/api/sessions"),
             (Method::POST, "/api/sessions"),
+            (Method::POST, "/api/sessions/anything/upload"),
             (Method::GET, "/api/usage"),
             (Method::GET, "/api/catalog"),
             (Method::GET, "/api/fs/list"),
