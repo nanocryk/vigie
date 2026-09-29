@@ -22,7 +22,7 @@ import {
   rowHighlight,
   rowSwipeRules,
 } from "@/home";
-import { navigate } from "@/route";
+import { navigate, routeHash } from "@/route";
 import { TAP_SLOP_PX } from "@/swipe";
 import type { SessionView } from "@/wire";
 
@@ -157,7 +157,12 @@ function RowBody({
   );
 }
 
-/** Opens the session on a click or Enter, but not on the tap that cancels an arming or ends a drag. */
+const MIDDLE_BUTTON = 1;
+
+/**
+ * Opens the session on a click or Enter, but not on the tap that cancels an arming or ends a drag.
+ * A middle click opens it in a new tab.
+ */
 function useOpenOnTap(id: string, armed: boolean, blocked: boolean) {
   const down = useRef<{ x: number; y: number; armed: boolean } | null>(null);
   const open = () => navigate({ kind: "session", id });
@@ -165,7 +170,14 @@ function useOpenOnTap(id: string, armed: boolean, blocked: boolean) {
     role: "button",
     tabIndex: 0,
     onPointerDown: (event: PointerEvent) => {
+      // Keeps the middle button from starting autoscroll.
+      if (event.button === MIDDLE_BUTTON) event.preventDefault();
       down.current = { x: event.clientX, y: event.clientY, armed };
+    },
+    onAuxClick: (event: MouseEvent) => {
+      if (event.button !== MIDDLE_BUTTON || blocked) return;
+      event.preventDefault();
+      window.open(routeHash({ kind: "session", id }), "_blank", "noopener");
     },
     onClick: (event: MouseEvent) => {
       const start = down.current;
