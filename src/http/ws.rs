@@ -323,6 +323,7 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
         Action::Kill { reason } => manager.kill(session, reason).await,
         Action::Archive => manager.archive(session).await,
         Action::Restore => manager.restore(session).await,
+        Action::Rename { name } => manager.rename(session, name).await,
     }
 }
 

@@ -28,8 +28,8 @@ use vigie2::claude::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
 use vigie2::http::auth::{self, Auth};
 use vigie2::http::server::{AppState, build_app};
 use vigie2::http::wire::{
-    Action, CACHE_COLD, ClientMessage, Command, SESSION_LIVE, ServerMessage, SessionList,
-    SessionView, Subscription, WireEvent,
+    Action, BAD_NAME, CACHE_COLD, ClientMessage, Command, MAX_NAME_CHARS, SESSION_LIVE,
+    ServerMessage, SessionList, SessionView, Subscription, WireEvent,
 };
 use vigie2::session::manager::SessionManager;
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
@@ -1031,6 +1031,40 @@ async fn archive_is_refused_while_live_and_restore_undoes_it() {
     );
     assert_eq!(server.view(id).await.archived_at, None);
     assert!(server.manager.live(id).await.is_none(), "restoring spawned");
+}
+
+fn rename(session: Uuid, name: Option<String>, client_id: &str) -> ClientMessage {
+    command(session, client_id, Action::Rename { name })
+}
+
+#[tokio::test]
+async fn a_rename_shows_in_the_list_and_a_too_long_one_is_refused() {
+    let server = Server::start(SCRIPT).await;
+    let id = server.create_session().await.id;
+    let mut client = server.client().await;
+    assert_eq!(server.view(id).await.name, None);
+    assert_eq!(
+        client
+            .command_announced(
+                &rename(id, Some("parser idea".into()), "rename-1"),
+                "rename-1"
+            )
+            .await,
+        (true, None)
+    );
+    assert_eq!(server.view(id).await.name.as_deref(), Some("parser idea"));
+
+    let too_long = "x".repeat(MAX_NAME_CHARS + 1);
+    client.send(&rename(id, Some(too_long), "rename-2")).await;
+    assert_eq!(client.ack("rename-2").await, (false, Some(BAD_NAME.into())));
+
+    assert_eq!(
+        client
+            .command_announced(&rename(id, None, "rename-3"), "rename-3")
+            .await,
+        (true, None)
+    );
+    assert_eq!(server.view(id).await.name, None);
 }
 
 #[tokio::test]

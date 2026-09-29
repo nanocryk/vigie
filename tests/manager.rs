@@ -446,6 +446,34 @@ async fn a_scratch_session_gets_a_new_folder_and_accepts_edits() {
 }
 
 #[tokio::test]
+async fn a_rename_stores_the_trimmed_name_and_a_blank_one_clears_it() {
+    let env = Env::new();
+    let script = env.script("init.ndjson", INIT_SCRIPT);
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    let store = manager.store();
+
+    manager
+        .rename(id, Some("  parser idea ".into()))
+        .await
+        .unwrap();
+    let row = store.session(id).await.unwrap().unwrap();
+    assert_eq!(row.name.as_deref(), Some("parser idea"));
+
+    let too_long = "x".repeat(vigie2::http::wire::MAX_NAME_CHARS + 1);
+    let err = manager.rename(id, Some(too_long)).await.unwrap_err();
+    assert_eq!(err.to_string(), vigie2::http::wire::BAD_NAME);
+    let row = store.session(id).await.unwrap().unwrap();
+    assert_eq!(row.name.as_deref(), Some("parser idea"));
+
+    manager.rename(id, Some("   ".into())).await.unwrap();
+    let row = store.session(id).await.unwrap().unwrap();
+    assert_eq!(row.name, None);
+    stop(&session).await;
+}
+
+#[tokio::test]
 async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
     let env = Env::new();
     let script = env.script("init.ndjson", INIT_SCRIPT);

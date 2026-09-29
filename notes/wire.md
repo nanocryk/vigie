@@ -28,7 +28,8 @@ Every other frame is a command on one session. It carries `session` and `client_
 - `kill {session, reason?, client_id}`: stops the live child the graceful way; the discussion stays listed and the next `send` resumes it. Acked without effect when not live. `reason` is `kill` (the default, from Home) or `revoke` (dropping the granted folders and files). A stop for a reason (these two, or `shutdown` when the server stops) emits `stopping {reason}` as it begins, and `child_exited` carries the reason too.
 - `archive {session, client_id}`: refused with the ack error `session_live` while the child runs. `restore {session, client_id}` unarchives.
 - A `send`, `answer` or `restart` on an archived discussion unarchives it first, then follows its usual rules, the cold check included.
-- `kill`, `archive` and `restore` announce `sessions_changed`.
+- `rename {session, name, client_id}`: stores the display name, trimmed; `null` or blank clears it. Refused with the ack error `bad_name` over 80 characters. Allowed live, stopped or archived.
+- `kill`, `archive`, `restore` and `rename` announce `sessions_changed`.
 
 ## Attachments
 
@@ -52,7 +53,7 @@ Claude attaches files to its own reply with the `set_attachments {paths}` tool o
 - `page {session, first_seq, start_reached, events}`: answers `history`; `events` holds the prelude then the events from `first_seq` to below `before_seq`, in seq order, shaped as `event` without its `type`.
 - `ack {client_id, ok, error?}`: one per command.
 - `sessions_changed`: `GET /api/sessions` has a new list. Sent when a session:
-  - is created, ended, killed, archived or restored, or restarted on a fresh Claude session;
+  - is created, ended, killed, archived, restored or renamed, or restarted on a fresh Claude session;
   - changes activity or its count of pending asks;
   - has the permission mode of its stopped state, its model or its effort changed;
   - has its main conversation make a request or finish a turn (new `cache` and `context`);
@@ -70,6 +71,7 @@ Claude attaches files to its own reply with the `set_attachments {paths}` tool o
 
 Each session of `GET /api/sessions` carries:
 
+- `name`: the display name, null when unnamed.
 - `archived_at`: null while not archived.
 - `scratch`: its folder sits directly in the scratch root.
 - `model` and `effort`: null when the CLI picks.

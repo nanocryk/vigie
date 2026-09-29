@@ -89,6 +89,8 @@ pub struct SessionRow {
     pub context: Option<gauges::Context>,
     /// How the next child picks the discussion's current Claude session.
     pub launch: Launch,
+    /// Display name; `None` shows the folder name.
+    pub name: Option<String>,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// Passed at every launch.
@@ -160,6 +162,18 @@ impl Store {
             let changed = connection.execute(
                 "UPDATE sessions SET archived_at = ?2 WHERE id = ?1",
                 params![session.to_string(), at.map(format_time)],
+            )?;
+            known_session(changed, session)
+        })
+        .await
+    }
+
+    /// Sets the display name, or clears it for `None`. Fails for an unknown session.
+    pub async fn set_name(&self, session: Uuid, name: Option<String>) -> Result<()> {
+        self.call(move |connection| {
+            let changed = connection.execute(
+                "UPDATE sessions SET name = ?2 WHERE id = ?1",
+                params![session.to_string(), name],
             )?;
             known_session(changed, session)
         })
@@ -380,7 +394,7 @@ const SESSION_SELECT: &str = "SELECT id, cwd, created_at, updated_at, last_seq, 
     context_window, context_source, context_max_tokens, context_autocompact, context_categories,
     claude_session_id, claude_session_fresh, archived_at, model, effort, settings_changed_at,
     applied_model, applied_effort, unread, main_requests, turns, restart_window_tokens,
-    restart_seed_tokens, restart_reread_tokens, restart_other_cost FROM sessions";
+    restart_seed_tokens, restart_reread_tokens, restart_other_cost, name FROM sessions";
 
 /// A row of `SESSION_SELECT`, read by column name.
 struct RawSession {
@@ -416,6 +430,7 @@ struct RawSession {
     restart_seed_tokens: Option<u64>,
     restart_reread_tokens: Option<u64>,
     restart_other_cost: Option<f64>,
+    name: Option<String>,
 }
 
 impl RawSession {
@@ -453,6 +468,7 @@ impl RawSession {
             restart_seed_tokens: row.get("restart_seed_tokens")?,
             restart_reread_tokens: row.get("restart_reread_tokens")?,
             restart_other_cost: row.get("restart_other_cost")?,
+            name: row.get("name")?,
         })
     }
 
@@ -519,6 +535,7 @@ impl RawSession {
             cache,
             context,
             launch,
+            name: self.name,
             archived_at: self.archived_at.as_deref().map(parse_time).transpose()?,
             settings: ModelSettings {
                 model: self.model,

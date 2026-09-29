@@ -12,7 +12,7 @@ import { useSwipe } from "@/components/Swipe";
 import { changeExplorer, selectLastFree } from "@/files";
 import { Header, NeedsYouColumn, PULSE, pulseStyle } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
-import { folderName, formatAgo } from "@/format";
+import { formatAgo, sessionTitle } from "@/format";
 import {
   type RowAction,
   actionSide,
@@ -147,7 +147,7 @@ function RowBody({
   return (
     <div className={session.live ? "" : "opacity-45"}>
       <div className="flex items-center gap-2">
-        <span className="voice-heading min-w-0 flex-1 truncate">{folderName(session.cwd)}</span>
+        <span className="voice-heading min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
         <span className="text-muted-foreground voice-ui shrink-0 text-xs">
           {busyLabel ?? formatAgo(session.updated_at, now)}
         </span>

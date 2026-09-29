@@ -29,7 +29,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 16] = [
+const MIGRATIONS: [&str; 17] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -141,6 +141,8 @@ CREATE TABLE plans (
     text TEXT NOT NULL
 ) STRICT;
 "#,
+    // Display name of the discussion; NULL shows its folder name.
+    "ALTER TABLE sessions ADD COLUMN name TEXT;",
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -417,6 +419,17 @@ mod tests {
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.archived_at, None);
         assert!(store.set_archived(Uuid::new_v4(), None).await.is_err());
+        assert_eq!(row.name, None);
+        store
+            .set_name(id, Some("parser idea".into()))
+            .await
+            .unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.name.as_deref(), Some("parser idea"));
+        store.set_name(id, None).await.unwrap();
+        let row = store.session(id).await.unwrap().unwrap();
+        assert_eq!(row.name, None);
+        assert!(store.set_name(Uuid::new_v4(), None).await.is_err());
     }
 
     #[tokio::test]

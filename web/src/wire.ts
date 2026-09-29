@@ -35,6 +35,8 @@ export interface SessionView {
   calls_per_message: number | null;
   /** What a restart would keep, measured after each turn; null before. */
   restart: RestartMeasure | null;
+  /** Display name; null shows the folder name. */
+  name: string | null;
   /** Null while the discussion is not archived. */
   archived_at: string | null;
   /** Its folder sits directly in the scratch root. */
@@ -249,7 +251,9 @@ export type ClientMessage =
   /** `reason` defaults to `kill`, a stop from Home. */
   | { type: "kill"; session: string; reason?: StopReason; client_id: string }
   | { type: "archive"; session: string; client_id: string }
-  | { type: "restore"; session: string; client_id: string };
+  | { type: "restore"; session: string; client_id: string }
+  /** Null or blank clears the name. */
+  | { type: "rename"; session: string; name: string | null; client_id: string };
 
 export type RestartMode = "continue" | "blank" | "clear";
 
@@ -535,6 +539,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     context: parseContext(value["context"], `${label}.context`),
     calls_per_message: optNum(value, "calls_per_message", label),
     restart: parseRestart(value["restart"], `${label}.restart`),
+    name: optStr(value, "name", label),
     archived_at: optStr(value, "archived_at", label),
     scratch: bool(value, "scratch", label),
     model: optStr(value, "model", label),

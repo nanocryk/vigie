@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { addDraft, choiceAnswer, parseQuestions } from "@/components/AskCard";
-import { folderName } from "@/format";
+import { folderName, sessionTitle } from "@/format";
 import { parseRoute, routeHash } from "@/route";
 import {
   parseCliLine,
@@ -191,6 +191,7 @@ describe("parseSessionList", () => {
             busy: false,
             asks: 0,
             scratch: true,
+            name: "parser idea",
             archived_at: "2026-09-27T13:00:00Z",
           },
         ],
@@ -200,6 +201,7 @@ describe("parseSessionList", () => {
     expect(list.map((session) => session.archived_at)).toEqual([null, "2026-09-27T13:00:00Z"]);
     expect(list[0]?.state).toEqual({ kind: "exited", code: 1 });
     expect(list.map((session) => session.scratch)).toEqual([false, true]);
+    expect(list.map((session) => session.name)).toEqual([null, "parser idea"]);
     expect(list[0]?.permission_mode).toBe("plan");
     expect(list[1]?.permission_mode).toBeNull();
     expect(list.map((session) => session.asks)).toEqual([2, 0]);
@@ -341,6 +343,13 @@ describe("folderName", () => {
   it("takes the last segment of either path style", () => {
     expect(folderName("C:\\work\\vigie2\\")).toBe("vigie2");
     expect(folderName("/home/me/proj")).toBe("proj");
+  });
+});
+
+describe("sessionTitle", () => {
+  it("prefers the name over the folder", () => {
+    expect(sessionTitle({ name: "parser idea", cwd: "/home/me/proj" })).toBe("parser idea");
+    expect(sessionTitle({ name: null, cwd: "/home/me/proj" })).toBe("proj");
   });
 });
 

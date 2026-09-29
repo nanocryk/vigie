@@ -64,7 +64,7 @@ import { useSnapshot } from "@/components/useSnapshot";
 import { DiffIcon, FolderIcon, PaperclipIcon } from "@/components/Explorer";
 import { changeExplorer, openSessionDiff, openSessionFolder } from "@/files";
 import { repoRoot } from "@/git";
-import { folderName, stateLabel } from "@/format";
+import { folderName, sessionTitle, stateLabel } from "@/format";
 import { navigate } from "@/route";
 import type { SendAction } from "@/sendGesture";
 import {
@@ -999,7 +999,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                 &lsaquo; main
               </button>
             )}
-            <span>{view === null ? "..." : folderName(view.cwd)}</span>
+            <span>{view === null ? "..." : sessionTitle(view)}</span>
             {viewing !== null && (
               <span>
                 {" "}
@@ -1099,6 +1099,21 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               entry={menu.entry}
               enabled={controlsEnabled}
               picking={choosingSettings}
+              name={
+                view === null
+                  ? null
+                  : {
+                      current: view.name,
+                      folder: folderName(view.cwd),
+                      onSave: (name) =>
+                        client.command({
+                          type: "rename",
+                          session: id,
+                          name,
+                          client_id: client.newClientId(),
+                        }),
+                    }
+              }
               mode={mode}
               modeControl={modeControl}
               model={{

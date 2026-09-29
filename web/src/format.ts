@@ -1,8 +1,13 @@
-import type { SessionState } from "@/wire";
+import type { SessionState, SessionView } from "@/wire";
 
 /** Last segment of a Windows or POSIX path. */
 export function folderName(path: string): string {
   return path.split(/[\\/]/).filter((part) => part !== "").at(-1) ?? path;
+}
+
+/** The session's name, else its folder name. */
+export function sessionTitle(session: Pick<SessionView, "name" | "cwd">): string {
+  return session.name ?? folderName(session.cwd);
 }
 
 export function formatAgo(iso: string, now: number): string {

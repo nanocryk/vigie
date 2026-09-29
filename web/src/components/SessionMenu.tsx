@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
   SIDE_BUTTON,
@@ -16,7 +16,16 @@ import {
 } from "@/components/PermissionMode";
 import { useSwipe } from "@/components/Swipe";
 
-export type MenuEntry = "mode" | "model" | "effort";
+export type MenuEntry = "name" | "mode" | "model" | "effort";
+
+/** The session's display name; saving `null` clears it back to `folder`. */
+export interface NameControl {
+  current: string | null;
+  folder: string;
+  onSave: (name: string | null) => Promise<void>;
+}
+
+const MAX_NAME_CHARS = 80;
 
 export type MenuState = { kind: "closed" } | { kind: "open"; entry: MenuEntry | null };
 
@@ -114,6 +123,90 @@ function SettingEntry({
         </div>
       )}
     </Entry>
+  );
+}
+
+/** Tap edits the name in place; saving it blank brings the folder name back. */
+function NameEntry({
+  control,
+  expanded,
+  onToggle,
+  onDone,
+}: {
+  control: NameControl;
+  expanded: boolean;
+  onToggle: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <Entry>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className={`${ENTRY} hover:bg-muted`}
+      >
+        <span className={NAME}>Name</span>
+        <span className={`truncate ${control.current === null ? "text-muted-foreground" : ""}`}>
+          {control.current ?? control.folder}
+        </span>
+      </button>
+      {expanded && <NameForm control={control} onDone={onDone} />}
+    </Entry>
+  );
+}
+
+function NameForm({ control, onDone }: { control: NameControl; onDone: () => void }) {
+  const [text, setText] = useState(control.current ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = text.trim();
+    if (trimmed === (control.current ?? "")) {
+      onDone();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    control
+      .onSave(trimmed === "" ? null : trimmed)
+      .then(onDone)
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setBusy(false);
+      });
+  };
+  return (
+    <form onSubmit={submit} className="space-y-2 px-4 pb-3">
+      <div className="flex gap-2">
+        <input
+          autoFocus
+          value={text}
+          maxLength={MAX_NAME_CHARS}
+          placeholder={control.folder}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            onDone();
+          }}
+          aria-label="Session name"
+          className="voice-ui bg-background min-w-0 flex-1 rounded-[5px] border px-2 py-1 text-base"
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className={`${CHIP} bg-primary text-primary-foreground border-primary`}
+        >
+          Save
+        </button>
+        <button type="button" onClick={onDone} className={`${CHIP} bg-card hover:bg-muted`}>
+          Cancel
+        </button>
+      </div>
+      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+    </form>
   );
 }
 
@@ -239,6 +332,7 @@ export function SessionMenu({
   entry,
   enabled,
   picking,
+  name,
   mode,
   modeControl,
   model,
@@ -256,6 +350,8 @@ export function SessionMenu({
   /** False until the session is known, and on an archived one. */
   enabled: boolean;
   picking: boolean;
+  /** Null until the session is known; works on an archived one. */
+  name: NameControl | null;
   mode: string | null;
   modeControl: PermissionModeControl;
   model: SettingControl;
@@ -303,6 +399,14 @@ export function SessionMenu({
           className="bg-background pointer-events-auto max-h-[70dvh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-[5px] border shadow-lg"
         >
           <ul>
+            {name !== null && (
+              <NameEntry
+                control={name}
+                expanded={entry === "name"}
+                onToggle={() => toggle("name")}
+                onDone={() => onEntry(null)}
+              />
+            )}
             <Entry>
               <div className={ENTRY}>
                 <span className={NAME}>Mode</span>

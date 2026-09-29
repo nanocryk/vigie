@@ -23,6 +23,9 @@ use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
 pub const CACHE_COLD: &str = "cache_cold";
 /// Ack error of an `archive` refused while the child runs.
 pub const SESSION_LIVE: &str = "session_live";
+/// Ack error of a `rename` over `MAX_NAME_CHARS`.
+pub const BAD_NAME: &str = "bad_name";
+pub const MAX_NAME_CHARS: usize = 80;
 
 /// A client frame. Both kinds are tagged by `type`; a `type` naming a
 /// subscription reads as one, any other as a command.
@@ -170,6 +173,11 @@ pub enum Action {
     },
     Archive,
     Restore,
+    /// `None` or blank clears the name.
+    Rename {
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 /// Tells a field sent as `null` from an absent one, which `default` leaves `None`.
@@ -290,6 +298,8 @@ pub struct SessionView {
     pub calls_per_message: Option<f64>,
     /// What a restart would keep, measured after each turn; `None` before.
     pub restart: Option<RestartMeasure>,
+    /// Display name; `None` shows the folder name.
+    pub name: Option<String>,
     /// `None` while the discussion is not archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// Its folder sits directly in the scratch root.
@@ -334,6 +344,7 @@ impl SessionView {
             context: row.context,
             calls_per_message: row.calls_per_message,
             restart: row.restart,
+            name: row.name,
             archived_at: row.archived_at,
             scratch,
             model: row.settings.model,

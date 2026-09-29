@@ -509,6 +509,23 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Stores the display name, trimmed; blank clears it. Fails with
+    /// `wire::BAD_NAME` over `wire::MAX_NAME_CHARS`.
+    pub async fn rename(&self, id: Uuid, name: Option<String>) -> Result<()> {
+        let name = name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+        if name
+            .as_ref()
+            .is_some_and(|name| name.chars().count() > wire::MAX_NAME_CHARS)
+        {
+            bail!(wire::BAD_NAME);
+        }
+        self.inner.store.set_name(id, name).await?;
+        self.inner.signals.session(id);
+        Ok(())
+    }
+
     /// Restores the discussion when archived; fails for an unknown one.
     pub async fn unarchive(&self, id: Uuid) -> Result<()> {
         let row = self.inner.store.require_session(id).await?;

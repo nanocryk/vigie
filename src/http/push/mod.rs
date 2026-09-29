@@ -295,21 +295,23 @@ pub fn spawn_dispatcher(manager: &SessionManager, pusher: Arc<Pusher>) {
                     continue;
                 }
             };
-            let cwd = match store.session(notice.session).await {
-                Ok(Some(row)) => row.cwd,
+            let row = match store.session(notice.session).await {
+                Ok(Some(row)) => row,
                 Ok(None) => continue,
                 Err(err) => {
                     warn!("read session {}: {err:#}", notice.session);
                     continue;
                 }
             };
-            pusher.broadcast(&notice_message(notice, &cwd)).await;
+            pusher
+                .broadcast(&notice_message(notice, row.name.as_deref(), &row.cwd))
+                .await;
         }
     });
 }
 
-/// Titled by the discussion's folder; one notification per discussion.
-fn notice_message(notice: Notice, cwd: &Path) -> Message {
+/// Titled by the discussion's name, else its folder; one notification per discussion.
+fn notice_message(notice: Notice, name: Option<&str>, cwd: &Path) -> Message {
     let body = match notice.kind {
         NoticeKind::Ask => "Waiting for your approval".to_string(),
         NoticeKind::Finished => "Turn finished".to_string(),
@@ -319,10 +321,12 @@ fn notice_message(notice: Notice, cwd: &Path) -> Message {
             CACHE_WARNING_BEFORE.num_minutes()
         ),
     };
-    let title = cwd.file_name().map_or_else(
-        || cwd.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
+    let title = name.map(str::to_string).unwrap_or_else(|| {
+        cwd.file_name().map_or_else(
+            || cwd.display().to_string(),
+            |folder| folder.to_string_lossy().into_owned(),
+        )
+    });
     Message {
         title,
         body,
@@ -354,12 +358,23 @@ mod tests {
                 session,
                 kind: NoticeKind::Finished,
             },
+            None,
             Path::new("/work/vigie2"),
         );
         assert_eq!(message.title, "vigie2");
         assert_eq!(message.body, "Turn finished");
         assert_eq!(message.tag, session.to_string());
         assert_eq!(message.url, format!("#/s/{session}"));
+    }
+
+    #[test]
+    fn a_named_discussion_titles_its_notices_by_name() {
+        let notice = Notice {
+            session: uuid::Uuid::new_v4(),
+            kind: NoticeKind::Ask,
+        };
+        let message = notice_message(notice, Some("parser idea"), Path::new("/work/vigie2"));
+        assert_eq!(message.title, "parser idea");
     }
 
     #[test]
