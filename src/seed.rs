@@ -23,7 +23,8 @@ const USER_LIMIT: usize = 1200;
 const TEXT_LIMIT: usize = 800;
 const TOOL_LIMIT: usize = 100;
 /// Ends a seed sent without a typed message.
-pub const CLOSING: &str = "Say what you want to do next.";
+pub const CLOSING: &str =
+    "The user has not typed a request yet: summarize where things stand and ask what to do next.";
 const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
 /// Input keys tried in order for the argument shown on a tool line.
 const ARG_KEYS: [&str; 11] = [
@@ -166,11 +167,12 @@ impl History {
         let total = self.exchanges.len();
         let shown = &self.exchanges[total.saturating_sub(SEED_EXCHANGES)..];
         let mut text = format!(
-            "Continuing an earlier vigie2 session in {}, started {}. Its last {} of {} exchanges, oldest first:",
+            "This is a new session. The previous vigie2 session in {} (started {}, {} exchanges) \
+             was restarted into this one. Its last {} exchanges, oldest first:",
             cwd.display(),
             started.format("%Y-%m-%d"),
-            shown.len(),
-            total
+            total,
+            shown.len()
         );
         for (index, exchange) in shown.iter().enumerate() {
             text.push_str(&format!(
@@ -308,8 +310,9 @@ mod tests {
         assert_eq!(seed.total_exchanges, 1);
         assert_eq!(
             seed.text,
-            "Continuing an earlier vigie2 session in /work/p, started 2026-09-27. \
-             Its last 1 of 1 exchanges, oldest first:\n\n\
+            "This is a new session. The previous vigie2 session in /work/p \
+             (started 2026-09-27, 1 exchanges) was restarted into this one. \
+             Its last 1 exchanges, oldest first:\n\n\
              ## Exchange 1\n\
              User: Use the Bash tool to run exactly: pwd. Reply with its output.\n\n\
              Claude:\n  • Bash(command=pwd) → /tmp/vigie2-spike/cwd\n\
@@ -430,7 +433,7 @@ mod tests {
 
     #[test]
     fn an_earlier_seed_is_stripped_from_its_message() {
-        let earlier = "Continuing an earlier vigie2 session in /p.".to_string();
+        let earlier = "This is a new session. The previous vigie2 session in /p.".to_string();
         let events = [
             user(1, Value::String("first".into())),
             assistant(2, serde_json::json!([{"type": "text", "text": "one"}])),
@@ -465,17 +468,17 @@ mod tests {
         assert!(seed.text.ends_with(&format!(
             "## Exchange 3\nUser: {CLOSING}\n\nClaude:\n(no text or tool output)"
         )));
-        assert_eq!(seed.text.matches("Continuing").count(), 1);
+        assert_eq!(seed.text.matches("This is a new session.").count(), 1);
     }
 
     #[test]
     fn an_empty_history_seeds_no_exchange() {
         let seed = History::from_events(&[]).seed(Path::new("/p"), date());
         assert_eq!((seed.exchanges, seed.total_exchanges), (0, 0));
-        assert!(
-            seed.text
-                .ends_with("Its last 0 of 0 exchanges, oldest first:")
-        );
+        assert!(seed.text.ends_with(
+            "(started 2026-09-27, 0 exchanges) was restarted into this one. \
+                            Its last 0 exchanges, oldest first:"
+        ));
         assert_eq!(first_message("S", "  "), format!("S\n\n{CLOSING}"));
         assert_eq!(first_message("S", "go on"), "S\n\ngo on");
     }

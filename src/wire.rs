@@ -65,7 +65,7 @@
 //!   session then records a `restarted {mode, exchanges, total_exchanges, seed?}`
 //!   host event and forgets its `cache` and `context`. `mode` `continue` launches
 //!   the new session with one message: `seed`, a blank line, then `text`, or
-//!   "Say what you want to do next." when `text` is blank; `seed` renders the
+//!   `CLOSING` (asks for a summary and what to do next) when `text` is blank; `seed` renders the
 //!   last `exchanges` of the discussion's `total_exchanges`. `blank` launches it
 //!   with `text` when not blank, else only at the next `send`; `clear` does the
 //!   same and is recorded as the Clear command. The `user_sent` event carries

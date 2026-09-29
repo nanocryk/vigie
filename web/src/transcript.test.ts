@@ -476,7 +476,7 @@ describe("synthetic user lines", () => {
 });
 
 describe("restarts", () => {
-  const SEED = "Continuing an earlier vigie2 session in /p.\n\n## Exchange 1\nUser: hi";
+  const SEED = "This is a new session. The previous vigie2 session in /p.\n\n## Exchange 1\nUser: hi";
   const event = (seq: number, kind: "host" | "line", payload: unknown): WireEvent =>
     kind === "host"
       ? { session: SESSION, seq, time: "t", kind, payload: parseHostEvent(payload) }
@@ -518,7 +518,7 @@ describe("restarts", () => {
   it("a continue without a typed message shows no bubble for its closing line", () => {
     const state = applyEvents(emptyTranscript, [
       restarted(1, SEED),
-      echo(2, `${SEED}\n\nSay what you want to do next.`),
+      echo(2, `${SEED}\n\nThe user has not typed a request yet: summarize where things stand and ask what to do next.`),
       echo(3, "later"),
     ]);
     expect(state.items.map(shape)).toEqual([
@@ -690,7 +690,7 @@ describe("streaming", () => {
 });
 
 describe("paged history", () => {
-  const SEED = "Continuing an earlier vigie2 session in /p.";
+  const SEED = "This is a new session. The previous vigie2 session in /p.";
   const host = (payload: unknown): WireEvent => ({
     session: SESSION,
     seq: 0,
