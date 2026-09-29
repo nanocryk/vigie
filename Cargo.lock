@@ -2342,6 +2342,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "vigie2",
 ]
 
 [[package]]
