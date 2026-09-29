@@ -43,6 +43,7 @@ import {
   upSteps,
   useExplorer,
 } from "@/files";
+import { uploadsSession } from "@/attachments";
 import { folderName, formatAgo } from "@/format";
 import {
   type FolderMarks,
@@ -1170,6 +1171,11 @@ export function Explorer({ client }: { client: Client }) {
 
   const folder = tab.folder;
   const owner = tab.owner.kind === "session" ? tab.owner : null;
+  // A message's attachment, opened from its bubble, leads back to the discussion too.
+  const uploadsOf = owner === null ? uploadsSession(tab.file ?? folder ?? "") : null;
+  const discussion =
+    owner?.session ??
+    (snapshot.sessions?.some((session) => session.id === uploadsOf) === true ? uploadsOf : null);
 
   return (
     <>
@@ -1199,17 +1205,19 @@ export function Explorer({ client }: { client: Client }) {
                 <span className="text-xs max-sm:hidden">Hidden</span>
               </button>
             )}
+            {discussion !== null && (
+              <button
+                type="button"
+                onClick={() => navigate({ kind: "session", id: discussion })}
+                title="Open the session's discussion"
+                className={TOOL}
+              >
+                <ChatIcon className="text-mode-plan size-4" />
+                <span className="text-xs max-sm:hidden">Discussion</span>
+              </button>
+            )}
             {owner !== null && (
               <>
-                <button
-                  type="button"
-                  onClick={() => navigate({ kind: "session", id: owner.session })}
-                  title="Open the session's discussion"
-                  className={TOOL}
-                >
-                  <ChatIcon className="text-mode-plan size-4" />
-                  <span className="text-xs max-sm:hidden">Discussion</span>
-                </button>
                 <button
                   type="button"
                   onClick={() => go(owner.root)}

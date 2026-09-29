@@ -13,30 +13,29 @@ export interface ComposerFile {
   error: string | null;
 }
 
-const CHIP = "bg-card relative flex h-12 shrink-0 items-center overflow-hidden rounded-[5px] border";
-
-/** An image's thumbnail, else a file icon and the start of its name. */
-function ChipFace({ name, path }: { name: string; path: string | null }) {
+/** Square for an image, as wide as the name for another file. */
+function ChipFace({ name, path, size }: { name: string; path: string | null; size: string }) {
   const [broken, setBroken] = useState(false);
   if (path !== null && isImagePath(path) && !broken) {
     return (
       <img
         src={rawUrl(path)}
         alt={name}
+        draggable={false}
         onError={() => setBroken(true)}
-        className="size-12 object-cover"
+        className={`${size} object-cover`}
       />
     );
   }
   return (
-    <span className="voice-ui flex items-center gap-1 px-2 text-xs">
+    <span className="voice-ui flex h-full max-w-36 items-center gap-1.5 px-2.5 text-xs">
       <FileIcon className="text-muted-foreground size-4" />
-      <span className="max-w-24 truncate">{name}</span>
+      <span className="truncate">{name}</span>
     </span>
   );
 }
 
-/** A sent file; a tap opens it. */
+/** A sent file, hanging over its bubble's edge; a tap opens it. */
 export function AttachmentChip({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
   const name = attachmentName(path);
   return (
@@ -44,14 +43,14 @@ export function AttachmentChip({ path, onOpen }: { path: string; onOpen: (path: 
       type="button"
       title={name}
       onClick={() => onOpen(path)}
-      className={`${CHIP} hover:border-ring cursor-pointer`}
+      className="bg-card ring-background hover:ring-ring flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md shadow-md ring-2 transition-shadow"
     >
-      <ChipFace name={name} path={path} />
+      <ChipFace name={name} path={path} size="size-11" />
     </button>
   );
 }
 
-/** The composer's files, each removable; a failed one says why on hover. */
+/** The composer's files, in a row above the text, inside the input's frame. */
 export function ComposerFiles({
   files,
   onRemove,
@@ -61,19 +60,23 @@ export function ComposerFiles({
 }) {
   if (files.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2 pt-2 pr-2">
+    <div className="flex flex-wrap gap-2 px-3 pt-2 pb-2">
       {files.map((file) => (
         <div
           key={file.key}
           title={file.error ?? file.name}
-          className={`${CHIP} overflow-visible ${file.status === "failed" ? "border-destructive" : ""}`}
+          className={`bg-background relative flex h-14 min-w-14 items-center justify-center overflow-hidden rounded-md border ${
+            file.status === "failed" ? "border-destructive" : ""
+          } ${file.status === "uploading" ? "animate-pulse" : ""}`}
         >
-          <div className={`overflow-hidden rounded-[5px] ${file.status === "uploading" ? "opacity-50" : ""}`}>
-            <ChipFace name={file.name} path={file.status === "ready" ? file.path : null} />
-          </div>
-          {file.status === "uploading" && (
-            <span className="voice-ui text-muted-foreground absolute inset-x-0 bottom-0 text-center text-[10px]">
-              uploading
+          <ChipFace
+            name={file.name}
+            path={file.status === "ready" ? file.path : null}
+            size="size-14"
+          />
+          {file.status === "failed" && (
+            <span className="bg-destructive voice-ui absolute bottom-0.5 left-0.5 flex size-4 items-center justify-center rounded-full text-[10px] font-bold text-black">
+              !
             </span>
           )}
           <button
@@ -81,7 +84,7 @@ export function ComposerFiles({
             aria-label={`Remove ${file.name}`}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onRemove(file.key)}
-            className="bg-background hover:bg-muted absolute -top-2 -right-2 flex size-5 cursor-pointer items-center justify-center rounded-full border"
+            className="absolute top-0.5 right-0.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-black/65 text-white hover:bg-black/85"
           >
             <CloseIcon className="size-3" />
           </button>

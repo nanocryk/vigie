@@ -15,6 +15,7 @@ import { Markdown } from "@/components/Markdown";
 import { useClock, useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
+import { AttachmentChip } from "@/components/Attachments";
 import { changeExplorer, openFileInLastFree } from "@/files";
 import { formatSpan } from "@/gauges";
 import { navigate } from "@/route";
@@ -128,10 +129,18 @@ function Dots() {
   );
 }
 
-function UserBubble({ children, dim }: { children: ReactNode; dim?: boolean }) {
+function UserBubble({
+  children,
+  dim,
+  attachments,
+}: {
+  children: ReactNode;
+  dim?: boolean;
+  attachments?: readonly string[];
+}) {
   return (
     <div
-      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""}`}
+      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)}`}
     >
       {children}
     </div>
@@ -361,6 +370,8 @@ function BubbleBody({
   time,
   now,
   tools = "shown",
+  attachments = [],
+  side,
 }: {
   text: string;
   streaming?: boolean;
@@ -368,6 +379,9 @@ function BubbleBody({
   now: number;
   /** The raw toggle and copy button. */
   tools?: "shown" | "hidden";
+  attachments?: readonly string[];
+  /** The edge the attachments line up on. */
+  side: "user" | "claude";
 }) {
   const [raw, setRaw] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
@@ -414,8 +428,38 @@ function BubbleBody({
         )}
         {time !== null && <span className="ml-auto">{formatStamp(time, now)}</span>}
       </div>
+      <BubbleFiles paths={attachments} side={side} />
     </>
   );
+}
+
+function openAttachment(path: string): void {
+  changeExplorer((state) => openFileInLastFree(state, path));
+  navigate({ kind: "files" });
+}
+
+/**
+ * A bubble's files, as a row of chips hanging over its bottom edge. The bubble
+ * leaves `BUBBLE_FILES_ROOM` below it for the overhang.
+ */
+function BubbleFiles({ paths, side }: { paths: readonly string[]; side: "user" | "claude" }) {
+  if (paths.length === 0) return null;
+  return (
+    <div
+      className={`mt-1.5 -mb-[1.875rem] flex flex-wrap gap-2 ${side === "user" ? "justify-end" : "justify-start"}`}
+    >
+      {paths.map((path, index) => (
+        <AttachmentChip key={`${index}:${path}`} path={path} onOpen={openAttachment} />
+      ))}
+    </div>
+  );
+}
+
+/** Room below a bubble for the half of its file chips hanging out, and a gap. */
+const BUBBLE_FILES_ROOM = "mb-8";
+
+function filesRoom(paths: readonly string[] | undefined): string {
+  return paths !== undefined && paths.length > 0 ? BUBBLE_FILES_ROOM : "";
 }
 
 const COPY_FEEDBACK_MS = 1500;
@@ -451,8 +495,15 @@ const ItemView = memo(function ItemView({
       // The room above opens each exchange; the first one sits at the top.
       return (
         <div className="space-y-1 pt-8 first:pt-0">
-          <UserBubble>
-            <BubbleBody text={item.text} time={item.time} now={now} tools="hidden" />
+          <UserBubble attachments={item.attachments}>
+            <BubbleBody
+              text={item.text}
+              time={item.time}
+              now={now}
+              tools="hidden"
+              attachments={item.attachments}
+              side="user"
+            />
           </UserBubble>
           {item.relayed === true && (
             <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
@@ -472,9 +523,16 @@ const ItemView = memo(function ItemView({
     case "claude":
       return (
         <div
-          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none`}
+          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none ${filesRoom(item.attachments)}`}
         >
-          <BubbleBody text={item.text} streaming={item.streaming} time={item.time} now={now} />
+          <BubbleBody
+            text={item.text}
+            streaming={item.streaming}
+            time={item.time}
+            now={now}
+            attachments={item.attachments}
+            side="claude"
+          />
         </div>
       );
     case "thinking":
@@ -593,8 +651,9 @@ function PendingView({
   if (stops !== null && pending.status !== "failed") return <WakeRow stops={stops} pending />;
   return (
     <div className="space-y-1 pt-8 first:pt-0">
-      <UserBubble dim>
+      <UserBubble dim attachments={pending.attachments}>
         <Markdown text={pending.text} />
+        <BubbleFiles paths={pending.attachments} side="user" />
       </UserBubble>
       <div className="voice-ui flex justify-end gap-3 text-xs">
         {pending.status === "failed" ? (

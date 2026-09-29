@@ -21,7 +21,14 @@ export function attachmentsField(attachments: readonly string[]): { attachments?
   return attachments.length === 0 ? {} : { attachments: [...attachments] };
 }
 
-const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i;
+const UPLOADS = /[\\/]\.vigie2[\\/]uploads[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\/]|$)/i;
+
+/** The session whose uploads folder holds `path`, or is `path`. */
+export function uploadsSession(path: string): string | null {
+  return UPLOADS.exec(path)?.[1]?.toLowerCase() ?? null;
+}
+
+const IMAGE =/\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i;
 
 export function isImagePath(path: string): boolean {
   return IMAGE.test(path);

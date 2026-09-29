@@ -275,6 +275,8 @@ function Composer({
   };
 
   const coarse = coarsePointer();
+  // Under the files, the text starts closer to them.
+  const padding = files.length === 0 ? "py-4" : "pt-2 pb-4";
   const onAction = (action: SendAction) => {
     switch (action) {
       case "send":
@@ -315,30 +317,30 @@ function Composer({
       >
         <PaperclipIcon />
       </button>
-      <div className="flex min-w-0 flex-1 flex-col">
-      <ComposerFiles files={files} onRemove={remove} />
-      <div className="relative flex min-w-0 flex-1">
-        <textarea
-          ref={measure}
-          rows={1}
-          value={text}
-          readOnly
-          tabIndex={-1}
-          aria-hidden
-          className={`${COMPOSER_INPUT} pointer-events-none invisible absolute inset-x-0 bottom-0`}
-        />
-        <textarea
-          ref={area}
-          rows={1}
-          value={text}
-          onChange={(event) => change(event.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          enterKeyHint={coarse ? "enter" : "send"}
-          placeholder={placeholder}
-          className={`${COMPOSER_INPUT} focus:ring-ring max-h-[35dvh] flex-1 outline-none focus:ring-2`}
-        />
-      </div>
+      <div className="bg-card focus-within:ring-ring flex min-w-0 flex-1 flex-col rounded-[5px] border focus-within:ring-2">
+        <ComposerFiles files={files} onRemove={remove} />
+        <div className="relative flex min-w-0 flex-1">
+          <textarea
+            ref={measure}
+            rows={1}
+            value={text}
+            readOnly
+            tabIndex={-1}
+            aria-hidden
+            className={`${COMPOSER_INPUT} ${padding} pointer-events-none invisible absolute inset-x-0 bottom-0`}
+          />
+          <textarea
+            ref={area}
+            rows={1}
+            value={text}
+            onChange={(event) => change(event.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            enterKeyHint={coarse ? "enter" : "send"}
+            placeholder={placeholder}
+            className={`${COMPOSER_INPUT} ${padding} max-h-[35dvh] flex-1 outline-none`}
+          />
+        </div>
       </div>
       {coarse ? (
         <TouchSend
@@ -362,9 +364,12 @@ function Composer({
   );
 }
 
-/** Shared by the composer input and its measuring copy, so both wrap alike. */
+/**
+ * Shared by the composer input and its measuring copy, so both wrap alike. The
+ * frame around them draws the border, so a one-line input with it matches the buttons' height.
+ */
 const COMPOSER_INPUT =
-  "bg-card voice-prose min-h-14 min-w-0 resize-none rounded-[5px] border px-3 py-4 text-sm";
+  "voice-prose min-h-[3.375rem] min-w-0 resize-none bg-transparent px-3 text-sm";
 
 /** How long stops of background tasks gather before one message wakes Claude. */
 const WAKE_DELAY_MS = 5000;
