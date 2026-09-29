@@ -1,4 +1,5 @@
-//! REST routes over the sessions, the account usage and the shared catalog.
+//! REST routes over the sessions, the account usage and the shared catalog, and
+//! the error every REST route answers with.
 
 use axum::{
     Json,
@@ -7,6 +8,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
+use std::borrow::Cow;
+use std::fmt::Display;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,19 +19,51 @@ use crate::AppState;
 use crate::manager::SessionManager;
 use crate::wire::{CreateSession, SessionList, SessionView};
 
-pub async fn list_sessions(State(state): State<AppState>) -> Response {
-    match session_views(&state.manager).await {
-        Ok(sessions) => Json(SessionList { sessions }).into_response(),
-        Err(err) => internal_error("list sessions", &err),
+/// A failed request, answered `{"error": code}` with its status.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: StatusCode,
+    pub code: Cow<'static, str>,
+}
+
+impl ApiError {
+    pub fn new(status: StatusCode, code: &'static str) -> Self {
+        Self {
+            status,
+            code: Cow::Borrowed(code),
+        }
     }
+
+    /// A 500 carrying the error text, logged with what was being done.
+    pub fn internal(what: &str, err: impl Display) -> Self {
+        let message = format!("{err:#}");
+        warn!("{what}: {message}");
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: Cow::Owned(message),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.code }))).into_response()
+    }
+}
+
+pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<SessionList>, ApiError> {
+    let sessions = session_views(&state.manager)
+        .await
+        .map_err(|err| ApiError::internal("list sessions", err))?;
+    Ok(Json(SessionList { sessions }))
 }
 
 pub async fn create_session(
     State(state): State<AppState>,
     Json(request): Json<CreateSession>,
-) -> Response {
+) -> Result<Response, ApiError> {
     if !request.cwd.is_absolute() || !request.cwd.is_dir() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "bad_cwd"}))).into_response();
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_cwd"));
     }
     let created = async {
         let id = state.manager.create(request.cwd).await?.id();
@@ -38,24 +73,28 @@ pub async fn create_session(
             .find(|view| view.id == id)
             .ok_or_else(|| anyhow::anyhow!("session {id} missing from the store"))
     };
-    match created.await {
-        Ok(view) => (StatusCode::CREATED, Json(view)).into_response(),
-        Err(err) => internal_error("create session", &err),
-    }
+    let view = created
+        .await
+        .map_err(|err| ApiError::internal("create session", err))?;
+    Ok((StatusCode::CREATED, Json(view)).into_response())
 }
 
-pub async fn usage(State(state): State<AppState>) -> Response {
-    match state.manager.usage().await {
-        Ok(snapshot) => Json(snapshot).into_response(),
-        Err(err) => internal_error("usage snapshot", &err),
-    }
+pub async fn usage(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let snapshot = state
+        .manager
+        .usage()
+        .await
+        .map_err(|err| ApiError::internal("usage snapshot", err))?;
+    Ok(Json(snapshot).into_response())
 }
 
-pub async fn catalog(State(state): State<AppState>) -> Response {
-    match state.manager.catalog().await {
-        Ok(catalog) => Json(catalog).into_response(),
-        Err(err) => internal_error("shared catalog", &err),
-    }
+pub async fn catalog(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let catalog = state
+        .manager
+        .catalog()
+        .await
+        .map_err(|err| ApiError::internal("shared catalog", err))?;
+    Ok(Json(catalog).into_response())
 }
 
 /// Differs from process to process, so a server restart counts as a new build.
@@ -92,13 +131,4 @@ async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionVi
             SessionView::new(row, status, row_agents, row_background)
         })
         .collect())
-}
-
-fn internal_error(what: &str, err: &anyhow::Error) -> Response {
-    warn!("{what}: {err:#}");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": format!("{err:#}")})),
-    )
-        .into_response()
 }

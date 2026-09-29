@@ -7,7 +7,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
-    Json,
+    Extension, Json,
     extract::{ConnectInfo, Path as AxumPath, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::Next,
@@ -25,6 +25,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
+use crate::api::ApiError;
 use crate::{BASE_PATH, BASE_PATH_SLASH};
 
 pub const COOKIE_NAME: &str = "vigie2_session";
@@ -543,11 +544,6 @@ struct ExchangeOk<'a> {
 }
 
 #[derive(Serialize)]
-struct ErrorBody<'a> {
-    error: &'a str,
-}
-
-#[derive(Serialize)]
 pub struct WhoamiResp {
     pub authed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -565,14 +561,8 @@ pub async fn exchange(
 
     if let RateCheck::Locked { retry_after_secs } = auth.rate_limiter.check(ip) {
         return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(
-                axum::http::header::RETRY_AFTER,
-                retry_after_secs.to_string(),
-            )],
-            Json(ErrorBody {
-                error: "rate_limited",
-            }),
+            [(header::RETRY_AFTER, retry_after_secs.to_string())],
+            ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
         )
             .into_response();
     }
@@ -585,22 +575,12 @@ pub async fn exchange(
         ("pair", true)
     } else {
         auth.rate_limiter.record_failure(ip);
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody { error: "bad_token" }),
-        )
-            .into_response();
+        return ApiError::new(StatusCode::UNAUTHORIZED, "bad_token").into_response();
     };
 
     if via_startup && !auth.spend_startup_token() {
         warn!(%ip, "startup token reuse rejected");
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody {
-                error: "token_spent",
-            }),
-        )
-            .into_response();
+        return ApiError::new(StatusCode::UNAUTHORIZED, "token_spent").into_response();
     }
 
     let id = mint_device_id();
@@ -611,13 +591,7 @@ pub async fn exchange(
     };
     if let Err(err) = auth.registry.insert(device) {
         warn!(%err, "registry insert failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: "registry_write",
-            }),
-        )
-            .into_response();
+        return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "registry_write").into_response();
     }
     auth.notify_changed();
 
@@ -658,16 +632,15 @@ pub struct DevicesResp {
 
 pub async fn devices_list(
     State(state): State<crate::AppState>,
-    jar: CookieJar,
+    Extension(you): Extension<AuthedDevice>,
 ) -> Json<DevicesResp> {
-    let you = jar.get(COOKIE_NAME).map(|c| c.value().to_string());
     let devices = state
         .auth
         .registry
         .list()
         .into_iter()
         .map(|d| DeviceView {
-            is_you: you.as_deref() == Some(d.id.as_str()),
+            is_you: d.id == you.id,
             is_connected: state.auth.is_connected(&d.id),
             last_ip: d.last_ip.clone(),
             id: d.id,
@@ -689,67 +662,50 @@ pub async fn devices_rename(
     State(state): State<crate::AppState>,
     AxumPath(id): AxumPath<String>,
     Json(req): Json<RenameReq>,
-) -> Response {
+) -> Result<StatusCode, ApiError> {
     let label = req.label.trim();
     if label.is_empty() || label.len() > MAX_LABEL_LEN {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody { error: "bad_label" }),
-        )
-            .into_response();
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_label"));
     }
     match state.auth.registry.rename(&id, label) {
         Ok(true) => {
             state.auth.notify_changed();
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(err) => {
-            warn!(%err, "rename failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Ok(false) => Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
+        Err(err) => Err(ApiError::internal("rename failed", err)),
     }
 }
 
 pub async fn devices_delete(
     State(state): State<crate::AppState>,
     AxumPath(id): AxumPath<String>,
-) -> Response {
+) -> Result<StatusCode, ApiError> {
     match state.auth.registry.remove(&id) {
         Ok(RemoveResult::Removed) => {
             state.auth.notify_changed();
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(RemoveResult::NotFound) => StatusCode::NOT_FOUND.into_response(),
-        Ok(RemoveResult::NotRevoked) => (
-            StatusCode::CONFLICT,
-            Json(ErrorBody {
-                error: "not_revoked",
-            }),
-        )
-            .into_response(),
-        Err(err) => {
-            warn!(%err, "delete failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Ok(RemoveResult::NotFound) => Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
+        Ok(RemoveResult::NotRevoked) => Err(ApiError::new(StatusCode::CONFLICT, "not_revoked")),
+        Err(err) => Err(ApiError::internal("delete failed", err)),
     }
 }
 
 pub async fn devices_revoke(
     State(state): State<crate::AppState>,
     AxumPath(id): AxumPath<String>,
-) -> Response {
+) -> Result<StatusCode, ApiError> {
     match state.auth.registry.revoke(&id) {
         Ok(RevokeResult::Revoked) => {
             state.auth.notify_changed();
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(RevokeResult::NotFound) => StatusCode::NOT_FOUND.into_response(),
-        Ok(RevokeResult::AlreadyRevoked) => StatusCode::CONFLICT.into_response(),
-        Err(err) => {
-            warn!(%err, "revoke failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Ok(RevokeResult::NotFound) => Err(ApiError::new(StatusCode::NOT_FOUND, "not_found")),
+        Ok(RevokeResult::AlreadyRevoked) => {
+            Err(ApiError::new(StatusCode::CONFLICT, "already_revoked"))
         }
+        Err(err) => Err(ApiError::internal("revoke failed", err)),
     }
 }
 
@@ -768,16 +724,9 @@ pub struct PairReq {
 
 pub async fn pair(
     State(state): State<crate::AppState>,
-    jar: CookieJar,
+    Extension(device): Extension<AuthedDevice>,
     req: Option<Json<PairReq>>,
 ) -> Response {
-    let Some(cookie) = jar.get(COOKIE_NAME) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let Some(device) = state.auth.registry.find_active(cookie.value()) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-
     let known_ips: std::collections::HashSet<String> = crate::net::all_reachable_ipv4()
         .into_iter()
         .map(|ip| ip.to_string())
@@ -799,13 +748,7 @@ pub async fn pair(
     };
 
     if selected.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: "no_valid_hosts",
-            }),
-        )
-            .into_response();
+        return ApiError::new(StatusCode::BAD_REQUEST, "no_valid_hosts").into_response();
     }
 
     let token = state.auth.issue_pair_token(&device.id);
@@ -842,7 +785,7 @@ pub struct InterfacesResp {
 pub async fn devices_events(
     State(state): State<crate::AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    axum::Extension(device): axum::Extension<AuthedDevice>,
+    Extension(device): Extension<AuthedDevice>,
 ) -> axum::response::sse::Sse<
     impl futures_util::stream::Stream<
         Item = Result<axum::response::sse::Event, std::convert::Infallible>,

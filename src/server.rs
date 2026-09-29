@@ -316,6 +316,40 @@ mod auth_gate_tests {
         );
     }
 
+    /// A browser holding the cookie at two paths sends both; the device list
+    /// must mark the one that authenticated, whichever order they come in.
+    #[tokio::test]
+    async fn the_devices_list_marks_the_authenticated_device_among_two_cookies() {
+        let app = build_test_app().await;
+        let valid = &app.device_cookie;
+        let name = auth::COOKIE_NAME;
+        for header in [
+            format!("{name}=stale; {name}={valid}"),
+            format!("{name}={valid}; {name}=stale"),
+        ] {
+            let mut req = Request::builder()
+                .uri(under_base("/api/devices"))
+                .header("cookie", &header)
+                .body(Body::empty())
+                .expect("build request");
+            req.extensions_mut().insert(peer());
+            let res = app.router.clone().oneshot(req).await.expect("oneshot");
+            assert_eq!(res.status(), StatusCode::OK, "cookies {header}");
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let list: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            let you: Vec<&str> = list["devices"]
+                .as_array()
+                .expect("devices")
+                .iter()
+                .filter(|device| device["is_you"] == true)
+                .filter_map(|device| device["id"].as_str())
+                .collect();
+            assert_eq!(you, [valid.as_str()], "cookies {header}");
+        }
+    }
+
     async fn exchange(router: &Router, token: &str) -> StatusCode {
         let mut req = Request::builder()
             .method(Method::POST)

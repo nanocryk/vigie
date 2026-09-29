@@ -14,7 +14,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::warn;
+
+use crate::api::ApiError;
 
 /// Text past this is cut and flagged truncated.
 pub const TEXT_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -45,28 +46,27 @@ impl From<io::Error> for FsError {
     }
 }
 
+impl From<FsError> for ApiError {
+    fn from(err: FsError) -> Self {
+        match err {
+            FsError::NotFound => Self::new(StatusCode::NOT_FOUND, "not_found"),
+            FsError::NotADirectory => Self::new(StatusCode::BAD_REQUEST, "not_a_directory"),
+            FsError::NotAFile => Self::new(StatusCode::BAD_REQUEST, "not_a_file"),
+            FsError::BadName(reason) => Self::new(StatusCode::BAD_REQUEST, reason),
+            FsError::AlreadyExists => Self::new(StatusCode::CONFLICT, "already_exists"),
+            FsError::NotAnImage => Self::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "not_an_image"),
+            FsError::TooLarge => Self::new(StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+            FsError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                Self::new(StatusCode::FORBIDDEN, "permission_denied")
+            }
+            FsError::Io(err) => Self::internal("filesystem route failed", err),
+        }
+    }
+}
+
 impl IntoResponse for FsError {
     fn into_response(self) -> Response {
-        let (status, error) = match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, "not_found".to_string()),
-            Self::NotADirectory => (StatusCode::BAD_REQUEST, "not_a_directory".to_string()),
-            Self::NotAFile => (StatusCode::BAD_REQUEST, "not_a_file".to_string()),
-            Self::BadName(reason) => (StatusCode::BAD_REQUEST, reason.to_string()),
-            Self::AlreadyExists => (StatusCode::CONFLICT, "already_exists".to_string()),
-            Self::NotAnImage => (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "not_an_image".to_string(),
-            ),
-            Self::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large".to_string()),
-            Self::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                (StatusCode::FORBIDDEN, "permission_denied".to_string())
-            }
-            Self::Io(err) => {
-                warn!(%err, "filesystem route failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-            }
-        };
-        (status, Json(json!({ "error": error }))).into_response()
+        ApiError::from(self).into_response()
     }
 }
 
@@ -82,12 +82,19 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
-fn canonical(raw: &str) -> Result<PathBuf, FsError> {
+/// `raw` resolved, links followed. A relative path is not found: there is no
+/// working folder to resolve it against.
+pub fn canonical(raw: &str) -> io::Result<PathBuf> {
     let path = Path::new(raw);
     if !path.is_absolute() {
-        return Err(FsError::NotFound);
+        return Err(io::ErrorKind::NotFound.into());
     }
-    Ok(std::fs::canonicalize(path)?)
+    std::fs::canonicalize(path)
+}
+
+/// A NUL byte in the first `SNIFF_BYTES` marks binary content.
+pub fn is_binary(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(SNIFF_BYTES)].contains(&0)
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -265,7 +272,7 @@ fn guarded_file(raw: &str) -> Result<(PathBuf, std::fs::Metadata), FsError> {
 /// Decodes `bytes` as text, or `None` for binary. A cut at the read cap may
 /// split the last character, which is dropped rather than failing the file.
 fn decode_text(mut bytes: Vec<u8>, cut: bool) -> Option<String> {
-    if bytes[..bytes.len().min(SNIFF_BYTES)].contains(&0) {
+    if is_binary(&bytes) {
         return None;
     }
     match String::from_utf8(bytes) {

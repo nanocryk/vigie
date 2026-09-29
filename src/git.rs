@@ -14,9 +14,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::warn;
 
-use crate::files::display_path;
+use crate::api::ApiError;
+use crate::files::{PathQuery, canonical, display_path, is_binary};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A file with more changed lines than this keeps its counts but not its lines.
@@ -24,8 +24,6 @@ const FILE_LINES_MAX: usize = 5_000;
 /// Untracked files past this many are listed without reading them.
 const UNTRACKED_READ_MAX: usize = 200;
 const UNTRACKED_BYTES_MAX: u64 = 1024 * 1024;
-/// A NUL byte in this prefix marks an untracked file as binary.
-const SNIFF_BYTES: usize = 8 * 1024;
 /// The tree of a repository with no commit yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -45,17 +43,19 @@ impl From<io::Error> for GitError {
     }
 }
 
+impl From<GitError> for ApiError {
+    fn from(err: GitError) -> Self {
+        match err {
+            GitError::NotFound => Self::new(StatusCode::NOT_FOUND, "not_found"),
+            GitError::NotARepo => Self::new(StatusCode::BAD_REQUEST, "not_a_repo"),
+            GitError::Failed(message) => Self::internal("git failed", message),
+        }
+    }
+}
+
 impl IntoResponse for GitError {
     fn into_response(self) -> Response {
-        let (status, error) = match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, "not_found".to_string()),
-            Self::NotARepo => (StatusCode::BAD_REQUEST, "not_a_repo".to_string()),
-            Self::Failed(message) => {
-                warn!(%message, "git failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, message)
-            }
-        };
-        (status, Json(json!({ "error": error }))).into_response()
+        ApiError::from(self).into_response()
     }
 }
 
@@ -378,7 +378,7 @@ fn untracked_file(root: &Path, path: String, read: bool) -> FileDiff {
             return file;
         }
     };
-    if bytes[..bytes.len().min(SNIFF_BYTES)].contains(&0) {
+    if is_binary(&bytes) {
         file.note = Some("Binary file".to_string());
         return file;
     }
@@ -573,19 +573,6 @@ pub async fn repo_status(path: &Path) -> Result<RepoStatus, GitError> {
     })
 }
 
-fn canonical(raw: &str) -> Result<PathBuf, GitError> {
-    let path = Path::new(raw);
-    if !path.is_absolute() {
-        return Err(GitError::NotFound);
-    }
-    Ok(std::fs::canonicalize(path)?)
-}
-
-#[derive(Deserialize)]
-pub struct PathQuery {
-    pub path: String,
-}
-
 /// Changed paths of the repository containing a folder, for its listing.
 pub async fn status_route(Query(query): Query<PathQuery>) -> Result<Json<RepoStatus>, GitError> {
     repo_status(&canonical(&query.path)?).await.map(Json)
@@ -606,11 +593,7 @@ pub async fn file_route(Query(query): Query<PathQuery>) -> Result<Response, GitE
 /// The repository containing a folder, or null.
 pub async fn root_route(Query(query): Query<PathQuery>) -> Response {
     let root = tokio::task::spawn_blocking(move || {
-        let path = Path::new(&query.path);
-        if !path.is_absolute() {
-            return None;
-        }
-        std::fs::canonicalize(path)
+        canonical(&query.path)
             .ok()
             .and_then(|path| repo_root(&path))
     })

@@ -26,6 +26,7 @@ use tracing::warn;
 
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::api::ApiError;
 use crate::auth::{Auth, AuthedDevice};
 use crate::manager::{CACHE_WARNING_BEFORE, Notice, NoticeKind, SessionManager};
 use crate::server::AppState;
@@ -446,88 +447,87 @@ struct PushConfig<'a> {
 pub async fn config(
     State(state): State<AppState>,
     Extension(device): Extension<AuthedDevice>,
-) -> Response {
-    match state.pusher.store.push_subscription(&device.id).await {
-        Ok(subscription) => Json(PushConfig {
-            vapid_public_key: state.pusher.vapid.public_key_b64url(),
-            subscribed: subscription.is_some(),
-        })
-        .into_response(),
-        Err(err) => internal_error("read the push subscription", &err),
-    }
+) -> Result<Response, ApiError> {
+    let subscription = state
+        .pusher
+        .store
+        .push_subscription(&device.id)
+        .await
+        .map_err(|err| ApiError::internal("read the push subscription", err))?;
+    Ok(Json(PushConfig {
+        vapid_public_key: state.pusher.vapid.public_key_b64url(),
+        subscribed: subscription.is_some(),
+    })
+    .into_response())
 }
 
 pub async fn subscribe(
     State(state): State<AppState>,
     Extension(device): Extension<AuthedDevice>,
     Json(subscription): Json<PushSubscription>,
-) -> Response {
+) -> Result<StatusCode, ApiError> {
     if subscription.keys.p256dh.is_empty() || subscription.keys.auth.is_empty() {
-        return bad_request("malformed subscription");
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "malformed subscription",
+        ));
     }
-    if let Err(reason) = validate_endpoint(&subscription.endpoint) {
-        return bad_request(reason);
-    }
-    match state
+    validate_endpoint(&subscription.endpoint)
+        .map_err(|reason| ApiError::new(StatusCode::BAD_REQUEST, reason))?;
+    state
         .pusher
         .store
         .set_push_subscription(&device.id, &subscription)
         .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(err) => internal_error("store the push subscription", &err),
-    }
+        .map_err(|err| ApiError::internal("store the push subscription", err))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn unsubscribe(
     State(state): State<AppState>,
     Extension(device): Extension<AuthedDevice>,
-) -> Response {
-    match state
+) -> Result<StatusCode, ApiError> {
+    state
         .pusher
         .store
         .remove_push_subscription(&device.id)
         .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(err) => internal_error("drop the push subscription", &err),
-    }
+        .map_err(|err| ApiError::internal("drop the push subscription", err))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Sends a test notification to this device only.
 pub async fn test(
     State(state): State<AppState>,
     Extension(device): Extension<AuthedDevice>,
-) -> Response {
-    let subscription = match state.pusher.store.push_subscription(&device.id).await {
-        Ok(Some(subscription)) => subscription,
-        Ok(None) => return (StatusCode::NOT_FOUND, "no subscription").into_response(),
-        Err(err) => return internal_error("read the push subscription", &err),
-    };
+) -> Result<StatusCode, ApiError> {
+    let subscription = state
+        .pusher
+        .store
+        .push_subscription(&device.id)
+        .await
+        .map_err(|err| ApiError::internal("read the push subscription", err))?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no_subscription"))?;
     let message = Message {
         title: "vigie2".into(),
         body: "Test notification".into(),
         tag: "test".into(),
         url: String::new(),
     };
-    let payload = match serde_json::to_vec(&message) {
-        Ok(payload) => payload,
-        Err(err) => return internal_error("serialize the message", &err.into()),
-    };
+    let payload = serde_json::to_vec(&message)
+        .map_err(|err| ApiError::internal("serialize the message", err))?;
     match state.pusher.send(&subscription, &payload).await {
-        Ok(SendOutcome::Ok) => StatusCode::NO_CONTENT.into_response(),
+        Ok(SendOutcome::Ok) => Ok(StatusCode::NO_CONTENT),
         Ok(SendOutcome::Gone) => {
             let _ = state
                 .pusher
                 .store
                 .remove_push_subscription(&device.id)
                 .await;
-            (StatusCode::GONE, "subscription gone").into_response()
+            Err(ApiError::new(StatusCode::GONE, "subscription_gone"))
         }
-        Ok(SendOutcome::Transient) => {
-            (StatusCode::BAD_GATEWAY, "the push service refused").into_response()
-        }
-        Err(err) => internal_error("send the test notification", &err),
+        Ok(SendOutcome::Transient) => Err(ApiError::new(StatusCode::BAD_GATEWAY, "push_refused")),
+        Err(err) => Err(ApiError::internal("send the test notification", err)),
     }
 }
 
@@ -588,19 +588,6 @@ fn notice_message(notice: Notice, cwd: &Path) -> Message {
         tag: notice.session.to_string(),
         url: format!("#/s/{}", notice.session),
     }
-}
-
-fn bad_request(reason: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(json!({"error": reason}))).into_response()
-}
-
-fn internal_error(what: &str, err: &anyhow::Error) -> Response {
-    warn!("{what}: {err:#}");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": format!("{err:#}")})),
-    )
-        .into_response()
 }
 
 #[cfg(test)]
