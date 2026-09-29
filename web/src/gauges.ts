@@ -115,8 +115,8 @@ export function cacheGauge(
 export type ContextTone = "ok" | "high" | "full";
 
 export function contextTone(context: ContextView): ContextTone {
-  if (context.percentage >= 90) return "full";
-  if (context.percentage >= 70) return "high";
+  if (context.percentage >= 70) return "full";
+  if (context.percentage >= 50) return "high";
   return "ok";
 }
 

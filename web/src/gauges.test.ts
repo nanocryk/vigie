@@ -180,8 +180,10 @@ describe("contextTone", () => {
       categories: [],
     });
     expect(contextTone(context(3))).toBe("ok");
-    expect(contextTone(context(75))).toBe("high");
-    expect(contextTone(context(95))).toBe("full");
+    expect(contextTone(context(49))).toBe("ok");
+    expect(contextTone(context(50))).toBe("high");
+    expect(contextTone(context(69))).toBe("high");
+    expect(contextTone(context(70))).toBe("full");
   });
 });
 

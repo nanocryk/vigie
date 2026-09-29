@@ -90,6 +90,7 @@ const TRACK = `${TRACK_SHAPE} bg-muted`;
 /** An empty track: nothing known, so nothing that could read as a value. */
 const EMPTY_TRACK = `${TRACK_SHAPE} border border-dashed`;
 const CONTEXT_FILL = { ok: "bg-foreground", high: "bg-gauge-glow", full: "bg-destructive" };
+const CONTEXT_TEXT = { ok: "", high: "text-gauge-glow", full: "text-destructive" };
 const TONE_FILL: Record<Tone, string> = {
   ok: "bg-gauge-ok",
   warning: "bg-gauge-glow",
@@ -267,7 +268,7 @@ function ContextRow({ context }: { context: ContextView | null }) {
       <Figures
         main={formatPercent(percentage)}
         side={formatTokens(context.used_tokens)}
-        className={tone === "full" ? "text-destructive" : ""}
+        className={CONTEXT_TEXT[tone]}
       />
     </Row>
   );
