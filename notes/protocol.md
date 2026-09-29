@@ -45,7 +45,7 @@ Line-delimited JSON on stdin/stdout, the same wire protocol the Agent SDKs use. 
 
 ## Observed
 
-CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Recordings: `spike/runs/<scenario>.ndjson`; `canif run spike/summary <scenario>` prints them.
+CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Recordings: `spike/runs/<scenario>.ndjson`; `canif auto spike/summary <scenario>` prints them.
 
 - Startup: `SessionStart` hooks run before the `initialize` response and show as `system/hook_started` and `system/hook_response`.
 - `initialize` response: `account.subscriptionType` is `"Claude Max"`, `account.apiProvider` is `"firstParty"`; also `email`, `organization`. Other keys: `commands`, `agents`, `models`, `current_permission_mode`, `fast_mode_state`, `session_state`, `pid`, `remote_control_*`.

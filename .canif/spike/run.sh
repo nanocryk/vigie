@@ -3,7 +3,7 @@
 # description: >
 #   Run spike scenarios against the live claude CLI in a scratch folder. Spends
 #   subscription usage and auto-approves the tool calls Claude makes.
-# confirm: true
+# risky: true
 # args:
 #   scenario:
 #     choices: [basic, permissions, plan, interrupt, background, cd, context, grants, agents, filerules]

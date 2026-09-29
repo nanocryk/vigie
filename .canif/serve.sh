@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---
 # description: Run the vigie2 server (opens a network port, prints the pair link)
-# confirm: true
+# risky: true
 # args:
 #   bind:
 #     pattern: '[0-9a-fA-F.:\[\]]+'
