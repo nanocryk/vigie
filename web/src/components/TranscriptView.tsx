@@ -358,11 +358,14 @@ function BubbleBody({
   streaming,
   time,
   now,
+  tools = "shown",
 }: {
   text: string;
   streaming?: boolean;
   time: number | null;
   now: number;
+  /** The raw toggle and copy button. */
+  tools?: "shown" | "hidden";
 }) {
   const [raw, setRaw] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
@@ -392,20 +395,22 @@ function BubbleBody({
         </div>
       )}
       <div className={`${STAMP} mt-1.5 flex items-baseline justify-between gap-2`}>
-        <div className="flex gap-3">
-          <button
-            type="button"
-            aria-pressed={raw}
-            onClick={() => setRaw((on) => !on)}
-            className="hover:text-foreground cursor-pointer"
-          >
-            {raw ? "[see rendered]" : "[see raw]"}
-          </button>
-          <button type="button" onClick={copyShown} className="hover:text-foreground cursor-pointer">
-            {copy === "copied" ? "[copied]" : copy === "failed" ? "[copy failed]" : "[copy]"}
-          </button>
-        </div>
-        {time !== null && <span>{formatStamp(time, now)}</span>}
+        {tools === "shown" && (
+          <div className="flex gap-3">
+            <button
+              type="button"
+              aria-pressed={raw}
+              onClick={() => setRaw((on) => !on)}
+              className="hover:text-foreground cursor-pointer"
+            >
+              {raw ? "[see rendered]" : "[see raw]"}
+            </button>
+            <button type="button" onClick={copyShown} className="hover:text-foreground cursor-pointer">
+              {copy === "copied" ? "[copied]" : copy === "failed" ? "[copy failed]" : "[copy]"}
+            </button>
+          </div>
+        )}
+        {time !== null && <span className="ml-auto">{formatStamp(time, now)}</span>}
       </div>
     </>
   );
@@ -445,7 +450,7 @@ const ItemView = memo(function ItemView({
       return (
         <div className="space-y-1 pt-8 first:pt-0">
           <UserBubble>
-            <BubbleBody text={item.text} time={item.time} now={now} />
+            <BubbleBody text={item.text} time={item.time} now={now} tools="hidden" />
           </UserBubble>
           {item.relayed === true && (
             <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
