@@ -558,7 +558,15 @@ function DecisionCard({
         className="bg-background focus:ring-ring w-full rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
       />
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          disabled={sending}
+          onClick={deny}
+          className={`border-destructive text-destructive border ${BUTTON}`}
+        >
+          Deny
+        </button>
         {questions !== null ? (
           <button
             type="button"
@@ -578,14 +586,6 @@ function DecisionCard({
             Allow
           </button>
         )}
-        <button
-          type="button"
-          disabled={sending}
-          onClick={deny}
-          className={`border-destructive text-destructive border ${BUTTON}`}
-        >
-          Deny
-        </button>
       </div>
       {error !== null && <p className="text-destructive text-sm">{error}</p>}
     </CardFrame>
