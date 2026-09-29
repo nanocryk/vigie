@@ -376,7 +376,7 @@ function Sessions({
   );
 }
 
-export function SessionList({ client, label }: { client: Client; label: string | null }) {
+export function SessionList({ client }: { client: Client }) {
   const snapshot = useSnapshot(client);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -392,7 +392,6 @@ export function SessionList({ client, label }: { client: Client; label: string |
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={null}
-        label={label}
       />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-6 p-4">

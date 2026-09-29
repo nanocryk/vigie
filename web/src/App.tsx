@@ -23,7 +23,7 @@ function Gate({ children }: { children: ReactNode }) {
   );
 }
 
-function Shell({ label }: { label: string | null }) {
+function Shell() {
   const client = getClient();
   useEffect(() => {
     trackVisualViewport();
@@ -45,13 +45,13 @@ function Shell({ label }: { label: string | null }) {
     >
       <NewVersionBanner />
       {route.kind === "session" ? (
-        <SessionScreen key={route.id} client={client} id={route.id} label={label} />
+        <SessionScreen key={route.id} client={client} id={route.id} />
       ) : route.kind === "settings" ? (
-        <DeviceSettings client={client} label={label} />
+        <DeviceSettings client={client} />
       ) : route.kind === "files" ? (
-        <Explorer client={client} label={label} />
+        <Explorer client={client} />
       ) : (
-        <SessionList client={client} label={label} />
+        <SessionList client={client} />
       )}
     </div>
   );
@@ -61,7 +61,7 @@ export function App({ boot }: { boot: Promise<BootResult> }) {
   const result = use(boot);
   switch (result.kind) {
     case "authed":
-      return <Shell label={result.label} />;
+      return <Shell />;
     case "unpaired":
       return (
         <Gate>

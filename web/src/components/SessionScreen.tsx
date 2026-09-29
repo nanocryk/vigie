@@ -56,7 +56,9 @@ import {
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
+import { changeExplorer, openSessionTab } from "@/files";
 import { folderName, stateLabel } from "@/format";
+import { navigate } from "@/route";
 import type { SendAction } from "@/sendGesture";
 import {
   DEFAULT_MODEL,
@@ -231,15 +233,7 @@ function Composer({
   );
 }
 
-export function SessionScreen({
-  client,
-  id,
-  label,
-}: {
-  client: Client;
-  id: string;
-  label: string | null;
-}) {
+export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const snapshot = useSnapshot(client);
   const transcript = snapshot.transcripts.get(id) ?? emptyTranscript;
   const history = snapshot.histories.get(id);
@@ -779,7 +773,33 @@ export function SessionScreen({
             onAgents={() => (agentsOpen ? setAgentsOpen(false) : openAgents())}
           />
         }
-        label={label}
+        end={
+          view !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                changeExplorer((state) => openSessionTab(state, view.id, view.cwd));
+                navigate({ kind: "files" });
+              }}
+              title={view.cwd}
+              className="text-primary hover:bg-muted flex shrink-0 items-center gap-1 rounded-[5px] border px-1.5 leading-5 whitespace-nowrap"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.8}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+                className="size-3.5"
+              >
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              </svg>
+              Project folder
+            </button>
+          )
+        }
       />
 
       {serverError !== null && (

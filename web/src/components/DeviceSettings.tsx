@@ -97,7 +97,7 @@ function Notifications() {
   );
 }
 
-export function DeviceSettings({ client, label }: { client: Client; label: string | null }) {
+export function DeviceSettings({ client }: { client: Client }) {
   const snapshot = useSnapshot(client);
   return (
     <>
@@ -107,7 +107,6 @@ export function DeviceSettings({ client, label }: { client: Client; label: strin
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={<span className="voice-heading">Device settings</span>}
-        label={label}
       />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-4 p-4">

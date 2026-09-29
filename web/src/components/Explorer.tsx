@@ -44,7 +44,7 @@ import {
 } from "@/files";
 import { folderName, formatAgo } from "@/format";
 import { highlightLines, languageFromPath } from "@/highlight";
-import { backToListPast, navigate, routeHash } from "@/route";
+import { goHome, navigate, pushEntry, routeHash } from "@/route";
 import type { SessionView } from "@/wire";
 
 function errorMessage(err: unknown): string {
@@ -846,14 +846,14 @@ function upEntries(): number {
  * The system back button goes up a level: one history entry per level stands
  * on top of the explorer's own, each pop going up once. Entries are only added
  * right after a tap: Chrome skips on back an entry added without one, which
- * rules out putting an entry back from the pop itself. Returns how to leave the
- * explorer past those entries.
+ * rules out putting an entry back from the pop itself. Returns the Home action,
+ * whose own pops are not taken for going up.
  */
 function useBackGoesUp(steps: number): () => void {
   const leaving = useRef(false);
   useEffect(() => {
     for (let count = upEntries(); count < steps; count++) {
-      history.pushState({ [UP_ENTRY]: count + 1 }, "");
+      pushEntry({ [UP_ENTRY]: count + 1 });
     }
   }, [steps]);
   useEffect(() => {
@@ -873,11 +873,11 @@ function useBackGoesUp(steps: number): () => void {
   }, []);
   return () => {
     leaving.current = true;
-    backToListPast(upEntries());
+    goHome();
   };
 }
 
-export function Explorer({ client, label }: { client: Client; label: string | null }) {
+export function Explorer({ client }: { client: Client }) {
   const snapshot = useSnapshot(client);
   const state = useExplorer();
   const tab = activeTab(state);
@@ -914,7 +914,7 @@ export function Explorer({ client, label }: { client: Client; label: string | nu
   };
 
   const folder = tab.folder;
-  const sessionRoot = tab.owner.kind === "session" ? tab.owner.root : null;
+  const owner = tab.owner.kind === "session" ? tab.owner : null;
 
   return (
     <>
@@ -924,7 +924,6 @@ export function Explorer({ client, label }: { client: Client; label: string | nu
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={<span className="voice-heading">File explorer</span>}
-        label={label}
       />
       {tab.file !== null ? (
         <FileViewer key={`${tab.id}:${tab.file}`} path={tab.file} close={closeFile} />
@@ -934,16 +933,27 @@ export function Explorer({ client, label }: { client: Client; label: string | nu
             <div className="mx-auto flex max-w-3xl items-center gap-2">
               <TabSwitcher tabs={state.tabs} active={tab} />
               <div className="ml-auto flex shrink-0 gap-2">
-                {sessionRoot !== null && (
-                  <button
-                    type="button"
-                    onClick={() => go(sessionRoot)}
-                    title="Back to the session's folder"
-                    className={TOOL}
-                  >
-                    <FolderIcon className="text-mode-plan size-4" />
-                    <span className="text-xs">Project</span>
-                  </button>
+                {owner !== null && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => navigate({ kind: "session", id: owner.session })}
+                      title="Open the session's discussion"
+                      className={TOOL}
+                    >
+                      <ChatIcon className="text-mode-plan size-4" />
+                      <span className="text-xs">Discussion</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => go(owner.root)}
+                      title="Back to the session's folder"
+                      className={TOOL}
+                    >
+                      <FolderIcon className="text-mode-plan size-4" />
+                      <span className="text-xs">Project</span>
+                    </button>
+                  </>
                 )}
                 <button
                   type="button"

@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { ReloadButton } from "@/components/Reload";
 import { useClock } from "@/components/useNow";
 import {
   type CacheGauge,
@@ -17,7 +16,7 @@ import {
   type WindowKind,
   windowBar,
 } from "@/gauges";
-import { backToList, navigate } from "@/route";
+import { goHome, navigate } from "@/route";
 import type {
   CacheView,
   Confidence,
@@ -28,7 +27,7 @@ import type {
 } from "@/wire";
 
 /** The top bar's left slot on every screen but Home: back to Home. */
-export function HomeButton({ onClick = backToList }: { onClick?: () => void }) {
+export function HomeButton({ onClick = goHome }: { onClick?: () => void }) {
   return (
     <button
       type="button"
@@ -336,7 +335,7 @@ export function Header({
   column,
   info,
   pills,
-  label,
+  end,
 }: {
   left: ReactNode;
   right: ReactNode;
@@ -347,8 +346,8 @@ export function Header({
   info: ReactNode;
   /** Right after `info`, in a session: the mode and model pills. */
   pills?: ReactNode;
-  /** Device label, right of the thin bar. */
-  label: string | null;
+  /** Right of the thin bar, in a session: the project folder button. */
+  end?: ReactNode;
 }) {
   const now = useClock(1000);
   return (
@@ -381,10 +380,7 @@ export function Header({
         <div className="min-w-0 truncate">{info}</div>
         {pills}
         <div className="flex-1" />
-        {label !== null && (
-          <span className="text-muted-foreground max-w-[50%] min-w-0 truncate">{label}</span>
-        )}
-        <ReloadButton />
+        {end}
       </div>
     </header>
   );

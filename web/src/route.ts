@@ -30,9 +30,18 @@ export function routeHash(route: Route): string {
   }
 }
 
+/** `pushState` changes the hash without a `hashchange`, so pushes notify these. */
+const pushListeners = new Set<() => void>();
+
 function subscribeHash(listener: () => void): () => void {
   window.addEventListener("hashchange", listener);
-  return () => window.removeEventListener("hashchange", listener);
+  window.addEventListener("popstate", listener);
+  pushListeners.add(listener);
+  return () => {
+    window.removeEventListener("hashchange", listener);
+    window.removeEventListener("popstate", listener);
+    pushListeners.delete(listener);
+  };
 }
 
 function currentHash(): string {
@@ -43,21 +52,38 @@ export function useRoute(): Route {
   return parseRoute(useSyncExternalStore(subscribeHash, currentHash));
 }
 
-let navigatedInApp = false;
+/** History state key: how many entries separate this one from the Home entry below it. */
+const DEPTH = "vigie2-depth";
+
+/** Entries above the Home entry; null when none is behind (opened on a screen directly). */
+function homeDistance(): number | null {
+  const state: unknown = history.state;
+  const depth: unknown =
+    typeof state === "object" && state !== null ? Reflect.get(state, DEPTH) : undefined;
+  if (typeof depth === "number" && Number.isInteger(depth) && depth >= 0) return depth;
+  return parseRoute(location.hash).kind === "list" ? 0 : null;
+}
+
+/**
+ * Pushes a history entry carrying `extra` state, at `hash` or the current URL.
+ * It records its distance from Home, which `goHome` jumps back over.
+ */
+export function pushEntry(extra: Record<string, unknown>, hash?: string): void {
+  const distance = homeDistance();
+  history.pushState({ ...extra, [DEPTH]: distance === null ? null : distance + 1 }, "", hash);
+  for (const listener of pushListeners) listener();
+}
 
 /** Pushes a history entry, so the back button returns to the previous screen. */
 export function navigate(route: Route): void {
-  navigatedInApp = true;
-  location.hash = routeHash(route);
+  if (route.kind === "list") goHome();
+  else pushEntry({}, routeHash(route));
 }
 
-/** Pops back to the list when the app pushed the current entry, else replaces it. */
-export function backToList(): void {
-  backToListPast(0);
-}
-
-/** `backToList` from a screen that pushed `extraEntries` history entries on top of its own. */
-export function backToListPast(extraEntries: number): void {
-  if (navigatedInApp) history.go(-1 - extraEntries);
-  else location.replace(routeHash({ kind: "list" }));
+/** Back to the Home entry, dropping every screen above it; replaces the entry when none is behind. */
+export function goHome(): void {
+  const distance = homeDistance();
+  if (distance === 0) return;
+  if (distance === null) location.replace(routeHash({ kind: "list" }));
+  else history.go(-distance);
 }
