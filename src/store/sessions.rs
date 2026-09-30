@@ -1,5 +1,6 @@
 //! The `sessions` table: one row per discussion, with its state and gauges.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -8,6 +9,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::held::{HeldMessage, read_held};
 use super::{Store, format_time, json_error, known_session, parse_time};
 use crate::claude::child::{Effort, Launch, ModelSettings};
 use crate::claude::protocol::{AppliedSettings, ContextUsageResponse, PermissionMode};
@@ -107,6 +109,8 @@ pub struct SessionRow {
     pub calls_per_message: Option<f64>,
     /// What a restart would keep, measured after each turn; `None` before.
     pub restart: Option<RestartMeasure>,
+    /// In queue order.
+    pub held: Vec<HeldMessage>,
 }
 
 impl Store {
@@ -372,16 +376,18 @@ impl Store {
     /// Most recently updated first.
     pub async fn sessions(&self) -> Result<Vec<SessionRow>> {
         self.call(|connection| {
+            let mut held = read_held(connection, "", params![])?;
             let mut statement =
                 connection.prepare(&format!("{SESSION_SELECT} ORDER BY updated_at DESC"))?;
             let rows = statement.query_map([], RawSession::read)?;
-            rows.map(|row| row?.parse()).collect()
+            rows.map(|row| row?.parse(&mut held)).collect()
         })
         .await
     }
 
     pub async fn session(&self, id: Uuid) -> Result<Option<SessionRow>> {
         self.call(move |connection| {
+            let mut held = read_held(connection, "WHERE session_id = ?1", [id.to_string()])?;
             connection
                 .query_row(
                     &format!("{SESSION_SELECT} WHERE id = ?1"),
@@ -389,7 +395,7 @@ impl Store {
                     RawSession::read,
                 )
                 .optional()?
-                .map(RawSession::parse)
+                .map(|row| row.parse(&mut held))
                 .transpose()
         })
         .await
@@ -486,7 +492,8 @@ impl RawSession {
         })
     }
 
-    fn parse(self) -> Result<SessionRow> {
+    /// Moves the row's messages out of `held`.
+    fn parse(self, held: &mut HashMap<Uuid, Vec<HeldMessage>>) -> Result<SessionRow> {
         let state = match self.state.as_str() {
             "running" => SessionState::Running,
             "stopped" => SessionState::Stopped,
@@ -581,6 +588,7 @@ impl RawSession {
                 }),
                 _ => None,
             },
+            held: held.remove(&id).unwrap_or_default(),
         })
     }
 }

@@ -33,7 +33,7 @@ use vigie2::http::wire::{
 };
 use vigie2::session::manager::SessionManager;
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
-use vigie2::store::{EventKind, SessionState};
+use vigie2::store::{EventKind, HeldMode, SessionState};
 
 use common::{TIMEOUT, fake};
 
@@ -1160,6 +1160,45 @@ fn client_frames_read_and_write_flat() {
             json!({"type": "send", "session": session, "text": "hi", "rewarm": false,
                 "client_id": "c"}),
             say(session, "hi", false, "c"),
+        ),
+        (
+            json!({"type": "hold", "session": session, "text": "hi", "mode": "turn_end",
+                "client_id": "c"}),
+            command(
+                session,
+                "c",
+                Action::Hold {
+                    text: "hi".into(),
+                    attachments: vec![],
+                    mode: HeldMode::TurnEnd,
+                },
+            ),
+        ),
+        (
+            json!({"type": "edit_held", "session": session, "held_id": session, "mode": "held",
+                "client_id": "c"}),
+            command(
+                session,
+                "c",
+                Action::EditHeld {
+                    held_id: session,
+                    text: None,
+                    attachments: None,
+                    mode: Some(HeldMode::Held),
+                },
+            ),
+        ),
+        (
+            json!({"type": "send_held", "session": session, "held_id": session, "rewarm": true,
+                "client_id": "c"}),
+            command(
+                session,
+                "c",
+                Action::SendHeld {
+                    held_id: session,
+                    rewarm: true,
+                },
+            ),
         ),
         (
             json!({"type": "unsubscribe", "session": session}),

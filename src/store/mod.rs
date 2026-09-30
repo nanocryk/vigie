@@ -7,6 +7,7 @@
 
 mod catalog;
 mod events;
+mod held;
 mod plans;
 mod push;
 mod samples;
@@ -23,13 +24,14 @@ use uuid::Uuid;
 
 pub use catalog::SharedCatalog;
 pub use events::{EventKind, PageStart, StoredEvent};
+pub use held::{HeldEdit, HeldMessage, HeldMode};
 pub use samples::UsageSample;
 pub use sessions::{SessionRow, SessionState, Unread};
 
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 18] = [
+const MIGRATIONS: [&str; 19] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -160,6 +162,19 @@ WHERE claude_session_fresh = 0 AND NOT EXISTS (
                 AND json_extract(restart.payload, '$.event') = 'restarted'
         ), 0)
 );
+"#,
+    // Messages vigie2 keeps for a discussion until the user or the end of a turn sends them.
+    r#"
+CREATE TABLE held_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    position INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    attachments TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('held', 'turn_end')),
+    created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX held_messages_by_session ON held_messages (session_id, position);
 "#,
 ];
 
@@ -390,6 +405,7 @@ mod tests {
             [
                 "cli_catalog",
                 "events",
+                "held_messages",
                 "plans",
                 "push_subscriptions",
                 "sessions",

@@ -24,8 +24,9 @@ use crate::AppState;
 use crate::http::auth::{Auth, AuthedDevice};
 use crate::http::wire::{Action, ClientMessage, Command, ServerMessage, Subscription, WireEvent};
 use crate::session::attachments;
-use crate::session::manager::SessionManager;
+use crate::session::manager::{ColdCheck, SessionManager};
 use crate::session::{Event, EventBody, HostEvent, Session};
+use crate::store::HeldEdit;
 
 /// Stored events read per history query.
 const PAGE: u32 = 500;
@@ -247,6 +248,15 @@ impl Connection {
     }
 }
 
+/// The check a command's `rewarm` flag asks for.
+fn cold_check(rewarm: bool) -> ColdCheck {
+    if rewarm {
+        ColdCheck::Rewarm
+    } else {
+        ColdCheck::Refuse
+    }
+}
+
 async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
     let Command {
         session,
@@ -259,14 +269,46 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
             attachments: files,
             rewarm,
         } => {
-            manager.unarchive(session).await?;
-            if !rewarm {
-                manager.ensure_warm(session).await?;
-            }
             manager
-                .open(session)
-                .await?
-                .send(attachments::Message::new(text, files), Some(client_id))
+                .send(
+                    session,
+                    attachments::Message::new(text, files),
+                    Some(client_id),
+                    cold_check(rewarm),
+                )
+                .await
+        }
+        Action::Hold {
+            text,
+            attachments: files,
+            mode,
+        } => {
+            manager
+                .hold(
+                    session,
+                    attachments::Message::new(text, files),
+                    mode,
+                    Some(client_id),
+                )
+                .await
+        }
+        Action::EditHeld {
+            held_id,
+            text,
+            attachments,
+            mode,
+        } => {
+            let edit = HeldEdit {
+                text,
+                attachments,
+                mode,
+            };
+            manager.edit_held(session, held_id, edit).await
+        }
+        Action::DropHeld { held_id } => manager.drop_held(session, held_id).await,
+        Action::SendHeld { held_id, rewarm } => {
+            manager
+                .send_held(session, held_id, Some(client_id), cold_check(rewarm))
                 .await
         }
         Action::Interrupt => {

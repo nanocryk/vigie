@@ -17,7 +17,9 @@ use crate::session::background::BackgroundView;
 use crate::session::gauges::{Cache, Context};
 use crate::session::manager::LiveView;
 use crate::session::{Activity, Answer, Event, EventBody, RestartMode, StopReason};
-use crate::store::{EventKind, SessionRow, SessionState, StoredEvent, Unread};
+use crate::store::{
+    EventKind, HeldMessage, HeldMode, SessionRow, SessionState, StoredEvent, Unread,
+};
 
 /// Ack error of a `send` or an `answer` refused on a cold cache.
 pub const CACHE_COLD: &str = "cache_cold";
@@ -26,6 +28,8 @@ pub const SESSION_LIVE: &str = "session_live";
 /// Ack error of a `rename` over `MAX_NAME_CHARS`.
 pub const BAD_NAME: &str = "bad_name";
 pub const MAX_NAME_CHARS: usize = 80;
+/// Ack error of an action on a held message no longer queued.
+pub const HELD_GONE: &str = "held_gone";
 
 /// A client frame. Both kinds are tagged by `type`; a `type` naming a
 /// subscription reads as one, any other as a command.
@@ -120,6 +124,34 @@ pub enum Action {
         rewarm: bool,
     },
     Interrupt,
+    /// Queues a message on the discussion; a `TurnEnd` one with no turn running
+    /// is sent at once.
+    Hold {
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
+        mode: HeldMode,
+    },
+    /// An absent field keeps its value.
+    EditHeld {
+        held_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachments: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<HeldMode>,
+    },
+    DropHeld {
+        held_id: Uuid,
+    },
+    /// Takes the message out of the queue and sends it like `Send`.
+    SendHeld {
+        held_id: Uuid,
+        /// Goes through on a cold cache.
+        #[serde(default)]
+        rewarm: bool,
+    },
     /// A message for subagent `task_id`, relayed by the main agent.
     Relay {
         task_id: String,
@@ -320,6 +352,8 @@ pub struct SessionView {
     pub background: Vec<BackgroundView>,
     /// `None` once the user saw the discussion.
     pub unread: Option<Unread>,
+    /// Messages kept until sent, in queue order.
+    pub held: Vec<HeldMessage>,
 }
 
 impl SessionView {
@@ -355,6 +389,7 @@ impl SessionView {
             agents,
             background,
             unread: row.unread,
+            held: row.held,
         }
     }
 }

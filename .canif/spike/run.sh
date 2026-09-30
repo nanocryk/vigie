@@ -6,7 +6,7 @@
 # risky: true
 # args:
 #   scenario:
-#     choices: [basic, permissions, plan, interrupt, background, cd, context, grants, agents, filerules]
+#     choices: [basic, permissions, plan, interrupt, background, cd, context, grants, agents, filerules, midturn]
 #     many: true
 # ---
 set -euo pipefail

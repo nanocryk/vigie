@@ -18,9 +18,12 @@ use vigie2::claude::replay::{
 };
 use vigie2::session::attachments;
 use vigie2::session::gauges::ContextSource;
-use vigie2::session::manager::{Notice, NoticeKind, Probe, SessionManager};
+use vigie2::session::manager::{ColdCheck, Notice, NoticeKind, Probe, SessionManager};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
-use vigie2::store::{EventKind, SessionState, SharedCatalog, Store, StoredEvent, Unread};
+use vigie2::store::{
+    EventKind, HeldEdit, HeldMessage, HeldMode, SessionState, SharedCatalog, Store, StoredEvent,
+    Unread,
+};
 
 use common::{TIMEOUT, fake};
 
@@ -721,6 +724,212 @@ async fn an_unasked_exit_is_unread_and_a_kill_is_not() {
     );
     assert_eq!(store.latest_stop_reason(crashed.id()).await.unwrap(), None);
     manager.shutdown().await.unwrap();
+}
+
+/// A user message line the host writes.
+fn user_in(text: &str) -> String {
+    serde_json::json!({"t": 0, "dir": "in", "msg": {"type": "user",
+        "message": {"role": "user", "content": text}, "parent_tool_use_id": null,
+        "session_id": "s"}})
+    .to_string()
+}
+
+fn result_out(error: bool) -> String {
+    let subtype = if error {
+        "error_during_execution"
+    } else {
+        "success"
+    };
+    serde_json::json!({"t": 0, "dir": "out", "msg": {"type": "result", "subtype": subtype,
+        "is_error": error, "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1,
+        "stop_reason": null, "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": "r"}})
+    .to_string()
+}
+
+/// A turn on "go" that ends, with `error` or not, once the host changes the
+/// permission mode; then one turn per text of `then`.
+fn held_script(error: bool, then: &[&str]) -> String {
+    let mut lines = vec![INIT_SCRIPT.trim().to_string(), user_in("go")];
+    lines.extend(MODE_SCRIPT.trim().lines().skip(2).map(str::to_string));
+    lines.push(result_out(error));
+    for text in then {
+        lines.push(user_in(text));
+        lines.push(result_out(false));
+    }
+    lines.join("\n")
+}
+
+fn message(text: &str) -> attachments::Message {
+    attachments::Message::new(text.into(), vec![])
+}
+
+/// Waits until the discussion's held messages satisfy `done`.
+async fn until_held(
+    manager: &SessionManager,
+    id: Uuid,
+    what: &str,
+    done: impl Fn(&[HeldMessage]) -> bool,
+) {
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            let row = manager.store().session(id).await.unwrap().unwrap();
+            if done(&row.held) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("held messages never {what}"));
+}
+
+/// Texts of the `user_sent` events stored so far.
+async fn sent_texts(manager: &SessionManager, id: Uuid) -> Vec<String> {
+    manager
+        .events_after(id, 0, ALL)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.kind == EventKind::Host)
+        .filter_map(|event| match host(event) {
+            HostEvent::UserSent { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn until_sent(manager: &SessionManager, id: Uuid, want: &[&str]) {
+    tokio::time::timeout(TIMEOUT, async {
+        while sent_texts(manager, id).await != want {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("never sent {want:?}"));
+}
+
+fn texts(held: &[HeldMessage]) -> Vec<(&str, HeldMode)> {
+    held.iter()
+        .map(|held| (held.text.as_str(), held.mode))
+        .collect()
+}
+
+#[tokio::test]
+async fn turn_end_messages_go_out_as_one_when_the_turn_ends() {
+    let env = Env::new();
+    let script = env.script("held.ndjson", &held_script(false, &["a\n\nc"]));
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    manager
+        .send(id, message("go"), None, ColdCheck::Rewarm)
+        .await
+        .unwrap();
+    for (text, mode) in [
+        ("a", HeldMode::TurnEnd),
+        ("b", HeldMode::Held),
+        (" c ", HeldMode::TurnEnd),
+    ] {
+        manager.hold(id, message(text), mode, None).await.unwrap();
+    }
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    assert_eq!(
+        texts(&row.held),
+        [
+            ("a", HeldMode::TurnEnd),
+            ("b", HeldMode::Held),
+            (" c ", HeldMode::TurnEnd)
+        ]
+    );
+
+    manager
+        .set_permission_mode(id, "acceptEdits".into())
+        .await
+        .unwrap();
+    until_sent(&manager, id, &["go", "a\n\nc"]).await;
+    until_held(&manager, id, "kept b", |held| {
+        texts(held) == [("b", HeldMode::Held)]
+    })
+    .await;
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
+}
+
+#[tokio::test]
+async fn an_interrupted_turn_holds_its_turn_end_messages() {
+    let env = Env::new();
+    let script = env.script("held.ndjson", &held_script(true, &["now", "x"]));
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    manager
+        .send(id, message("go"), None, ColdCheck::Rewarm)
+        .await
+        .unwrap();
+    manager
+        .hold(id, message("x"), HeldMode::TurnEnd, None)
+        .await
+        .unwrap();
+    manager
+        .hold(id, message("y"), HeldMode::Held, None)
+        .await
+        .unwrap();
+    manager
+        .set_permission_mode(id, "acceptEdits".into())
+        .await
+        .unwrap();
+    until_held(&manager, id, "switched to held", |held| {
+        texts(held) == [("x", HeldMode::Held), ("y", HeldMode::Held)]
+    })
+    .await;
+
+    // No turn runs: a turn-end message goes out at once.
+    manager
+        .hold(id, message("now"), HeldMode::TurnEnd, None)
+        .await
+        .unwrap();
+    let row = manager.store().session(id).await.unwrap().unwrap();
+    let (x, y) = (row.held[0].id, row.held[1].id);
+    manager
+        .edit_held(
+            id,
+            y,
+            HeldEdit {
+                text: Some("y2".into()),
+                ..HeldEdit::default()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .send_held(id, x, None, ColdCheck::Refuse)
+        .await
+        .unwrap();
+    manager.drop_held(id, y).await.unwrap();
+    for gone in [
+        manager.drop_held(id, y).await,
+        manager.edit_held(id, x, HeldEdit::default()).await,
+        manager.send_held(id, x, None, ColdCheck::Rewarm).await,
+    ] {
+        assert_eq!(gone.unwrap_err().to_string(), "held_gone");
+    }
+    until_sent(&manager, id, &["go", "now", "x"]).await;
+    assert!(
+        manager
+            .store()
+            .session(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .held
+            .is_empty()
+    );
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
+    let stored = manager.events_after(id, 0, ALL).await.unwrap();
+    assert_clean_exit(stored.last().unwrap());
 }
 
 /// Stores the `out` lines of the `cd` recording as the history of a stopped

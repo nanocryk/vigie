@@ -17,6 +17,9 @@ Subscriptions are not acked:
 Every other frame is a command on one session. It carries `session` and `client_id`, and is answered by one `ack` with that `client_id`:
 
 - `send {session, text, attachments?, rewarm?, client_id}`: spawns the child again if it ended. The session emits a `user_sent {text, attachments?, client_id}` host event before writing the text. `attachments` are absolute file paths, usually from `POST /api/sessions/{id}/upload`. The child gets them as a block after the text (see Attachments); `user_sent` keeps the two apart.
+- `hold {session, text, attachments?, mode, client_id}`: queues a held message on the discussion, `mode` `held` or `turn_end`. A `turn_end` one while no turn of the main agent runs is sent at once instead, as `send` without `rewarm`.
+- `edit_held {session, held_id, text?, attachments?, mode?, client_id}`: an absent field keeps its value. `drop_held {session, held_id, client_id}` deletes one. `send_held {session, held_id, rewarm?, client_id}` removes it from the queue and sends it as `send` does; during a turn it reaches Claude after the running tool call. All three are refused with the ack error `held_gone` when the message is no longer queued.
+- When the main agent's turn ends with a successful `result`, the `turn_end` messages are removed and sent as one message: texts in queue order joined by a blank line, attachments concatenated, one `user_sent`. A `result` that is an error (an interrupt included) or the child exiting switches them to `held`.
 - `interrupt {session, client_id}`
 - `relay {session, task_id, text, attachments?, rewarm?, client_id}`: a message to the subagent `task_id` of the running child, which `-p` cannot reach directly. The main agent gets a wrapped message asking it to forward `text`, with its attachments block, verbatim with SendMessage to `task_id`, then to reply exactly `[Relay acknowledged]`. Emits `relay_sent` before writing it; follows the cold rule of `send`. Refused when the child is not running or does not know the agent.
 - `stop_task {session, task_id, client_id}`: stops one agent of the running child. `stop_agents {session, client_id}` stops every running one.
@@ -58,7 +61,8 @@ Claude attaches files to its own reply with the `set_attachments {paths}` tool o
   - has the permission mode of its stopped state, its model or its effort changed;
   - has its main conversation make a request or finish a turn (new `cache` and `context`);
   - gets a new context usage or new applied settings from the CLI;
-  - has one of its agents start, progress, make a request or end.
+  - has one of its agents start, progress, make a request or end;
+  - has its held messages change.
 - `usage_changed`: a usage reading was taken or a turn finished; `GET /api/usage` has the new snapshot.
 - `catalog_changed`: the shared catalog or default settings changed; `GET /api/catalog` has the new ones.
 - `error {message, session?}`: a malformed frame, or a `subscribe` or a `history` that failed.
@@ -77,6 +81,7 @@ Each session of `GET /api/sessions` carries:
 - `model` and `effort`: null when the CLI picks.
 - `settings_changed_at`: null unless a model or effort change awaits its first main request.
 - `applied_model` and `applied_effort`: what the CLI reports applying through `get_settings`, asked when the child starts, after each turn and after a change, e.g. `claude-opus-5-5[1m]` and `medium`; kept once the child stops, null while unknown.
+- `held [{id, text, attachments, mode, created_at}]`: its held messages in queue order, `attachments` absolute paths.
 - `live`, `busy`, `asks`: the permission, question and plan approval asks its running child awaits an answer to, 0 when not live.
 - `cache {last_request_at, ttl_secs}` and `context {used_tokens, max_tokens, percentage, source, autocompact_threshold, categories}`; either is null while unknown. `source` is `cli` when the total comes from the CLI's `get_context_usage` (asked when the child starts and after each turn), `estimate` when a later main request replaced it with its prompt tokens. `max_tokens` is the CLI's when known, else the model's context window. `autocompact_threshold` (nullable) and `categories [{name, tokens, kind}]` (empty while unknown) come from the latest CLI reply.
 - `calls_per_message`: main-conversation requests per finished turn over the discussion's life, null before its first turn.

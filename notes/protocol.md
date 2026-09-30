@@ -52,6 +52,7 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - `initialize` response: `account.subscriptionType` is `"Claude Max"`, `account.apiProvider` is `"firstParty"`; also `email`, `organization`. Other keys: `commands`, `agents`, `models`, `current_permission_mode`, `fast_mode_state`, `session_state`, `pid`, `remote_control_*`.
 - `system/init` arrives on every turn: `apiKeySource: "none"`, `capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1", "mcp_read_resource_v1", "mcp_tool_ui_meta_v1"]`. Then `system/status` `requesting`; `system/thinking_tokens` while thinking.
 - User message echo (`--replay-user-messages`): arrives when the model request starts, about 1 to 2 s after sending, just before the first `assistant` message.
+- A user message written during a tool call (spike `midturn`) is taken in the same turn: its echo follows that call's `tool_result`, and the next request reads it. Same with or without `priority: "next"`.
 - Every `control_response` the host sends is echoed back on stdout with the same `request_id`.
 - claude.ai MCP connectors load under `-p` (an unauthorized one was reported by the model in its replies).
 

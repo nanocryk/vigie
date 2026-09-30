@@ -94,10 +94,13 @@ class Session:
         self.proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
         self.proc.stdin.flush()
 
-    def user(self, text, parent_tool_use_id=None):
+    def user(self, text, parent_tool_use_id=None, priority=None):
         print(f"[{self._ms():>6}] user {text}")
-        self.send({"type": "user", "message": {"role": "user", "content": text},
-                   "parent_tool_use_id": parent_tool_use_id, "session_id": self.session_id})
+        msg = {"type": "user", "message": {"role": "user", "content": text},
+               "parent_tool_use_id": parent_tool_use_id, "session_id": self.session_id}
+        if priority is not None:
+            msg["priority"] = priority
+        self.send(msg)
 
     def request(self, subtype, **fields):
         self.next_id += 1
@@ -256,6 +259,21 @@ def interrupt(s, cwd):
     s.control("interrupt", allow)
     s.pump(lambda m: m.get("type") == "result", allow, 60)
     s.turn("Reply with exactly: ok")
+
+
+def midturn(s, cwd):
+    s.control("initialize")
+    for priority, marker in ((None, "plain"), ("next", "next")):
+        s.user("Use the Bash tool three times, one call per message, each running exactly: "
+               "python -c \"import time; time.sleep(6)\". Run them in the foreground. "
+               "Then reply done.")
+        s.pump(lambda m: is_tool_use(m, "Bash"), allow)
+        s.drain(1, allow)
+        s.note("sending a message mid-turn", priority=priority)
+        s.user(f"If you read this before your final reply, include the word "
+               f"marker-{marker} in it.", priority=priority)
+        s.pump(lambda m: m.get("type") == "result", allow, 120)
+        s.drain(20, allow)
 
 
 def background(s, cwd):
@@ -452,7 +470,7 @@ def filerules(s, cwd):
 
 
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context, grants, agents, filerules)}
+                                     context, grants, agents, filerules, midturn)}
 FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",)}
 
 

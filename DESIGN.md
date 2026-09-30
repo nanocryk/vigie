@@ -126,6 +126,12 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
 - Session controls: model, effort, permission mode.
 - Send takes gestures: tap or swipe right sends, swipe left stops, swipe up opens the menu. Single swipes, no confirmation. Stop works only while a turn runs (not for background tasks alone); Send stays available to queue messages. Nothing floats over the discussion.
+- Held messages: vigie2 keeps a queue of messages per discussion on the server, so every device sees it and it works with the phone asleep.
+  - Each has a mode: held (waits for the user) or at turn end (sent automatically when the main agent's turn ends).
+  - Send during a turn queues the message at turn end. The menu, with text in the composer, offers Hold (held, with or without a turn) and, during a turn, Send now (written to Claude at once; the CLI gives it to Claude after the running tool call, in the same turn).
+  - They show pinned at the bottom of the discussion, below Claude's output: dashed border, dimmed, tagged "held" or "at turn end". Tapping one opens its actions: Send now, Edit, Delete, switch the mode. Edit loads it into the composer with an "Editing queued message" strip; Send saves; if it was sent meanwhile, the composer keeps the text and says so.
+  - When a turn ends normally, the at-turn-end messages go out as one message, in queue order, texts joined by a blank line. A turn ending in an error or an interrupt, or the Claude process stopping, sends nothing and switches them to held.
+  - A message sent to Claude shows "on host" until Claude receives it, wherever its bubble sits.
 - Send's borders show the directions: a red left border pulsing while stopping is possible, absent otherwise; a top border in the theme's text color for the menu.
 - The composer's buttons keep the height of a one-line text area and stay at the bottom as the text grows. The bar has a taller minimum height and Send is wide, an easy target to press or swipe. Swipe thresholds on Send are fixed distances, not a share of its width.
 - On desktop, Send's gestures are three buttons: Send, Stop and Menu. Stop is always shown; while no turn runs it is inactive, with a red border on a black background. Enter sends. Esc stops the turn; with the menu open, Esc closes the menu instead; with no turn running, it does nothing.
@@ -282,7 +288,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, auto-title, Mermaid rendering.
 - Welcomed, not designed ("all your new ideas are very good"):
   - rounds (one Claude message: text and tool calls, before their results come back) as the grouping unit, not rendered as frames: a round's parallel calls as one expandable row, earlier rounds' text dimmed or folded so the last round's answer stands out, a little more space between rounds than within one;
-  - editing or cancelling a queued message until Claude has received it;
   - a suggestion to turn a Bash command allowed N times across sessions into a canif script;
   - the cost of each turn as a share of the 5h window, shown on the turn.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).

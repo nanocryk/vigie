@@ -24,7 +24,9 @@ use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
 use crate::session::{attachments, scratch, seed};
-use crate::store::{SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread};
+use crate::store::{
+    HeldEdit, HeldMode, SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread,
+};
 use crate::usage::{SessionContext, Snapshot};
 
 /// Period of `get_usage` samples while at least one session is live.
@@ -74,6 +76,15 @@ pub enum NoticeKind {
     Stopped,
     /// The 1 hour cache goes cold in `CACHE_WARNING_BEFORE`.
     CacheSoonCold,
+}
+
+/// Whether a send goes through while the discussion's cache is cold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColdCheck {
+    /// Fails with `wire::CACHE_COLD`.
+    Refuse,
+    /// The user accepted to cache the context again.
+    Rewarm,
 }
 
 /// How long before a 1 hour cache goes cold its warning comes.
@@ -535,6 +546,136 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Sends a user message, unarchiving the discussion and spawning its child when needed.
+    pub async fn send(
+        &self,
+        id: Uuid,
+        message: attachments::Message,
+        client_id: Option<String>,
+        cold: ColdCheck,
+    ) -> Result<()> {
+        self.unarchive(id).await?;
+        if cold == ColdCheck::Refuse {
+            self.ensure_warm(id).await?;
+        }
+        self.open(id).await?.send(message, client_id).await
+    }
+
+    /// Queues a message on the discussion. A `TurnEnd` one while no turn of the
+    /// main agent runs is sent at once, the cold check included.
+    pub async fn hold(
+        &self,
+        id: Uuid,
+        message: attachments::Message,
+        mode: HeldMode,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        if mode == HeldMode::TurnEnd && !self.in_turn(id).await {
+            return self.send(id, message, client_id, ColdCheck::Refuse).await;
+        }
+        self.inner
+            .store
+            .hold(id, message.text, message.attachments, mode)
+            .await?;
+        self.inner.signals.session(id);
+        // The turn may have ended while storing, after its end sent the queue.
+        if mode == HeldMode::TurnEnd && !self.in_turn(id).await {
+            self.send_turn_end(id).await?;
+        }
+        Ok(())
+    }
+
+    /// Fails with `wire::HELD_GONE` when the message is no longer queued.
+    pub async fn edit_held(&self, id: Uuid, held_id: Uuid, edit: HeldEdit) -> Result<()> {
+        if !self.inner.store.edit_held(id, held_id, edit).await? {
+            bail!(wire::HELD_GONE);
+        }
+        self.inner.signals.session(id);
+        Ok(())
+    }
+
+    /// Fails with `wire::HELD_GONE` when the message is no longer queued.
+    pub async fn drop_held(&self, id: Uuid, held_id: Uuid) -> Result<()> {
+        if self.inner.store.take_held(id, held_id).await?.is_none() {
+            bail!(wire::HELD_GONE);
+        }
+        self.inner.signals.session(id);
+        Ok(())
+    }
+
+    /// Takes the message out of the queue and sends it. Fails with
+    /// `wire::HELD_GONE` when it is no longer queued; a cold refusal keeps it queued.
+    pub async fn send_held(
+        &self,
+        id: Uuid,
+        held_id: Uuid,
+        client_id: Option<String>,
+        cold: ColdCheck,
+    ) -> Result<()> {
+        if cold == ColdCheck::Refuse {
+            self.ensure_warm(id).await?;
+        }
+        let Some(held) = self.inner.store.take_held(id, held_id).await? else {
+            bail!(wire::HELD_GONE);
+        };
+        self.inner.signals.session(id);
+        let message = attachments::Message::new(held.text, held.attachments);
+        self.send_or_requeue(id, message, held.mode, client_id)
+            .await
+    }
+
+    /// Sends the discussion's `TurnEnd` messages as one message, texts in queue
+    /// order joined by a blank line.
+    async fn send_turn_end(&self, id: Uuid) -> Result<()> {
+        let taken = self.inner.store.take_turn_end(id).await?;
+        if taken.is_empty() {
+            return Ok(());
+        }
+        self.inner.signals.session(id);
+        let texts: Vec<&str> = taken
+            .iter()
+            .map(|held| held.text.trim())
+            .filter(|text| !text.is_empty())
+            .collect();
+        let message = attachments::Message::new(
+            texts.join("\n\n"),
+            taken
+                .iter()
+                .flat_map(|held| held.attachments.iter().cloned())
+                .collect(),
+        );
+        self.send_or_requeue(id, message, HeldMode::Held, None)
+            .await
+    }
+
+    /// Sends a message taken from the queue; on failure queues it again, last,
+    /// in `mode`, so its text is not lost.
+    async fn send_or_requeue(
+        &self,
+        id: Uuid,
+        message: attachments::Message,
+        mode: HeldMode,
+        client_id: Option<String>,
+    ) -> Result<()> {
+        let kept = message.clone();
+        let sent = self.send(id, message, client_id, ColdCheck::Rewarm).await;
+        if sent.is_err() {
+            self.inner
+                .store
+                .hold(id, kept.text, kept.attachments, mode)
+                .await?;
+            self.inner.signals.session(id);
+        }
+        sent
+    }
+
+    /// A turn of the main agent runs in the discussion's child.
+    async fn in_turn(&self, id: Uuid) -> bool {
+        self.live(id)
+            .await
+            .is_some_and(|session| session.status().borrow().turn)
+    }
+
     /// Moves the discussion to a fresh Claude session: stops its child, records a
     /// `Restarted` event, then launches the new session with the seed and `text`
     /// as its first message (continue) or `text` alone (blank). A blank restart
@@ -652,6 +793,12 @@ impl SessionManager {
             Arc::downgrade(&self.inner),
             signals.clone(),
         ));
+        tokio::spawn(send_held_at_turn_ends(
+            id,
+            session.subscribe(),
+            session.status(),
+            Arc::downgrade(&self.inner),
+        ));
         tokio::spawn(announce_changes(&session, signals.clone()));
         tokio::spawn(track_attention(
             id,
@@ -688,6 +835,51 @@ fn announce_changes(session: &Session, signals: Signals) -> impl Future<Output =
             signals.session(id);
         }
         signals.session(id);
+    }
+}
+
+/// Sends the discussion's `TurnEnd` messages each time a turn of the main agent
+/// ends normally; a turn ending in an error or an interrupt, or the child
+/// exiting, switches them to `Held` instead. A lagged receiver may have missed
+/// the end of a turn, so a lag with no turn running counts as a normal end.
+async fn send_held_at_turn_ends(
+    id: Uuid,
+    mut events: broadcast::Receiver<Arc<Event>>,
+    status: watch::Receiver<LiveStatus>,
+    inner: Weak<Inner>,
+) {
+    loop {
+        let (normal, exited) = match events.recv().await {
+            Ok(event) => match &event.body {
+                EventBody::Host(HostEvent::ChildExited { .. }) => (false, true),
+                EventBody::Line(line) => match &line.parsed {
+                    Some(Inbound::Result(result)) => (!result.is_error, false),
+                    _ => continue,
+                },
+                EventBody::Host(_) => continue,
+            },
+            Err(RecvError::Lagged(_)) if !status.borrow().turn => (true, false),
+            Err(RecvError::Lagged(_)) => continue,
+            Err(RecvError::Closed) => (false, true),
+        };
+        let Some(inner) = inner.upgrade() else {
+            return;
+        };
+        let manager = SessionManager { inner };
+        if normal {
+            if let Err(err) = manager.send_turn_end(id).await {
+                tracing::warn!("send the held messages of session {id}: {err:#}");
+            }
+        } else {
+            match manager.inner.store.hold_turn_end(id).await {
+                Ok(true) => manager.inner.signals.session(id),
+                Ok(false) => {}
+                Err(err) => tracing::warn!("hold the queued messages of session {id}: {err:#}"),
+            }
+        }
+        if exited {
+            return;
+        }
     }
 }
 
