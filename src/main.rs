@@ -17,6 +17,7 @@ use vigie::http::auth::{Auth, Registry};
 use vigie::http::net;
 use vigie::http::push::{self, Pusher};
 use vigie::http::server::{AppState, build_app};
+use vigie::http::update::{self, Updater};
 use vigie::session::manager::{Probe, SessionManager};
 use vigie::session::server_restart::{
     self, RestartState, RunningBuild, ServerRestart, Supervision,
@@ -272,6 +273,8 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         Arc::clone(&auth),
     )?);
     push::spawn_dispatcher(&manager, Arc::clone(&pusher));
+    let updater = Arc::new(Updater::new(std::env::current_dir()?));
+    update::spawn_checks(Arc::clone(&updater));
 
     let state = AppState {
         pusher,
@@ -282,6 +285,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         web_dir: Arc::new(web_dir),
         manager: manager.clone(),
         allowed_origins: Arc::new(allowed_origins(&settings, &reachable_ips)),
+        updater,
     };
 
     let app = build_app(state);

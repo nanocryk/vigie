@@ -20,9 +20,17 @@ import {
   restartServer,
   waitForNewBuild,
 } from "@/server";
+import {
+  STEP_LABELS,
+  type UpdateStatus,
+  checkForUpdate,
+  fetchUpdateStatus,
+  startUpdate,
+} from "@/update";
 import { fetchBuild, reload } from "@/version";
 
 const PENDING_POLL_MS = 2_000;
+const UPDATE_POLL_MS = 2_000;
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -107,7 +115,103 @@ function Notifications() {
   );
 }
 
-function ServerRestart() {
+function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [supervised, setSupervised] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkForUpdate()
+      .then(setStatus)
+      .catch((err: unknown) => setError(errorMessage(err)));
+    fetchServerStatus()
+      .then((server) => setSupervised(server.supervised))
+      .catch((err: unknown) => setError(errorMessage(err)));
+  }, []);
+
+  const running = status?.run.state === "running";
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => {
+      fetchUpdateStatus()
+        .then(setStatus)
+        .catch((err: unknown) => setError(errorMessage(err)));
+    }, UPDATE_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [running]);
+
+  const built = status?.run.state === "built";
+  useEffect(() => onBuilt(built), [built, onBuilt]);
+
+  const start = () => {
+    setBusy(true);
+    setError(null);
+    startUpdate()
+      .then(setStatus)
+      .catch((err: unknown) => setError(errorMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  if (status === null) {
+    return error === null ? null : <p className="text-destructive voice-ui text-xs">{error}</p>;
+  }
+  const { check, run } = status;
+  const behind = check.state === "done" ? check.behind : 0;
+  const summary =
+    check.state === "unchecked"
+      ? "Not checked yet."
+      : check.state === "failed"
+        ? `Cannot check for updates: ${check.message}`
+        : behind === 0
+          ? "Up to date."
+          : `${behind} new ${behind === 1 ? "commit" : "commits"} upstream.`;
+  const offered = supervised === true && !running && (behind > 0 || run.state === "failed");
+  return (
+    <section className="bg-card space-y-3 rounded-[5px] border p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="voice-heading text-base">Updates</h2>
+          <p className="text-muted-foreground voice-ui text-xs">{summary}</p>
+        </div>
+        {offered && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={start}
+            className={`${BUTTON} hover:bg-muted shrink-0`}
+          >
+            {run.state === "failed" ? "Retry" : "Update"}
+          </button>
+        )}
+      </div>
+      {supervised === false && behind > 0 && (
+        <p className="voice-ui text-sm">
+          To update, stop the server, run <code className="voice-code">git pull</code> in the
+          repository, then <code className="voice-code">npm ci</code> and{" "}
+          <code className="voice-code">npm run build</code> in <code className="voice-code">web</code>,
+          and start it again with <code className="voice-code">serve.sh</code> or{" "}
+          <code className="voice-code">serve.bat</code>, which also let it update itself.
+        </p>
+      )}
+      {run.state === "running" && <p className="voice-ui text-sm">{STEP_LABELS[run.step]}...</p>}
+      {run.state === "built" && (
+        <p className="voice-ui text-sm">Update built: restart the server below to run it.</p>
+      )}
+      {run.state === "failed" && (
+        <div className="space-y-2">
+          <p className="text-destructive voice-ui text-sm">{STEP_LABELS[run.step]} failed:</p>
+          <pre className="voice-code bg-background max-h-60 overflow-auto rounded-[5px] border p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {run.output}
+          </pre>
+        </div>
+      )}
+      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+    </section>
+  );
+}
+
+function ServerRestart({ updated }: { updated: boolean }) {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -195,7 +299,9 @@ function ServerRestart() {
         <div>
           <h2 className="voice-heading text-base">Server</h2>
           <p className="text-muted-foreground voice-ui text-xs">
-            Runs the last built server binary again. The app reconnects on its own.
+            {updated
+              ? "An update is built: restart to run it. The app reconnects on its own."
+              : "Runs the last built server binary again. The app reconnects on its own."}
           </p>
         </div>
         {!confirming && (
@@ -203,7 +309,7 @@ function ServerRestart() {
             type="button"
             disabled={busy || restarting}
             onClick={ask}
-            className={`${BUTTON} hover:bg-muted shrink-0`}
+            className={`${BUTTON} shrink-0 ${updated ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
           >
             {restarting ? "Restarting..." : pending ? "Restart now" : "Restart"}
           </button>
@@ -260,6 +366,7 @@ function ServerRestart() {
 
 export function DeviceSettings({ client }: { client: Client }) {
   const snapshot = useSnapshot(client);
+  const [updated, setUpdated] = useState(false);
   return (
     <>
       <Header
@@ -273,7 +380,8 @@ export function DeviceSettings({ client }: { client: Client }) {
         <div className="mx-auto max-w-3xl space-y-4 p-4">
           <Notifications />
           <Devices />
-          <ServerRestart />
+          <Update onBuilt={setUpdated} />
+          <ServerRestart updated={updated} />
         </div>
       </main>
     </>

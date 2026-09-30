@@ -16,6 +16,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::http::auth::{self, Auth};
 use crate::http::push::{self, Pusher};
+use crate::http::update::{self, Updater};
 use crate::http::{api, files, git, upload, ws};
 use crate::session::manager::SessionManager;
 
@@ -38,6 +39,7 @@ pub struct AppState {
     /// Origins, without trailing slash, a WebSocket upgrade may come from.
     pub allowed_origins: Arc<BTreeSet<String>>,
     pub pusher: Arc<Pusher>,
+    pub updater: Arc<Updater>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -76,6 +78,7 @@ impl AppState {
             manager,
             allowed_origins: Arc::new(BTreeSet::from([format!("http://127.0.0.1:{port}")])),
             pusher,
+            updater: Arc::new(Updater::new(dir.to_path_buf())),
         })
     }
 }
@@ -116,6 +119,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/server", get(api::server))
         .route("/api/server/restart", post(api::restart_server))
         .route("/api/server/restart/cancel", post(api::cancel_restart))
+        .route("/api/update", get(update::status_route))
+        .route("/api/update/check", post(update::check_route))
+        .route("/api/update/run", post(update::run_route))
         .route("/api/push/config", get(push::config))
         .route("/api/push/subscribe", post(push::subscribe))
         .route("/api/push/unsubscribe", post(push::unsubscribe))
@@ -200,6 +206,9 @@ mod auth_gate_tests {
             (Method::GET, "/api/git/file"),
             (Method::GET, "/api/ws"),
             (Method::GET, "/api/version"),
+            (Method::GET, "/api/update"),
+            (Method::POST, "/api/update/check"),
+            (Method::POST, "/api/update/run"),
             (Method::GET, "/api/push/config"),
             (Method::POST, "/api/push/subscribe"),
             (Method::POST, "/api/push/unsubscribe"),
