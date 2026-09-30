@@ -413,9 +413,18 @@ function oneLine(text: string): string {
   return flat.length > SUMMARY_LIMIT ? `${flat.slice(0, SUMMARY_LIMIT)}...` : flat;
 }
 
+const LIST_SHOWN = 5;
+
 function shortValue(value: unknown): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return `[${value.length}]`;
+  if (Array.isArray(value)) {
+    const shown = value
+      .slice(0, LIST_SHOWN)
+      .map((item: unknown) => (Array.isArray(item) ? "[...]" : shortValue(item)))
+      .join(", ");
+    const more = value.length - LIST_SHOWN;
+    return more > 0 ? `[${shown}; and ${more} more...]` : `[${shown}]`;
+  }
   if (isRecord(value)) return "{...}";
   return String(value);
 }

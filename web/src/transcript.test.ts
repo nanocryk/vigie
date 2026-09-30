@@ -1180,7 +1180,10 @@ describe("toolSummary", () => {
     expect(toolSummary("Read", { file_path: "/a/b.ts" })).toBe("/a/b.ts");
     expect(toolSummary("Glob", { pattern: "**/*.rs" })).toBe("**/*.rs");
     expect(toolSummary("Other", { a: 1, b: "two  words", c: [1, 2], d: { e: 1 } })).toBe(
-      "a 1 · b two words · c [2] · d {...}",
+      "a 1 · b two words · c [1, 2] · d {...}",
+    );
+    expect(toolSummary("Other", { ids: [1, 2, 3, 4, 5, 6, 7], nested: [[1], { a: 1 }, "x"] })).toBe(
+      "ids [1, 2, 3, 4, 5; and 2 more...] · nested [[...], {...}, x]",
     );
     expect(toolSummary("EnterPlanMode", {})).toBe("");
     expect(toolSummary("ToolSearch", { query: "select:A,B", max_results: 2 })).toBe("select:A,B");
