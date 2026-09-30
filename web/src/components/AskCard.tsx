@@ -7,7 +7,7 @@ import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import { type Segment, broadReason, offerSegments } from "@/grant";
 import type { Side } from "@/swipe";
-import { type PendingAsk, relativePath, toolSummary } from "@/transcript";
+import { type PendingAsk, relativePath, toolDisplayName, toolSummary } from "@/transcript";
 import { type Answer, type Danger, type GrantKind, isRecord } from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
@@ -502,7 +502,7 @@ function ApprovalCard({
                 ? "Plan approval"
                 : DIFF_TOOLS.has(ask.toolName)
                   ? "Allow this change?"
-                  : `Allow ${ask.toolName}?`}
+                  : `Allow ${toolDisplayName(ask.toolName)}?`}
             </h2>
             {queued > 0 && (
               <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
@@ -660,7 +660,7 @@ function DecisionCard({
     void answer({ kind: "questions", answers });
   };
 
-  const title = questions !== null ? "Question" : `Allow ${ask.toolName}?`;
+  const title = questions !== null ? "Question" : `Allow ${toolDisplayName(ask.toolName)}?`;
 
   return (
     <CardFrame title={title} queued={queued}>

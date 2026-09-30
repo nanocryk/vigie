@@ -33,6 +33,7 @@ import {
   quietWork,
   relayFailureText,
   restartLabel,
+  toolDisplayName,
   toolTimeVisible,
   turnEndBubble,
   wakeStops,
@@ -268,7 +269,7 @@ function ToolRow({
       <summary className={TOOL_SUMMARY}>
         <StatusMark status={item.status} />
         <span className="voice-ui shrink-0">
-          {plan === null ? item.name : item.name === "Write" ? "Plan written" : "Plan edited"}
+          {plan === null ? toolDisplayName(item.name) : item.name === "Write" ? "Plan written" : "Plan edited"}
         </span>
         <span className="voice-code text-muted-foreground min-w-0 truncate">
           {plan ?? item.summary}

@@ -512,6 +512,17 @@ function summaryOf(name: string, input: unknown, cwd: string | null): string | n
   }
 }
 
+/** `mcp__<server>__<tool_name>` as `Tool Name (server)`; other names unchanged. */
+export function toolDisplayName(name: string): string {
+  const parts = name.split("__");
+  const [prefix, server, ...rest] = parts;
+  if (prefix !== "mcp" || server === undefined || server === "" || rest.length === 0) return name;
+  const words = rest.join("_").split(/[_-]+/).filter((word) => word !== "");
+  if (words.length === 0) return name;
+  const tool = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+  return `${tool} (${server})`;
+}
+
 /**
  * One readable line describing a tool call from its input; empty for a call without
  * input. File paths inside `cwd` show relative to it.

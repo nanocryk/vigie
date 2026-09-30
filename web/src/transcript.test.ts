@@ -27,6 +27,7 @@ import {
   quietWork,
   relayFailureText,
   restartLabel,
+  toolDisplayName,
   toolSummary,
   toolTimeVisible,
   turnEndBubble,
@@ -1156,6 +1157,20 @@ describe("plan asks", () => {
     expect(planFileName({ file_path: "/home/u/.claude/plans/deep/a.md" })).toBeNull();
     expect(planFileName({ file_path: "/work/plans/a.md" })).toBeNull();
     expect(planFileName({})).toBeNull();
+  });
+});
+
+describe("toolDisplayName", () => {
+  it("titles an MCP tool and names its server", () => {
+    expect(toolDisplayName("mcp__vigie2__bash_asks")).toBe("Bash Asks (vigie2)");
+    expect(toolDisplayName("mcp__claude-in-chrome__read_page")).toBe("Read Page (claude-in-chrome)");
+  });
+
+  it("leaves built-in and malformed names unchanged", () => {
+    expect(toolDisplayName("Bash")).toBe("Bash");
+    expect(toolDisplayName("mcp__vigie2")).toBe("mcp__vigie2");
+    expect(toolDisplayName("mcp____tool")).toBe("mcp____tool");
+    expect(toolDisplayName("mcp__vigie2__")).toBe("mcp__vigie2__");
   });
 });
 
