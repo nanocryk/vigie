@@ -115,6 +115,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/version", get(api::version))
         .route("/api/server", get(api::server))
         .route("/api/server/restart", post(api::restart_server))
+        .route("/api/server/restart/cancel", post(api::cancel_restart))
         .route("/api/push/config", get(push::config))
         .route("/api/push/subscribe", post(push::subscribe))
         .route("/api/push/unsubscribe", post(push::unsubscribe))

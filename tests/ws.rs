@@ -552,7 +552,21 @@ async fn a_supervised_server_restarts_on_request() {
         .request(Method::GET, "/vigie2/api/server", None)
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({"supervised": true, "turns": 0}));
+    assert_eq!(
+        body,
+        json!({"supervised": true, "pending": false, "turns": 0})
+    );
+
+    server.manager.server_restart().when_idle().unwrap();
+    let (_, body) = server
+        .request(Method::GET, "/vigie2/api/server", None)
+        .await;
+    assert_eq!(body["pending"], true);
+    let (status, _) = server
+        .request(Method::POST, "/vigie2/api/server/restart/cancel", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(server.manager.server_restart().state(), RestartState::Idle);
 
     let (status, _) = server
         .request(Method::POST, "/vigie2/api/server/restart", None)

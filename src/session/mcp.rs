@@ -6,6 +6,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
 use serde_json::{Value, json};
 
+use crate::session::server_restart::ServerRestart;
 use crate::store::{BashAsk, BashAskFilter, Store};
 
 pub const SERVER_NAME: &str = "vigie2";
@@ -16,6 +17,7 @@ const SET_ATTACHMENTS: &str = "set_attachments";
 const BASH_ASKS: &str = "bash_asks";
 const BASH_ASKS_CLEAR: &str = "bash_asks_clear";
 const BASH_ASKS_FILTER: &str = "bash_asks_filter";
+const RESTART_SERVER: &str = "restart_server";
 /// Answered when the client asks for none.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -28,6 +30,13 @@ const BASH_ASKS_DESCRIPTION: &str = "List the Bash commands the user was asked t
 const BASH_ASKS_FILTER_DESCRIPTION: &str = "Manage the rules hiding rows from `bash_asks`: commands that are not canif script candidates, such as ones the user approves one by one on purpose (`git add <paths>`) or one-off exploration. A rule is a regex matched anywhere in the command (anchor it with `^`), for one project folder and below it or for all projects, with a reason saying what it hides and why. Hidden rows are kept: removing a rule shows them again. `list` gives each rule and how many rows it matches.";
 
 const BASH_ASKS_CLEAR_DESCRIPTION: &str = "Delete rows from the list `bash_asks` returns, for instance the ones a canif script now covers, so later reviews show only new commands. Session transcripts are not touched. Rows matching every given filter are deleted; at least one filter is required.";
+
+const RESTART_SERVER_DESCRIPTION: &str = "Restart the vigie2 server on the last built binary, for instance after `server/build` built a server change. The restart waits until no turn runs in any session, this one included, so end the turn after calling it. Messages the user sends meanwhile are held and show in their discussion. Only works when the server was started by `serve.sh`. It never builds.";
+
+const RESTART_SCHEDULED: &str =
+    "Restart scheduled: it happens once no turn runs in any session, so end this turn now.";
+
+const NO_RESTART: &str = "This session cannot restart the server.";
 
 /// What one message asks of the session besides its reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +62,12 @@ impl Handled {
 }
 
 /// Answers one JSON-RPC `message`; relative paths resolve from `cwd`.
-pub async fn handle(message: &Value, cwd: &Path, store: Option<&Store>) -> Handled {
+pub async fn handle(
+    message: &Value,
+    cwd: &Path,
+    store: Option<&Store>,
+    restart: Option<&ServerRestart>,
+) -> Handled {
     let Some(id) = message.get("id").cloned() else {
         // A notification: the CLI still waits for a reply, with an empty result.
         return Handled::reply(json!({"jsonrpc": "2.0", "result": {}, "id": 0}));
@@ -79,6 +93,7 @@ pub async fn handle(message: &Value, cwd: &Path, store: Option<&Store>) -> Handl
             bash_asks_tool(),
             bash_asks_clear_tool(),
             bash_asks_filter_tool(),
+            restart_server_tool(),
         ]}))),
         Some("tools/call") => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -99,6 +114,7 @@ pub async fn handle(message: &Value, cwd: &Path, store: Option<&Store>) -> Handl
                 Some(BASH_ASKS_FILTER) => Handled::reply(success(outcome(
                     bash_asks_filter(arguments, cwd, store).await,
                 ))),
+                Some(RESTART_SERVER) => Handled::reply(success(outcome(restart_server(restart)))),
                 name => Handled::reply(failure(
                     INVALID_PARAMS,
                     format!("unknown tool {}", name.unwrap_or("(none)")),
@@ -226,6 +242,20 @@ fn bash_asks_clear_tool() -> Value {
             },
         },
     })
+}
+
+fn restart_server_tool() -> Value {
+    json!({
+        "name": RESTART_SERVER,
+        "description": RESTART_SERVER_DESCRIPTION,
+        "inputSchema": {"type": "object", "properties": {}},
+    })
+}
+
+fn restart_server(restart: Option<&ServerRestart>) -> Result<String, String> {
+    let restart = restart.ok_or_else(|| NO_RESTART.to_string())?;
+    restart.when_idle().map_err(|err| format!("{err:#}"))?;
+    Ok(RESTART_SCHEDULED.to_string())
 }
 
 fn tool_result(text: &str, is_error: bool) -> Value {
@@ -657,7 +687,7 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(super::handle(message, cwd, None))
+            .block_on(super::handle(message, cwd, None, None))
     }
 
     fn call(arguments: Value) -> Value {
@@ -688,7 +718,8 @@ mod tests {
         );
         store.record_bash_ask("ls".into(), &other, None, BashAnswer::Allowed, new);
         let run = async |name: &str, arguments: Value| {
-            let handled = super::handle(&call_tool(name, arguments), &vigie, Some(&store)).await;
+            let handled =
+                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
             let result = &handled.reply["result"];
             (
                 result["content"][0]["text"].as_str().unwrap().to_owned(),
@@ -756,7 +787,7 @@ mod tests {
             format!("{}\n  3 1/0 2026-09-20 ls", other.display())
         );
 
-        let no_history = super::handle(&call_tool(BASH_ASKS, json!({})), &vigie, None).await;
+        let no_history = super::handle(&call_tool(BASH_ASKS, json!({})), &vigie, None, None).await;
         assert_eq!(no_history.reply["result"]["isError"], true);
         assert_eq!(no_history.reply["result"]["content"][0]["text"], NO_HISTORY);
     }
@@ -776,7 +807,8 @@ mod tests {
             store.record_bash_ask(command.into(), cwd, None, BashAnswer::Allowed, at);
         }
         let run = async |name: &str, arguments: Value| {
-            let handled = super::handle(&call_tool(name, arguments), &vigie, Some(&store)).await;
+            let handled =
+                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
             let result = &handled.reply["result"];
             (
                 result["content"][0]["text"].as_str().unwrap().to_owned(),
@@ -956,6 +988,23 @@ mod tests {
         let no_list = handle(&call(json!({})), dir.path());
         assert_eq!(no_list.effect, Effect::None);
         assert_eq!(no_list.reply["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn restart_server_schedules_a_restart_when_idle() {
+        use crate::session::server_restart::{RestartState, Supervision};
+
+        let cwd = Path::new(".");
+        let message = call_tool(RESTART_SERVER, json!({}));
+        let restart = ServerRestart::new(Supervision::Shim);
+        let handled = super::handle(&message, cwd, None, Some(&restart)).await;
+        assert_eq!(handled.reply["result"]["isError"], false);
+        assert_eq!(restart.state(), RestartState::Pending);
+
+        let alone = ServerRestart::new(Supervision::None);
+        let refused = super::handle(&message, cwd, None, Some(&alone)).await;
+        assert_eq!(refused.reply["result"]["isError"], true);
+        assert_eq!(alone.state(), RestartState::Idle);
     }
 
     #[test]

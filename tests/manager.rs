@@ -19,7 +19,7 @@ use vigie2::claude::replay::{
 use vigie2::session::attachments;
 use vigie2::session::gauges::ContextSource;
 use vigie2::session::manager::{ColdCheck, Notice, NoticeKind, Probe, SessionManager};
-use vigie2::session::server_restart::{ServerRestart, Supervision};
+use vigie2::session::server_restart::{RestartState, ServerRestart, Supervision};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
 use vigie2::store::{
     EventKind, HeldEdit, HeldMessage, HeldMode, SessionState, SharedCatalog, Store, StoredEvent,
@@ -857,6 +857,48 @@ async fn turn_end_messages_go_out_as_one_when_the_turn_ends() {
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
     assert_clean_exit(stored.last().unwrap());
+}
+
+#[tokio::test]
+async fn a_pending_restart_holds_messages_and_fires_once_idle() {
+    let env = Env::new();
+    let script = env.script("held.ndjson", &held_script(false, &[]));
+    let manager = env.manager(&script).await;
+    let session = manager.create(env.cwd.clone()).await.unwrap();
+    let id = session.id();
+    manager
+        .send(id, message("go"), None, ColdCheck::Rewarm)
+        .await
+        .unwrap();
+    manager
+        .hold(id, message("a"), HeldMode::TurnEnd, None)
+        .await
+        .unwrap();
+    let restart = manager.server_restart();
+    restart.when_idle().unwrap();
+    manager
+        .send(id, message("b"), None, ColdCheck::Refuse)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(restart.state(), RestartState::Pending, "a turn still runs");
+    manager
+        .set_permission_mode(id, "acceptEdits".into())
+        .await
+        .unwrap();
+    let mut state = restart.subscribe();
+    tokio::time::timeout(TIMEOUT, state.wait_for(|state| *state == RestartState::Now))
+        .await
+        .expect("restart never fired")
+        .unwrap();
+    until_held(&manager, id, "kept a and b", |held| {
+        texts(held) == [("a", HeldMode::Held), ("b", HeldMode::Held)]
+    })
+    .await;
+    assert_eq!(sent_texts(&manager, id).await, ["go"]);
+    stop(&session).await;
+    manager.shutdown().await.unwrap();
 }
 
 #[tokio::test]

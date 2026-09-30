@@ -23,6 +23,7 @@ use super::events::{
 use super::grant::{self, FileOffer};
 use super::handle::Config;
 use super::plan::PlanTracker;
+use super::server_restart::ServerRestart;
 use super::{attachments, danger, mcp, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
@@ -127,6 +128,7 @@ pub struct Actor {
     child: Child,
     events: broadcast::Sender<Arc<Event>>,
     history: Option<Store>,
+    server_restart: Option<ServerRestart>,
     /// How the session ends, once decided; an unrequested exit leaves it `None`.
     end: Option<SessionState>,
     /// Set when the stop was requested for a reason.
@@ -170,6 +172,7 @@ impl Actor {
             child,
             events,
             history: config.history,
+            server_restart: config.server_restart,
             end: None,
             stop_reason: None,
             seq: config.last_seq,
@@ -375,8 +378,13 @@ impl Actor {
             }
             CliRequest::McpMessage(message) => {
                 let response = if message.server_name == mcp::SERVER_NAME {
-                    let handled =
-                        mcp::handle(&message.message, &self.cwd, self.history.as_ref()).await;
+                    let handled = mcp::handle(
+                        &message.message,
+                        &self.cwd,
+                        self.history.as_ref(),
+                        self.server_restart.as_ref(),
+                    )
+                    .await;
                     if let mcp::Effect::SetAttachments(paths) = handled.effect {
                         self.turn_attachments = paths;
                     }

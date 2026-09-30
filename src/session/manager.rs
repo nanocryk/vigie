@@ -20,7 +20,7 @@ use crate::session::advice::RestartMeasure;
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{self, MainRequest};
-use crate::session::server_restart::ServerRestart;
+use crate::session::server_restart::{RestartState, ServerRestart};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
@@ -54,6 +54,7 @@ struct Inner {
     signals: Signals,
     sampler: AbortHandle,
     cache_watch: AbortHandle,
+    restart_watch: AbortHandle,
     /// What each client connection shows, by connection.
     presence: parking_lot::Mutex<HashMap<Uuid, Presence>>,
     notices: broadcast::Sender<Notice>,
@@ -92,6 +93,8 @@ pub enum ColdCheck {
 /// How long before a 1 hour cache goes cold its warning comes.
 pub const CACHE_WARNING_BEFORE: TimeDelta = TimeDelta::minutes(10);
 const CACHE_WATCH_INTERVAL: Duration = Duration::from_secs(60);
+/// How often a pending server restart checks whether every turn ended.
+const RESTART_IDLE_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy)]
 struct Presence {
@@ -190,6 +193,7 @@ impl Drop for Inner {
     fn drop(&mut self) {
         self.sampler.abort();
         self.cache_watch.abort();
+        self.restart_watch.abort();
     }
 }
 
@@ -205,6 +209,7 @@ impl SessionManager {
         restart: ServerRestart,
     ) -> Result<Self> {
         store.stop_running().await?;
+        let restart_state = restart.subscribe();
         let inner = Arc::new_cyclic(|inner| Inner {
             store,
             program,
@@ -214,6 +219,8 @@ impl SessionManager {
             signals: Signals::new(),
             sampler: tokio::spawn(sample_periodically(inner.clone())).abort_handle(),
             cache_watch: tokio::spawn(warn_cold_caches(inner.clone())).abort_handle(),
+            restart_watch: tokio::spawn(restart_when_idle(inner.clone(), restart_state))
+                .abort_handle(),
             presence: parking_lot::Mutex::new(HashMap::new()),
             notices: broadcast::channel(CHANGES_CAPACITY).0,
             seen: broadcast::channel(CHANGES_CAPACITY).0,
@@ -308,6 +315,7 @@ impl SessionManager {
         let id = Uuid::new_v4();
         let (session, mut events) = Session::spawn(Config {
             history: None,
+            server_restart: None,
             ..self.config(id, dir, Launch::New(id))
         })?;
         let applied = tokio::time::timeout(PROBE_TIMEOUT, session.applied_settings()).await;
@@ -567,10 +575,33 @@ impl SessionManager {
         cold: ColdCheck,
     ) -> Result<()> {
         self.unarchive(id).await?;
+        if self.restart_pending() {
+            self.inner
+                .store
+                .hold(id, message.text, message.attachments, HeldMode::Held)
+                .await?;
+            self.inner.signals.session(id);
+            return Ok(());
+        }
         if cold == ColdCheck::Refuse {
             self.ensure_warm(id).await?;
         }
         self.open(id).await?.send(message, client_id).await
+    }
+
+    /// Sessions whose main agent runs a turn.
+    pub async fn running_turns(&self) -> usize {
+        self.inner
+            .live
+            .lock()
+            .await
+            .values()
+            .filter(|session| !session.is_closed() && session.status().borrow().turn)
+            .count()
+    }
+
+    fn restart_pending(&self) -> bool {
+        self.inner.restart.state() == RestartState::Pending
     }
 
     /// Queues a message on the discussion. A `TurnEnd` one while no turn of the
@@ -787,6 +818,7 @@ impl SessionManager {
             launch,
             program: self.inner.program.clone(),
             history: Some(self.inner.store.clone()),
+            server_restart: Some(self.inner.restart.clone()),
             last_seq: 0,
             permission_mode: None,
             settings: ModelSettings::default(),
@@ -850,9 +882,36 @@ fn announce_changes(session: &Session, signals: Signals) -> impl Future<Output =
     }
 }
 
+/// Fires each pending server restart once no turn runs in any session.
+async fn restart_when_idle(inner: Weak<Inner>, mut state: watch::Receiver<RestartState>) {
+    loop {
+        if state
+            .wait_for(|state| *state == RestartState::Pending)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        loop {
+            tokio::time::sleep(RESTART_IDLE_POLL).await;
+            let Some(inner) = inner.upgrade() else {
+                return;
+            };
+            let manager = SessionManager { inner };
+            if manager.inner.restart.state() != RestartState::Pending {
+                break;
+            }
+            if manager.running_turns().await == 0 {
+                manager.inner.restart.fire_pending();
+                break;
+            }
+        }
+    }
+}
+
 /// Sends the discussion's `TurnEnd` messages each time a turn of the main agent
-/// ends normally; a turn ending in an error or an interrupt, or the child
-/// exiting, switches them to `Held` instead. A lagged receiver may have missed
+/// ends normally; a turn ending in an error or an interrupt, the child
+/// exiting, or a pending server restart switches them to `Held` instead. A lagged receiver may have missed
 /// the end of a turn, so a lag with no turn running counts as a normal end.
 async fn send_held_at_turn_ends(
     id: Uuid,
@@ -878,7 +937,7 @@ async fn send_held_at_turn_ends(
             return;
         };
         let manager = SessionManager { inner };
-        if normal {
+        if normal && !manager.restart_pending() {
             if let Err(err) = manager.send_turn_end(id).await {
                 tracing::warn!("send the held messages of session {id}: {err:#}");
             }

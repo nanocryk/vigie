@@ -62,6 +62,7 @@ impl Harness {
             launch: Launch::New(claude_session),
             program: fake(recording),
             history: None,
+            server_restart: None,
             last_seq: 0,
             permission_mode: None,
             settings: ModelSettings::default(),

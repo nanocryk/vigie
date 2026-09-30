@@ -13,8 +13,16 @@ import {
   pushSupported,
   sendTestPush,
 } from "@/push";
-import { type ServerStatus, fetchServerStatus, restartServer } from "@/server";
-import { reload } from "@/version";
+import {
+  type ServerStatus,
+  cancelRestart,
+  fetchServerStatus,
+  restartServer,
+  waitForNewBuild,
+} from "@/server";
+import { fetchBuild, reload } from "@/version";
+
+const PENDING_POLL_MS = 2_000;
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -112,6 +120,47 @@ function ServerRestart() {
       .catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
+  // A pending restart fires on its own once every turn ends: follow it, then reload.
+  const pending = status?.pending === true;
+  useEffect(() => {
+    if (!pending || restarting) return;
+    let cancelled = false;
+    let before: string | null = null;
+    void fetchBuild().then((build) => (before = build));
+    const timer = window.setInterval(() => {
+      fetchServerStatus()
+        .then((fresh) => {
+          if (!cancelled) setStatus(fresh);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          cancelled = true;
+          window.clearInterval(timer);
+          setRestarting(true);
+          waitForNewBuild(before)
+            .then(reload)
+            .catch((err: unknown) => {
+              setRestarting(false);
+              setError(errorMessage(err));
+            });
+        });
+    }, PENDING_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pending, restarting]);
+
+  const cancel = () => {
+    setBusy(true);
+    setError(null);
+    cancelRestart()
+      .then(fetchServerStatus)
+      .then(setStatus)
+      .catch((err: unknown) => setError(errorMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
   const ask = () => {
     setBusy(true);
     setError(null);
@@ -156,10 +205,26 @@ function ServerRestart() {
             onClick={ask}
             className={`${BUTTON} hover:bg-muted shrink-0`}
           >
-            {restarting ? "Restarting..." : "Restart"}
+            {restarting ? "Restarting..." : pending ? "Restart now" : "Restart"}
           </button>
         )}
       </div>
+      {pending && !restarting && !confirming && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="voice-ui text-sm">
+            Restart pending: waits for {turns} running {turns === 1 ? "turn" : "turns"} to end.
+            Messages sent meanwhile are held.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={cancel}
+            className={`${BUTTON} hover:bg-muted shrink-0`}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {confirming && (
         <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
           <p className="voice-heading text-destructive text-base">Restart the server now?</p>

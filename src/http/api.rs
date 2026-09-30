@@ -18,7 +18,7 @@ use tracing::warn;
 use crate::AppState;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
 use crate::session::manager::SessionManager;
-use crate::session::server_restart::Supervision;
+use crate::session::server_restart::{RestartState, Supervision};
 
 /// A failed request, answered `{"error": code}` with its status.
 #[derive(Debug)]
@@ -130,11 +130,20 @@ pub async fn version(State(state): State<AppState>) -> Response {
     Json(json!({"build": format!("{:016x}", hasher.finish())})).into_response()
 }
 
-/// Whether the server can restart itself, and how many turns a restart would stop.
+/// Whether the server can restart itself, whether a restart waits for every turn
+/// to end, and how many turns run.
 pub async fn server(State(state): State<AppState>) -> Response {
-    let supervised = state.manager.server_restart().supervision() == Supervision::Shim;
-    let turns = running_turns(&state.manager).await;
-    Json(json!({"supervised": supervised, "turns": turns})).into_response()
+    let restart = state.manager.server_restart();
+    let supervised = restart.supervision() == Supervision::Shim;
+    let pending = restart.state() == RestartState::Pending;
+    let turns = state.manager.running_turns().await;
+    Json(json!({"supervised": supervised, "pending": pending, "turns": turns})).into_response()
+}
+
+/// Drops a restart waiting for every turn to end; messages held meanwhile stay held.
+pub async fn cancel_restart(State(state): State<AppState>) -> Response {
+    state.manager.server_restart().cancel();
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Stops the server now, stopping running turns, for the shim to run it again.
@@ -143,15 +152,6 @@ pub async fn restart_server(State(state): State<AppState>) -> Result<Response, A
         return Err(ApiError::new(StatusCode::CONFLICT, "not_supervised"));
     }
     Ok(StatusCode::ACCEPTED.into_response())
-}
-
-async fn running_turns(manager: &SessionManager) -> usize {
-    manager
-        .live_views()
-        .await
-        .values()
-        .filter(|view| view.status.turn)
-        .count()
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {

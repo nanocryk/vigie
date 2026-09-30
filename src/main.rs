@@ -383,7 +383,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
     served?;
     Ok(match manager.server_restart().state() {
         RestartState::Now => ExitCode::from(server_restart::EXIT_CODE),
-        RestartState::Idle => ExitCode::SUCCESS,
+        RestartState::Idle | RestartState::Pending => ExitCode::SUCCESS,
     })
 }
 

@@ -22,6 +22,7 @@ use crate::claude::protocol::{
     AppliedSettings, ContextUsageResponse, GetUsageResponse, HostRequest, InterruptResponse,
     PermissionMode, SetPermissionModeResponse, SettingsResponse,
 };
+use crate::session::server_restart::ServerRestart;
 use crate::store::Store;
 
 const EVENT_CAPACITY: usize = 4096;
@@ -36,6 +37,8 @@ pub struct Config {
     pub program: Program,
     /// Receives every event before it is broadcast, and the session's state.
     pub history: Option<Store>,
+    /// What the `restart_server` MCP tool schedules.
+    pub server_restart: Option<ServerRestart>,
     /// Seq of the session's latest event; the next one gets `last_seq + 1`.
     pub last_seq: u64,
     /// `--permission-mode` for the child; `None` lets the CLI pick its default.

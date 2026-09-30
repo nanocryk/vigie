@@ -1,8 +1,12 @@
 import { fetchBuild } from "@/version";
 
-/** Whether the server can restart itself, and how many turns a restart would stop. */
+/**
+ * Whether the server can restart itself, whether a restart waits for every turn
+ * to end, and how many turns run.
+ */
 export interface ServerStatus {
   supervised: boolean;
+  pending: boolean;
   turns: number;
 }
 
@@ -11,14 +15,18 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
     throw new Error(`${label}: expected an object: ${JSON.stringify(raw)}`);
   }
   const supervised: unknown = Reflect.get(raw, "supervised");
+  const pending: unknown = Reflect.get(raw, "pending");
   const turns: unknown = Reflect.get(raw, "turns");
   if (typeof supervised !== "boolean") {
     throw new Error(`${label}.supervised: expected a boolean: ${JSON.stringify(supervised)}`);
   }
+  if (typeof pending !== "boolean") {
+    throw new Error(`${label}.pending: expected a boolean: ${JSON.stringify(pending)}`);
+  }
   if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 0) {
     throw new Error(`${label}.turns: expected a count: ${JSON.stringify(turns)}`);
   }
-  return { supervised, turns };
+  return { supervised, pending, turns };
 }
 
 async function check(response: Response): Promise<void> {
@@ -28,7 +36,7 @@ async function check(response: Response): Promise<void> {
 }
 
 export async function fetchServerStatus(): Promise<ServerStatus> {
-  const response = await fetch("api/server");
+  const response = await fetch("api/server", { cache: "no-store" });
   await check(response);
   return parseServerStatus(await response.json(), "server status");
 }
@@ -36,13 +44,8 @@ export async function fetchServerStatus(): Promise<ServerStatus> {
 const BACK_POLL_MS = 1_000;
 const BACK_TIMEOUT_MS = 60_000;
 
-/**
- * Stops the server now, running turns included; the shim runs it again.
- * Resolves once the new process answers, rejects if it does not within a minute.
- */
-export async function restartServer(): Promise<void> {
-  const before = await fetchBuild();
-  await check(await fetch("api/server/restart", { method: "POST" }));
+/** Resolves once the server answers with a build other than `before`; rejects after a minute. */
+export async function waitForNewBuild(before: string | null): Promise<void> {
   const deadline = Date.now() + BACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, BACK_POLL_MS));
@@ -50,4 +53,19 @@ export async function restartServer(): Promise<void> {
     if (build !== null && build !== before) return;
   }
   throw new Error("The server did not come back within a minute");
+}
+
+/**
+ * Stops the server now, running turns included; the shim runs it again.
+ * Resolves once the new process answers.
+ */
+export async function restartServer(): Promise<void> {
+  const before = await fetchBuild();
+  await check(await fetch("api/server/restart", { method: "POST" }));
+  await waitForNewBuild(before);
+}
+
+/** Drops a restart waiting for every turn to end. */
+export async function cancelRestart(): Promise<void> {
+  await check(await fetch("api/server/restart/cancel", { method: "POST" }));
 }

@@ -29,11 +29,13 @@ impl Supervision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartState {
     Idle,
+    /// Restart once no turn runs; messages sent meanwhile are held.
+    Pending,
     /// Stop the server now and exit with `EXIT_CODE`.
     Now,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ServerRestart {
     supervision: Supervision,
     state: watch::Sender<RestartState>,
@@ -61,10 +63,50 @@ impl ServerRestart {
 
     /// Asks for a restart now; refused when no shim would run the server again.
     pub fn now(&self) -> Result<()> {
+        self.ensure_supervised()?;
+        self.state.send_replace(RestartState::Now);
+        Ok(())
+    }
+
+    /// Asks for a restart once no turn runs; a restart already under way stays as is.
+    pub fn when_idle(&self) -> Result<()> {
+        self.ensure_supervised()?;
+        self.state.send_if_modified(|state| {
+            let idle = *state == RestartState::Idle;
+            if idle {
+                *state = RestartState::Pending;
+            }
+            idle
+        });
+        Ok(())
+    }
+
+    /// Drops a pending restart; resolves to whether one was pending.
+    pub fn cancel(&self) -> bool {
+        self.state.send_if_modified(|state| {
+            let pending = *state == RestartState::Pending;
+            if pending {
+                *state = RestartState::Idle;
+            }
+            pending
+        })
+    }
+
+    /// Turns a pending restart into a restart now; resolves to whether one was pending.
+    pub fn fire_pending(&self) -> bool {
+        self.state.send_if_modified(|state| {
+            let pending = *state == RestartState::Pending;
+            if pending {
+                *state = RestartState::Now;
+            }
+            pending
+        })
+    }
+
+    fn ensure_supervised(&self) -> Result<()> {
         if self.supervision == Supervision::None {
             bail!("the server was not started by serve.sh, so it cannot restart itself");
         }
-        self.state.send_replace(RestartState::Now);
         Ok(())
     }
 }
@@ -83,5 +125,20 @@ mod tests {
         let receiver = supervised.subscribe();
         supervised.now().unwrap();
         assert_eq!(*receiver.borrow(), RestartState::Now);
+    }
+
+    #[test]
+    fn a_pending_restart_can_be_cancelled_but_not_one_under_way() {
+        let restart = ServerRestart::new(Supervision::Shim);
+        assert!(ServerRestart::new(Supervision::None).when_idle().is_err());
+        restart.when_idle().unwrap();
+        assert_eq!(restart.state(), RestartState::Pending);
+        assert!(restart.cancel());
+        assert_eq!(restart.state(), RestartState::Idle);
+
+        restart.now().unwrap();
+        restart.when_idle().unwrap();
+        assert!(!restart.cancel());
+        assert_eq!(restart.state(), RestartState::Now);
     }
 }
