@@ -44,7 +44,7 @@ function StatusMark({ status }: { status: FileStatus }) {
   );
 }
 
-function Counts({ file }: { file: Pick<ChangedFile, "added" | "removed"> }) {
+export function Counts({ file }: { file: Pick<ChangedFile, "added" | "removed"> }) {
   return (
     <span className="voice-code shrink-0 text-xs whitespace-nowrap">
       {file.added > 0 && <span className="text-git-added">+{file.added}</span>}

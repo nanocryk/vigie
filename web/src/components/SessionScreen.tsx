@@ -426,6 +426,13 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
   const repo = useRepoRoot(view?.cwd ?? null);
+  const openDiff =
+    view === null || repo === null
+      ? null
+      : () => {
+          changeExplorer((state) => openSessionDiff(state, view.id, view.cwd, repo));
+          navigate({ kind: "files" });
+        };
   const serverError = snapshot.sessionErrors.get(id) ?? null;
   const [pending, setPending] = useState<ScopedSend[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -1045,13 +1052,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         end={
           view !== null && (
             <>
-              {repo !== null && (
+              {repo !== null && openDiff !== null && (
                 <button
                   type="button"
-                  onClick={() => {
-                    changeExplorer((state) => openSessionDiff(state, view.id, view.cwd, repo));
-                    navigate({ kind: "files" });
-                  }}
+                  onClick={openDiff}
                   title={`Pending changes in ${folderName(repo)}`}
                   className={THIN_BUTTON}
                 >
@@ -1102,6 +1106,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           );
           navigateBackLeaves();
         }}
+        onOpenDiff={openDiff}
         background={viewing === null ? (view?.background ?? []) : []}
         onStopTask={stopBackground}
         bottomRequest={bottomRequest}

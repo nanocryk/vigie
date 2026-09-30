@@ -19,6 +19,7 @@ import {
   stringOrNull,
 } from "@/wire";
 import { composeText } from "@/attachments";
+import { toolDiff } from "@/diff";
 
 /** The `attachments` field of an item: absent when there are none. */
 function attached(paths: readonly string[]): { attachments?: readonly string[] } {
@@ -84,6 +85,8 @@ export type Delivery = "on_host" | "received" | "handled";
  */
 export type Item = {
   time: number | null;
+  /** Seq of the event that added it. */
+  seq: number;
   /** Not shown: the parts of a faithful relay in the main discussion, `set_attachments` calls. */
   hidden?: true;
 } & ItemBody;
@@ -143,7 +146,9 @@ type ItemBody =
       raw: string;
     }
   /** The main agent did not pass a relayed message on as asked. */
-  | { kind: "relay_failed"; key: string; reason: RelayFailure };
+  | { kind: "relay_failed"; key: string; reason: RelayFailure }
+  /** The files a turn's edit tools changed, its subagents' included; lines summed over the calls. */
+  | { kind: "changes"; key: string; files: number; added: number; removed: number };
 
 /** What an agent's view knows of it from the lines: its Agent call and task. */
 export interface AgentInfo {
@@ -299,6 +304,8 @@ export interface TranscriptState {
   stopping: StopReason | null;
   /** A turn has started and its `result` has not arrived. */
   turnOpen: boolean;
+  /** Seq of the event that opened the latest turn; null before any. */
+  turnStartSeq: number | null;
   /** User messages not echoed yet, oldest first. */
   outbox: readonly Outgoing[];
   /** Folder the session runs in, from its `started` event; tool paths inside it show relative. */
@@ -348,6 +355,7 @@ export const emptyTranscript: TranscriptState = {
   interrupted: false,
   stopping: null,
   turnOpen: false,
+  turnStartSeq: null,
   outbox: [],
   cwd: null,
   permissionMode: null,
@@ -517,6 +525,7 @@ class Draft {
   interrupted: boolean;
   stopping: StopReason | null;
   turnOpen: boolean;
+  turnStartSeq: number | null;
   outbox: Outgoing[];
   cwd: string | null;
   permissionMode: string | null;
@@ -546,6 +555,7 @@ class Draft {
     this.interrupted = state.interrupted;
     this.stopping = state.stopping;
     this.turnOpen = state.turnOpen;
+    this.turnStartSeq = state.turnStartSeq;
     this.outbox = state.outbox.map((entry) => ({ ...entry }));
     this.cwd = state.cwd;
     this.permissionMode = state.permissionMode;
@@ -572,6 +582,7 @@ class Draft {
       interrupted: this.interrupted,
       stopping: this.stopping,
       turnOpen: this.turnOpen,
+      turnStartSeq: this.turnStartSeq,
       outbox: this.outbox,
       cwd: this.cwd,
       permissionMode: this.permissionMode,
@@ -749,7 +760,44 @@ class Draft {
 
   private add(body: ItemBody): void {
     if (this.prelude) return;
-    this.items.push({ ...body, time: this.time });
+    this.items.push({ ...body, time: this.time, seq: this.lastSeq });
+  }
+
+  private openTurn(): void {
+    if (this.turnOpen) return;
+    this.turnOpen = true;
+    this.turnStartSeq = this.lastSeq;
+  }
+
+  /** Every discussion's items: this one's, then each agent's. */
+  private allItems(): (readonly Item[])[] {
+    const scopes = new Map<string, readonly Item[]>();
+    for (const [id, state] of this.scopeStates) scopes.set(id, state.items);
+    for (const [id, draft] of this.scopeDrafts) scopes.set(id, draft.items);
+    return [this.items, ...scopes.values()];
+  }
+
+  /** Closes a turn with the files its edit tools changed, when any. */
+  private turnChanges(key: string): void {
+    const start = this.turnStartSeq;
+    if (start === null) return;
+    const files = new Set<string>();
+    let added = 0;
+    let removed = 0;
+    for (const items of this.allItems()) {
+      for (const item of items) {
+        if (item.kind !== "tool" || item.seq < start || item.status !== "ok") continue;
+        const path = field(item.input, "file_path");
+        if (path === null) continue;
+        const diff = toolDiff({ ...item, path });
+        if (diff === null) continue;
+        files.add(path);
+        added += diff.added;
+        removed += diff.removed;
+      }
+    }
+    if (files.size === 0) return;
+    this.add({ kind: "changes", key, files: files.size, added, removed });
   }
 
   /** Hides the item just added, if one was. */
@@ -934,7 +982,7 @@ class Draft {
       case "assistant":
         if (line.parentToolUseId !== this.scope) return;
         this.answered(false);
-        this.turnOpen = true;
+        this.openTurn();
         this.assistant(line.messageId, line.content, key);
         return;
       case "system":
@@ -942,7 +990,7 @@ class Draft {
           this.task(line, key);
           return;
         }
-        if (line.subtype === "init") this.turnOpen = true;
+        if (line.subtype === "init") this.openTurn();
         if (line.subtype === "init" && line.terminalCommands !== null) {
           this.terminalCommands = line.terminalCommands;
         }
@@ -953,7 +1001,7 @@ class Draft {
         return;
       case "stream_event":
         if (line.parentToolUseId !== this.scope) return;
-        this.turnOpen = true;
+        this.openTurn();
         switch (line.event.type) {
           case "message_start":
             this.streamMessage = line.event.messageId;
@@ -980,6 +1028,7 @@ class Draft {
         }
         this.interrupted = false;
         this.answered(true);
+        if (this.scope === null) this.turnChanges(`${key}:changes`);
         this.turnOpen = false;
         this.endStreaming();
         return;
@@ -1042,7 +1091,7 @@ class Draft {
    * what follows it is the typed message, or the closing line when none was typed.
    */
   private echo(echoed: string, key: string): void {
-    this.turnOpen = true;
+    this.openTurn();
     const seed = this.pendingSeed;
     this.pendingSeed = null;
     const prefix = seed === null ? null : `${seed}\n\n`;

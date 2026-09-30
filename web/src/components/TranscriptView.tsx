@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { DiffBlock } from "@/components/Diff";
+import { Counts } from "@/components/DiffView";
 import { Markdown } from "@/components/Markdown";
 import { useClock, useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
@@ -437,6 +438,33 @@ function BubbleBody({
 
 const OpenAttachment = createContext<(path: string) => void>(() => {});
 
+/** Opens the session's diff view; null outside a repository. */
+const OpenDiff = createContext<(() => void) | null>(null);
+
+/** The files a turn changed, opening the diff view when the folder is a repository. */
+function ChangesRow({ item }: { item: Extract<Item, { kind: "changes" }> }) {
+  const openDiff = useContext(OpenDiff);
+  const files = item.files === 1 ? "1 file" : `${item.files} files`;
+  const body = (
+    <>
+      <span className="voice-code text-primary w-7 shrink-0 text-xs">±</span>
+      <span className="voice-ui shrink-0">Changed {files}</span>
+      <Counts file={item} />
+    </>
+  );
+  return openDiff === null ? (
+    <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>{body}</div>
+  ) : (
+    <button
+      type="button"
+      onClick={openDiff}
+      className={`${TOOL_SUMMARY} border-ring w-full border-l-2 text-left text-sm`}
+    >
+      {body}
+    </button>
+  );
+}
+
 /**
  * A bubble's files, as a row of chips hanging over its bottom edge. The bubble
  * leaves `BUBBLE_FILES_ROOM` below it for the overhang.
@@ -596,6 +624,8 @@ const ItemView = memo(function ItemView({
       );
     case "task_end":
       return <TaskEndRow item={item} />;
+    case "changes":
+      return <ChangesRow item={item} />;
     case "brief":
       return (
         <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
@@ -699,6 +729,7 @@ export function TranscriptView({
   turnOpen,
   onOpen,
   onOpenAttachment,
+  onOpenDiff,
   background,
   onStopTask,
   bottomRequest,
@@ -726,6 +757,8 @@ export function TranscriptView({
   onOpen: (toolUseId: string | null) => void;
   /** Opens the file of a bubble's attachment chip. */
   onOpenAttachment: (path: string) => void;
+  /** Opens the session's diff view; null outside a repository. */
+  onOpenDiff: (() => void) | null;
   /** Background tasks, listed at the end with a Stop button each. */
   background: readonly BackgroundView[];
   onStopTask: (taskId: string) => Promise<void>;
@@ -890,6 +923,7 @@ export function TranscriptView({
             </div>
           )}
           <OpenAttachment.Provider value={onOpenAttachment}>
+          <OpenDiff.Provider value={onOpenDiff}>
             {items.map((item, index) => (
               <ItemView
                 key={item.key}
@@ -905,6 +939,7 @@ export function TranscriptView({
             {pending.map((send) => (
               <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
             ))}
+          </OpenDiff.Provider>
           </OpenAttachment.Provider>
           {pending.length === 0 && quietWork(items, turnOpen) && (
             <div

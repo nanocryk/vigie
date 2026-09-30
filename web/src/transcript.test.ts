@@ -111,10 +111,13 @@ type Shape =
   | ["agent", string]
   | ["brief", string]
   | ["relay_failed", string]
-  | ["task_end", string, string];
+  | ["task_end", string, string]
+  | ["changes", number, number, number];
 
 function shape(item: Item): Shape {
   switch (item.kind) {
+    case "changes":
+      return ["changes", item.files, item.added, item.removed];
     case "task_end":
       return ["task_end", item.status, item.summary];
     case "agent":
@@ -428,6 +431,7 @@ describe("times", () => {
             kind,
             key: String(time),
             time,
+            seq: 0,
             toolUseId: "t",
             name: "Bash",
             summary: "",
@@ -438,7 +442,7 @@ describe("times", () => {
             endTime: null,
             attached: null,
           }
-        : { kind, key: String(time), time, tone: "info", text: "", detail: null };
+        : { kind, key: String(time), time, seq: 0, tone: "info", text: "", detail: null };
     const items = [
       item(minute + 5_000),
       item(minute + 50_000),
@@ -1251,6 +1255,7 @@ describe("quietWork", () => {
     delivery: "handled",
     clientId: null,
     time: null,
+    seq: 0,
   };
   const tool = (status: "running" | "ok"): Item => ({
     kind: "tool",
@@ -1265,6 +1270,7 @@ describe("quietWork", () => {
     endTime: null,
     attached: null,
     time: null,
+    seq: 0,
   });
   const claude = (streaming: boolean): Item => ({
     kind: "claude",
@@ -1272,6 +1278,7 @@ describe("quietWork", () => {
     text: "hi",
     streaming,
     time: null,
+    seq: 0,
   });
 
   it("shows while a turn runs with nothing moving on screen", () => {
@@ -1283,7 +1290,7 @@ describe("quietWork", () => {
 
   it("hides behind a running tool, live thinking or streaming text", () => {
     expect(quietWork([user, tool("running")], true)).toBe(false);
-    expect(quietWork([user, { kind: "thinking", key: "k", text: "", time: null }], true)).toBe(
+    expect(quietWork([user, { kind: "thinking", key: "k", text: "", time: null, seq: 0 }], true)).toBe(
       false,
     );
     expect(quietWork([user, claude(true)], true)).toBe(false);
@@ -1337,5 +1344,75 @@ describe("ask context", () => {
       assistant(2, [{ type: "text", text: "Agent text." }, bash("b1")], "a1"),
     ]);
     expect(askContext(state, "b1")).toBe("Agent text.");
+  });
+});
+
+describe("turn changes", () => {
+  const line = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "line",
+    payload,
+  });
+  const call = (seq: number, block: unknown, parent: string | null = null) =>
+    line(seq, {
+      type: "assistant",
+      message: { id: `m${seq}`, role: "assistant", content: [block] },
+      parent_tool_use_id: parent,
+    });
+  const done = (seq: number, id: string, isError = false, parent: string | null = null) =>
+    line(seq, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: id, content: "done", is_error: isError }],
+      },
+      parent_tool_use_id: parent,
+    });
+  const edit = (id: string, file: string, from: string, to: string) => ({
+    type: "tool_use",
+    id,
+    name: "Edit",
+    input: { file_path: file, old_string: from, new_string: to },
+  });
+  const echo = (seq: number) =>
+    line(seq, { type: "user", message: { role: "user", content: "go" }, parent_tool_use_id: null });
+  const result = (seq: number) => line(seq, { type: "result", subtype: "success", is_error: false });
+
+  it("closes a turn with its edits and its subagents', failed calls left out", () => {
+    const state = applyEvents(emptyTranscript, [
+      echo(1),
+      call(2, edit("e1", "/p/a.ts", "x", "y\nz")),
+      done(3, "e1"),
+      call(4, { type: "tool_use", id: "a1", name: "Agent", input: { description: "help" } }),
+      call(
+        5,
+        { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/p/b.ts", content: "q\n" } },
+        "a1",
+      ),
+      done(6, "w1", false, "a1"),
+      call(7, edit("e2", "/p/a.ts", "y", "w")),
+      done(8, "e2", true),
+      call(9, edit("e3", "/p/a.ts", "z", "v")),
+      done(10, "e3"),
+      result(11),
+    ]);
+    expect(state.items.map(shape).at(-1)).toEqual(["changes", 2, 4, 2]);
+  });
+
+  it("counts only the turn it closes, and nothing for a turn without edits", () => {
+    const state = applyEvents(emptyTranscript, [
+      echo(1),
+      call(2, edit("e1", "/p/a.ts", "x", "y")),
+      done(3, "e1"),
+      result(4),
+      echo(5),
+      call(6, { type: "text", text: "Nothing to change." }),
+      result(7),
+    ]);
+    expect(state.items.filter((item) => item.kind === "changes").map(shape)).toEqual([
+      ["changes", 1, 1, 1],
+    ]);
   });
 });
