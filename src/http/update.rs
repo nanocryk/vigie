@@ -26,7 +26,6 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Output lines kept from a failed step.
 const OUTPUT_LINES: usize = 40;
-const NPM: &str = if cfg!(windows) { "npm.cmd" } else { "npm" };
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -142,13 +141,20 @@ impl Updater {
         let web = repo.join("web");
         self.enter(Step::Clean);
         clean(repo).await.map_err(|output| (Step::Clean, output))?;
-        let steps: [(Step, &str, &[&str], &Path, Duration); 4] = [
-            (Step::Pull, "git", &["pull", "--ff-only"], repo, GIT_TIMEOUT),
-            (Step::Install, NPM, &["ci"], &web, BUILD_TIMEOUT),
-            (Step::Web, NPM, &["run", "build"], &web, BUILD_TIMEOUT),
+        let npm = npm().map_err(|output| (Step::Install, output))?;
+        let steps: [(Step, &Path, &[&str], &Path, Duration); 4] = [
+            (
+                Step::Pull,
+                Path::new("git"),
+                &["pull", "--ff-only"],
+                repo,
+                GIT_TIMEOUT,
+            ),
+            (Step::Install, &npm, &["ci"], &web, BUILD_TIMEOUT),
+            (Step::Web, &npm, &["run", "build"], &web, BUILD_TIMEOUT),
             (
                 Step::Server,
-                "cargo",
+                Path::new("cargo"),
                 &["build", "--release", "--bin", "vigie"],
                 repo,
                 BUILD_TIMEOUT,
@@ -219,13 +225,48 @@ async fn count(repo: &Path, range: &str) -> Result<u32, String> {
         .map_err(|err| format!("git rev-list gave {:?}: {err}", output.trim()))
 }
 
+/// npm installs ship its launcher as `npm.cmd` or `npm.exe`: the first PATHEXT match on PATH.
+#[cfg(windows)]
+fn npm() -> Result<PathBuf, String> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+    find_program("npm", &path, &pathext).ok_or_else(|| not_found(Path::new("npm")))
+}
+
+#[cfg(not(windows))]
+fn npm() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("npm"))
+}
+
+#[cfg(windows)]
+fn find_program(name: &str, path: &std::ffi::OsStr, pathext: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .flat_map(|dir| {
+            pathext
+                .split(';')
+                .filter(|ext| !ext.is_empty())
+                .map(move |ext| dir.join(format!("{name}{}", ext.to_ascii_lowercase())))
+        })
+        .find(|candidate| candidate.is_file())
+}
+
+fn not_found(program: &Path) -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    format!(
+        "{} not found on the server's PATH: {}",
+        program.display(),
+        path.to_string_lossy()
+    )
+}
+
 /// Runs `program` in `dir`: its stdout on success, else the end of its output.
 async fn run(
-    program: &str,
+    program: impl AsRef<Path>,
     args: &[&str],
     dir: &Path,
     timeout: Duration,
 ) -> Result<String, String> {
+    let program = program.as_ref();
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
@@ -238,10 +279,16 @@ async fn run(
         .kill_on_drop(true);
     let output = tokio::time::timeout(timeout, command.output())
         .await
-        .map_err(|_| format!("{program} timed out after {} s", timeout.as_secs()))?
+        .map_err(|_| {
+            format!(
+                "{} timed out after {} s",
+                program.display(),
+                timeout.as_secs()
+            )
+        })?
         .map_err(|err| match err.kind() {
-            io::ErrorKind::NotFound => format!("{program} not found on the server's PATH"),
-            _ => format!("cannot run {program}: {err}"),
+            io::ErrorKind::NotFound => not_found(program),
+            _ => format!("cannot run {}: {err}", program.display()),
         })?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if output.status.success() {
@@ -345,6 +392,32 @@ mod tests {
         commit(&local, "mine.txt");
         let ahead = clean(&local).await.expect_err("local commit");
         assert!(ahead.starts_with("1 local commits"), "{ahead}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finds_a_program_by_pathext() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let empty = tmp.path().join("empty");
+        let volta = tmp.path().join("volta");
+        let node = tmp.path().join("node");
+        for dir in [&empty, &volta, &node] {
+            std::fs::create_dir(dir).expect("mkdir");
+        }
+        std::fs::write(volta.join("npm.exe"), "").expect("write");
+        std::fs::write(node.join("npm.cmd"), "").expect("write");
+        let path = std::env::join_paths([&empty, &volta, &node]).expect("join");
+        assert_eq!(
+            find_program("npm", &path, ".COM;.EXE;.BAT;.CMD"),
+            Some(volta.join("npm.exe"))
+        );
+        let path = std::env::join_paths([&empty, &node]).expect("join");
+        assert_eq!(
+            find_program("npm", &path, ".COM;.EXE;.BAT;.CMD"),
+            Some(node.join("npm.cmd"))
+        );
+        let path = std::env::join_paths([&empty]).expect("join");
+        assert_eq!(find_program("npm", &path, ".COM;.EXE;.BAT;.CMD"), None);
     }
 
     #[test]
