@@ -150,8 +150,9 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 ## MCP server
 
 - vigie2 exposes an MCP server to its sessions. Claude drives the UI through tool calls instead of text syntax parsed out of messages.
-- Hosted in each session's actor as an SDK MCP server: calls arrive on the child's control channel, so they reach their session with no port or auth. vigie2's tools are allowed without asking; their descriptions alone tell Claude when to use them.
+- Hosted in each session's actor as an SDK MCP server: calls arrive on the child's control channel, so they reach their session with no port or auth. vigie2's tools that only affect the session's display are allowed without asking; their descriptions alone tell Claude when to use them.
 - Attachments: `set_attachments` sets the files shown on Claude's reply at the end of the turn; each call replaces the list, so a wrong file is dropped by calling again (see `notes/wire.md`).
+- Asked Bash commands, to find the ones worth turning into canif scripts. vigie2 keeps one row per command and session folder in the `bash_asks` table: allowed and denied counts, first and last time asked, last description, and the typed deny messages. Every Bash ask the user answers updates it; the first migration filled it from the asks already in the events. `bash_asks` lists the rows as compact text grouped by folder, in pages of 100 with long commands cut (filters: since, project, decision) and `bash_asks_clear` deletes rows (by ids, project, or before a date), never the events. Both ask the user on every call, since they read and change data from every project. The analysis is an agent's, through the user-invoked `canif-suggest` skill: vigie2 groups nothing itself.
 - Presentation: show images (e.g. a screenshot a command took), file excerpts, diffs, and other content in the discussion.
 - Interaction: custom blocking widgets whose answer returns as the tool result, a richer `AskUserQuestion`.
 - Panels with state: e.g. an RPG character sheet the game master updates, or a status report while working on a project.
@@ -288,7 +289,6 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, auto-title, Mermaid rendering.
 - Welcomed, not designed ("all your new ideas are very good"):
   - rounds (one Claude message: text and tool calls, before their results come back) as the grouping unit, not rendered as frames: a round's parallel calls as one expandable row, earlier rounds' text dimmed or folded so the last round's answer stands out, a little more space between rounds than within one;
-  - a suggestion to turn a Bash command allowed N times across sessions into a canif script;
   - the cost of each turn as a share of the 5h window, shown on the turn.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).
 - How checks are registered per project.

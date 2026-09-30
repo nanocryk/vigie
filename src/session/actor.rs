@@ -30,8 +30,8 @@ use crate::claude::protocol::{
     InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
     SetPermissionModeResponse, System, UserMessage,
 };
-use crate::claude::tools::{ASK_USER_QUESTION, EXIT_PLAN_MODE};
-use crate::store::{SessionState, Store};
+use crate::claude::tools::{self, ASK_USER_QUESTION, EXIT_PLAN_MODE};
+use crate::store::{BashAnswer, SessionState, Store};
 
 const STDERR_TAIL: usize = 50;
 /// Time a child gets to exit after its stdin closes before it is killed.
@@ -375,7 +375,8 @@ impl Actor {
             }
             CliRequest::McpMessage(message) => {
                 let response = if message.server_name == mcp::SERVER_NAME {
-                    let handled = mcp::handle(&message.message, &self.cwd);
+                    let handled =
+                        mcp::handle(&message.message, &self.cwd, self.history.as_ref()).await;
                     if let mcp::Effect::SetAttachments(paths) = handled.effect {
                         self.turn_attachments = paths;
                     }
@@ -634,10 +635,36 @@ impl Actor {
             } if !note.trim().is_empty() => Some(allow_note(&ask.request.tool_name, note)),
             _ => None,
         };
-        self.emit_host(HostEvent::AskResolved {
+        let bash_answer = match &answer {
+            Answer::Allow { .. } => Some(BashAnswer::Allowed),
+            Answer::Deny { message } => Some(BashAnswer::Denied {
+                message: message.clone(),
+            }),
+            Answer::Questions { .. } => None,
+        };
+        let resolved = self.emit(EventBody::Host(HostEvent::AskResolved {
             request_id,
             resolution: Resolution::Answered { answer },
-        });
+        }));
+        if ask.request.tool_name == tools::BASH
+            && let Some(bash_answer) = bash_answer
+            && let Some(command) = ask.request.input.get("command").and_then(Value::as_str)
+            && let Some(history) = &self.history
+        {
+            let description = ask
+                .request
+                .input
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            history.record_bash_ask(
+                command.to_owned(),
+                &self.cwd,
+                description,
+                bash_answer,
+                resolved.time,
+            );
+        }
         self.publish_status();
         if let Some(note) = note {
             self.send_user(note.into(), None, None, Some(Priority::Next))
