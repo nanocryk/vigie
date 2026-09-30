@@ -21,6 +21,7 @@ pub mod mcp;
 pub mod plan;
 pub mod scratch;
 pub mod seed;
+pub mod server_restart;
 
 pub use activity::{Activity, ActivityTracker, LiveStatus};
 pub use events::{

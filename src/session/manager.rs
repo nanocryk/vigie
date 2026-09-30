@@ -20,6 +20,7 @@ use crate::session::advice::RestartMeasure;
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{self, MainRequest};
+use crate::session::server_restart::ServerRestart;
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
@@ -57,6 +58,7 @@ struct Inner {
     presence: parking_lot::Mutex<HashMap<Uuid, Presence>>,
     notices: broadcast::Sender<Notice>,
     seen: broadcast::Sender<Uuid>,
+    restart: ServerRestart,
 }
 
 /// Something a discussion wants the user for, raised while no active client has it on screen.
@@ -196,7 +198,12 @@ impl SessionManager {
     /// child after a restart. Each resumes on `open`.
     /// `state` holds `uploads`, the files attached to messages, one folder per
     /// session, and `scratch`, the folders of scratch sessions.
-    pub async fn start(store: Store, program: Program, state: &Path) -> Result<Self> {
+    pub async fn start(
+        store: Store,
+        program: Program,
+        state: &Path,
+        restart: ServerRestart,
+    ) -> Result<Self> {
         store.stop_running().await?;
         let inner = Arc::new_cyclic(|inner| Inner {
             store,
@@ -210,8 +217,13 @@ impl SessionManager {
             presence: parking_lot::Mutex::new(HashMap::new()),
             notices: broadcast::channel(CHANGES_CAPACITY).0,
             seen: broadcast::channel(CHANGES_CAPACITY).0,
+            restart,
         });
         Ok(Self { inner })
+    }
+
+    pub fn server_restart(&self) -> &ServerRestart {
+        &self.inner.restart
     }
 
     pub fn subscribe_notices(&self) -> broadcast::Receiver<Notice> {

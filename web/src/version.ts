@@ -9,7 +9,8 @@ export function parseVersion(raw: unknown, label: string): string {
   return raw.build;
 }
 
-async function fetchBuild(): Promise<string | null> {
+/** The build the server reports; null while it does not answer. */
+export async function fetchBuild(): Promise<string | null> {
   try {
     const response = await fetch("api/version", { cache: "no-store" });
     if (!response.ok) return null;

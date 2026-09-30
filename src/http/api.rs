@@ -18,6 +18,7 @@ use tracing::warn;
 use crate::AppState;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
 use crate::session::manager::SessionManager;
+use crate::session::server_restart::Supervision;
 
 /// A failed request, answered `{"error": code}` with its status.
 #[derive(Debug)]
@@ -127,6 +128,30 @@ pub async fn version(State(state): State<AppState>) -> Response {
     index.hash(&mut hasher);
     PROCESS_STAMP.hash(&mut hasher);
     Json(json!({"build": format!("{:016x}", hasher.finish())})).into_response()
+}
+
+/// Whether the server can restart itself, and how many turns a restart would stop.
+pub async fn server(State(state): State<AppState>) -> Response {
+    let supervised = state.manager.server_restart().supervision() == Supervision::Shim;
+    let turns = running_turns(&state.manager).await;
+    Json(json!({"supervised": supervised, "turns": turns})).into_response()
+}
+
+/// Stops the server now, stopping running turns, for the shim to run it again.
+pub async fn restart_server(State(state): State<AppState>) -> Result<Response, ApiError> {
+    if state.manager.server_restart().now().is_err() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "not_supervised"));
+    }
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
+async fn running_turns(manager: &SessionManager) -> usize {
+    manager
+        .live_views()
+        .await
+        .values()
+        .filter(|view| view.status.turn)
+        .count()
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {

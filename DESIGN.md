@@ -240,6 +240,10 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - History in SQLite, for queries and search.
 - Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children, so hooks can detect which host runs them.
 - Children run without claude.ai connectors (`ENABLE_CLAUDEAI_MCP_SERVERS=false`): an unauthorized connector otherwise gets reported by the model in its replies.
+- Server restart:
+  - `serve.sh` is a shim. It builds once at launch, then loops: copy `target/release/vigie2.exe` to `target/serve/`, run the copy with `VIGIE2_SUPERVISED=1`, run it again when it exits with code 75, stop on any other code. The build output is never locked, so `server/build` works while the server runs.
+  - A restart never builds: it runs the last built binary again.
+  - Device settings has a Restart button, shown only under the shim. It confirms first and says how many running turns it stops. The server stops as on Ctrl+C, then exits with 75. Sessions resume on demand as after any restart.
 
 ## Frontend stack
 

@@ -19,6 +19,7 @@ use vigie2::claude::replay::{
 use vigie2::session::attachments;
 use vigie2::session::gauges::ContextSource;
 use vigie2::session::manager::{ColdCheck, Notice, NoticeKind, Probe, SessionManager};
+use vigie2::session::server_restart::{ServerRestart, Supervision};
 use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
 use vigie2::store::{
     EventKind, HeldEdit, HeldMessage, HeldMode, SessionState, SharedCatalog, Store, StoredEvent,
@@ -58,7 +59,8 @@ impl Env {
 
     async fn manager(&self, recording: &Path) -> SessionManager {
         let store = Store::open(&self.db).expect("open store");
-        SessionManager::start(store, fake(recording), self.dir.path())
+        let restart = ServerRestart::new(Supervision::Shim);
+        SessionManager::start(store, fake(recording), self.dir.path(), restart)
             .await
             .expect("start manager")
     }

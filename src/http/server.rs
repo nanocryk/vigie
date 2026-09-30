@@ -52,6 +52,7 @@ impl AppState {
     ) -> anyhow::Result<Self> {
         use crate::http::auth::{Device, Registry};
         use crate::http::push::Vapid;
+        use crate::session::server_restart::{ServerRestart, Supervision};
         use crate::store::Store;
 
         let registry = Registry::load(dir.join("devices.json"))?;
@@ -64,7 +65,8 @@ impl AppState {
         let store = Store::open(&dir.join("history.db"))?;
         let vapid = Vapid::load_or_generate(dir)?;
         let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);
-        let manager = SessionManager::start(store, program, dir).await?;
+        let restart = ServerRestart::new(Supervision::Shim);
+        let manager = SessionManager::start(store, program, dir, restart).await?;
         Ok(Self {
             auth,
             pair_scheme: Arc::new("http".into()),
@@ -111,6 +113,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/git/file", get(git::file_route))
         .route("/api/ws", get(ws::handler))
         .route("/api/version", get(api::version))
+        .route("/api/server", get(api::server))
+        .route("/api/server/restart", post(api::restart_server))
         .route("/api/push/config", get(push::config))
         .route("/api/push/subscribe", post(push::subscribe))
         .route("/api/push/unsubscribe", post(push::unsubscribe))

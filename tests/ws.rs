@@ -32,6 +32,7 @@ use vigie2::http::wire::{
     ServerMessage, SessionList, SessionView, Subscription, WireEvent,
 };
 use vigie2::session::manager::SessionManager;
+use vigie2::session::server_restart::RestartState;
 use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
 use vigie2::store::{EventKind, HeldMode, SessionState};
 
@@ -543,6 +544,22 @@ const USAGE_SCRIPT: &str = r#"
 {"t": 0, "dir": "out", "msg": {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "resetsAt": 4102444800, "rateLimitType": "five_hour", "unifiedWindows": {"five_hour": {"utilization": 0.07, "resetsAt": 4102444800}, "seven_day": {"utilization": 0.51, "resetsAt": 4102531200}}}, "session_id": "s", "uuid": "r0"}}
 {"t": 0, "dir": "out", "msg": {"type": "result", "subtype": "success", "is_error": false, "result": "hi", "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn", "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": "r1"}}
 "#;
+
+#[tokio::test]
+async fn a_supervised_server_restarts_on_request() {
+    let server = Server::start(USAGE_SCRIPT).await;
+    let (status, body) = server
+        .request(Method::GET, "/vigie2/api/server", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"supervised": true, "turns": 0}));
+
+    let (status, _) = server
+        .request(Method::POST, "/vigie2/api/server/restart", None)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(server.manager.server_restart().state(), RestartState::Now);
+}
 
 #[tokio::test]
 async fn usage_is_announced_after_a_turn_and_served_over_rest() {

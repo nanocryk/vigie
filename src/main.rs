@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use vigie2::http::net;
 use vigie2::http::push::{self, Pusher};
 use vigie2::http::server::{AppState, build_app};
 use vigie2::session::manager::{Probe, SessionManager};
+use vigie2::session::server_restart::{self, RestartState, ServerRestart, Supervision};
 use vigie2::state_dir;
 use vigie2::store::Store;
 
@@ -186,7 +188,7 @@ impl Settings {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<ExitCode> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("install ring CryptoProvider");
@@ -206,14 +208,14 @@ async fn main() -> Result<()> {
     }
 }
 
-fn run_revoke_all() -> Result<()> {
+fn run_revoke_all() -> Result<ExitCode> {
     let registry = Registry::load(state_dir::path()?.join("devices.json"))?;
     let count = registry.revoke_all()?;
     println!("Revoked {count} device(s).");
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
-async fn serve(args: ServeArgs) -> Result<()> {
+async fn serve(args: ServeArgs) -> Result<ExitCode> {
     let dir = state_dir::path()?;
     let settings = Settings::resolve(args, load_config(&dir.join("config.json"))?)?;
     let bind = settings.bind;
@@ -246,7 +248,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
-    let manager = SessionManager::start(store, Program::claude(), &dir).await?;
+    let restart = ServerRestart::new(Supervision::from_env());
+    let manager = SessionManager::start(store, Program::claude(), &dir, restart).await?;
     let probe_dir = store_path.with_file_name("probe");
     tokio::spawn({
         let manager = manager.clone();
@@ -308,18 +311,33 @@ async fn serve(args: ServeArgs) -> Result<()> {
     }
 
     let (stop_sender, stop) = watch::channel(false);
+    let mut restart_state = manager.server_restart().subscribe();
     tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                info!("shutting down");
-                let _ = stop_sender.send(true);
+        let interrupted = async {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => info!("shutting down"),
+                Err(err) => {
+                    warn!(%err, "cannot listen for Ctrl+C");
+                    std::future::pending::<()>().await;
+                }
             }
-            Err(err) => {
-                warn!(%err, "cannot listen for Ctrl+C");
-                // Keeps the sender alive, so the server is never told to stop.
+        };
+        let restarting = async {
+            let requested = restart_state
+                .wait_for(|state| *state == RestartState::Now)
+                .await
+                .is_ok();
+            if requested {
+                info!("restarting");
+            } else {
                 std::future::pending::<()>().await;
             }
+        };
+        tokio::select! {
+            () = interrupted => {}
+            () = restarting => {}
         }
+        let _ = stop_sender.send(true);
     });
 
     let served: Result<()> = if settings.tls_on() {
@@ -362,7 +380,11 @@ async fn serve(args: ServeArgs) -> Result<()> {
     if let Err(err) = manager.shutdown().await {
         warn!("session shutdown: {err:#}");
     }
-    served
+    served?;
+    Ok(match manager.server_restart().state() {
+        RestartState::Now => ExitCode::from(server_restart::EXIT_CODE),
+        RestartState::Idle => ExitCode::SUCCESS,
+    })
 }
 
 async fn stopped(mut stop: watch::Receiver<bool>) {
