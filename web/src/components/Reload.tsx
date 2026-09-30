@@ -7,8 +7,17 @@ import { reload, useNewVersion } from "@/version";
 
 const UNREACHABLE_AFTER_MS = 30_000;
 
-export function NewVersionBanner() {
+/** A server problem, else a new web build to reload. */
+export function Banner({ client }: { client: Client }) {
+  const problem = useServerProblem(client);
   const stale = useNewVersion();
+  if (problem !== null) {
+    return (
+      <div className="bg-destructive text-card voice-ui w-full shrink-0 px-3 py-1.5 text-center text-sm">
+        {problem}
+      </div>
+    );
+  }
   if (!stale) return null;
   return (
     <button
@@ -22,7 +31,7 @@ export function NewVersionBanner() {
 }
 
 /** Under the shim: a server gone for a while, or one running a previous build. */
-export function ServerBanner({ client }: { client: Client }) {
+function useServerProblem(client: Client): string | null {
   const open = useSnapshot(client).status === "open";
   const [server, setServer] = useState<ServerStatus | null>(null);
   const [unreachable, setUnreachable] = useState(false);
@@ -61,13 +70,8 @@ export function ServerBanner({ client }: { client: Client }) {
   }, [open]);
 
   if (server?.supervised !== true) return null;
-  const text = unreachable
-    ? "Server unreachable for 30 s: if it was restarting, it likely needs manual intervention"
-    : server.staleCopy
-      ? "Restart ran the previous build: copying the new one failed"
-      : null;
-  if (text === null) return null;
-  return (
-    <div className="bg-destructive text-card voice-ui w-full shrink-0 px-3 py-1.5 text-sm">{text}</div>
-  );
+  if (unreachable) {
+    return "Server unreachable for 30 s: if it was restarting, it likely needs manual intervention";
+  }
+  return server.staleCopy ? "Restart ran the previous build: copying the new one failed" : null;
 }

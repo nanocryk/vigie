@@ -3,7 +3,7 @@ import { type ReactNode, use, useEffect, useState } from "react";
 import { getClient } from "@/client";
 import { DeviceSettings } from "@/components/DeviceSettings";
 import { Explorer } from "@/components/Explorer";
-import { NewVersionBanner, ServerBanner } from "@/components/Reload";
+import { Banner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
 import type { BootResult } from "@/pairing";
@@ -43,8 +43,7 @@ function Shell() {
     <div
       className={`flex h-[var(--app-height,100dvh)] flex-col overflow-hidden ${viewing !== null ? "select-none" : ""}`}
     >
-      <NewVersionBanner />
-      <ServerBanner client={client} />
+      <Banner client={client} />
       {route.kind === "session" ? (
         <SessionScreen key={route.id} client={client} id={route.id} />
       ) : route.kind === "settings" ? (
