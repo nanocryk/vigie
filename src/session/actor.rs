@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
@@ -20,6 +20,7 @@ use super::events::{
     Answer, CommandInfo, Event, EventBody, GateFailure, HostEvent, Line, ModelChoice, Resolution,
     StopReason,
 };
+use super::gauges::FIVE_MINUTE_TTL_SECS;
 use super::grant::{self, FileOffer};
 use super::handle::Config;
 use super::plan::PlanTracker;
@@ -43,6 +44,9 @@ const FIRST_PARTY: &str = "firstParty";
 const OAUTH_KEY_SOURCE: &str = "none";
 /// `rateLimitType` of a limit that draws on usage credits.
 const OVERAGE_LIMIT: &str = "overage";
+/// A subagent's unanswered ask is denied this long before its cache expires, so
+/// the request wrapping up still reads the cache.
+const ASK_DENY_MARGIN_SECS: u32 = 60;
 
 pub enum Command {
     Send {
@@ -92,6 +96,14 @@ struct PendingAsk {
     request: CanUseTool,
     /// The plan file an `ExitPlanMode` ask submits, when known.
     plan_path: Option<String>,
+    /// A subagent's ask: when it is denied if still unanswered.
+    timeout: Option<AskTimeout>,
+}
+
+struct AskTimeout {
+    agent_id: String,
+    at: Instant,
+    message: String,
 }
 
 /// A host control request awaiting its `control_response`.
@@ -142,6 +154,8 @@ pub struct Actor {
     plans: PlanTracker,
     /// In arrival order.
     asks: Vec<PendingAsk>,
+    /// Subagents whose ask timed out, with the message denying their later asks.
+    wrapping_up: HashMap<String, String>,
     /// Files allowed with `always_for_file`; their later asks are answered here.
     file_grants: Vec<FileOffer>,
     /// Reads of files in it are answered here.
@@ -183,6 +197,7 @@ impl Actor {
             relays: RelayFilter::default(),
             plans: PlanTracker::from_env(),
             asks: Vec::new(),
+            wrapping_up: HashMap::new(),
             file_grants: Vec::new(),
             uploads: config.uploads,
             turn_attachments: Vec::new(),
@@ -213,6 +228,11 @@ impl Actor {
         loop {
             let ready = self.state == State::Ready;
             let kill_at = self.kill_at;
+            let deny_at = self
+                .asks
+                .iter()
+                .filter_map(|ask| ask.timeout.as_ref().map(|timeout| timeout.at))
+                .min();
             tokio::select! {
                 line = self.child.stdout.recv() => match line {
                     Some(line) => self.on_line(line).await,
@@ -229,6 +249,9 @@ impl Actor {
                 _ = tokio::time::sleep_until(kill_at.unwrap_or_else(Instant::now)), if kill_at.is_some() => {
                     self.child.kill();
                     self.kill_at = None;
+                }
+                _ = tokio::time::sleep_until(deny_at.unwrap_or_else(Instant::now)), if deny_at.is_some() => {
+                    self.time_out_asks().await;
                 }
             }
         }
@@ -350,6 +373,17 @@ impl Actor {
                         .await;
                     return;
                 }
+                if let Some(agent_id) = &agent_id
+                    && let Some(message) = self.wrapping_up.get(agent_id).cloned()
+                {
+                    self.auto_deny(&request.request_id, ask, agent_id.clone(), message)
+                        .await;
+                    return;
+                }
+                let (timeout, deny_at) = agent_id
+                    .as_ref()
+                    .map(|agent_id| self.ask_timeout(agent_id))
+                    .unzip();
                 let plan = if ask.tool_name == EXIT_PLAN_MODE {
                     self.plans
                         .review(ask, self.history.as_ref())
@@ -362,6 +396,7 @@ impl Actor {
                     request_id: request.request_id.clone(),
                     request: (**ask).clone(),
                     plan_path: plan.as_ref().and_then(|plan| plan.path.clone()),
+                    timeout,
                 });
                 self.emit_host(HostEvent::AskQueued {
                     request_id: request.request_id.clone(),
@@ -373,6 +408,7 @@ impl Actor {
                     file,
                     plan,
                     agent_id,
+                    deny_at,
                 });
                 self.publish_status();
             }
@@ -701,6 +737,88 @@ impl Actor {
             file,
             agent_id,
         });
+    }
+
+    async fn auto_deny(
+        &mut self,
+        request_id: &str,
+        ask: &CanUseTool,
+        agent_id: String,
+        message: String,
+    ) {
+        let result = PermissionResult::deny(message.clone());
+        let response = ControlResponse::permission(request_id.to_string(), &result);
+        if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
+            tracing::warn!("auto-deny {}: {err:#}", ask.tool_name);
+            return;
+        }
+        self.emit_host(HostEvent::AutoDenied {
+            request_id: request_id.to_string(),
+            tool_name: ask.tool_name.clone(),
+            tool_use_id: ask.tool_use_id.clone(),
+            agent_id,
+            message,
+        });
+    }
+
+    /// When a new ask of `agent_id` is denied if unanswered: its cache TTL from
+    /// now, less the margin; as a timer, and as the time clients count down to.
+    fn ask_timeout(&self, agent_id: &str) -> (AskTimeout, DateTime<Utc>) {
+        let ttl_secs = self
+            .agents
+            .find(agent_id)
+            .and_then(|agent| agent.cache.as_ref())
+            .map_or(FIVE_MINUTE_TTL_SECS, |cache| cache.ttl_secs);
+        let wait_secs = ttl_secs.saturating_sub(ASK_DENY_MARGIN_SECS);
+        let message = format!(
+            "No answer within {} minutes. Wrap up now: report what is done, what is left, \
+             and what needed permission. No other tool use will be approved.",
+            wait_secs / 60
+        );
+        let timeout = AskTimeout {
+            agent_id: agent_id.to_string(),
+            at: Instant::now() + Duration::from_secs(wait_secs.into()),
+            message,
+        };
+        (timeout, Utc::now() + TimeDelta::seconds(wait_secs.into()))
+    }
+
+    /// Denies the first ask past its time, with every other pending ask of its
+    /// agent, whose later asks are then denied on arrival.
+    async fn time_out_asks(&mut self) {
+        let now = Instant::now();
+        let Some(expired) = self
+            .asks
+            .iter()
+            .filter_map(|ask| ask.timeout.as_ref())
+            .find(|timeout| timeout.at <= now)
+        else {
+            return;
+        };
+        let agent_id = expired.agent_id.clone();
+        let message = expired.message.clone();
+        let (denied, kept): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.asks).into_iter().partition(|ask| {
+                ask.timeout
+                    .as_ref()
+                    .is_some_and(|timeout| timeout.agent_id == agent_id)
+            });
+        self.asks = kept;
+        self.wrapping_up.insert(agent_id, message.clone());
+        for ask in denied {
+            let result = PermissionResult::deny(message.clone());
+            let response = ControlResponse::permission(ask.request_id.clone(), &result);
+            if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
+                tracing::warn!("time out {}: {err:#}", ask.request.tool_name);
+            }
+            self.emit_host(HostEvent::AskResolved {
+                request_id: ask.request_id,
+                resolution: Resolution::TimedOut {
+                    message: message.clone(),
+                },
+            });
+        }
+        self.publish_status();
     }
 
     fn ask_index(&self, request_id: &str) -> Option<usize> {

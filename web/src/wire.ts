@@ -395,6 +395,16 @@ export type HostEvent =
       plan: PlanReview | null;
       /** Task id of the subagent asking; null for the main agent. */
       agent_id: string | null;
+      /** When the server denies it if still unanswered (RFC 3339); subagent asks only. */
+      deny_at: string | null;
+    }
+  /** An ask of a subagent whose earlier ask timed out, denied by the server without queueing it. */
+  | {
+      event: "auto_denied";
+      request_id: string;
+      tool_name: string;
+      tool_use_id: string;
+      agent_id: string;
     }
   /** An ask on a file granted for good, allowed by the server without queueing it. */
   | {
@@ -425,7 +435,8 @@ export type HostEvent =
       agent_tool_use_id: string;
       outcome: RelayOutcome;
     }
-  | { event: "ask_resolved"; request_id: string }
+  /** `timed_out`: denied by the server at its `deny_at`, not answered. */
+  | { event: "ask_resolved"; request_id: string; timed_out: boolean }
   /** The files Claude attached to its reply; follows the `result` line ending the turn. */
   | { event: "claude_attached"; attachments: string[] }
   | { event: "permission_mode"; mode: string }
@@ -879,6 +890,23 @@ export function parseHostEvent(raw: unknown): HostEvent {
         file: parseFileOffer(raw["file"]),
         plan: parsePlanReview(raw["plan"]),
         agent_id: text("agent_id"),
+        deny_at: text("deny_at"),
+      };
+    }
+    case "auto_denied": {
+      const requestId = text("request_id");
+      const toolName = text("tool_name");
+      const toolUseId = text("tool_use_id");
+      const agentId = text("agent_id");
+      if (requestId === null || toolName === null || toolUseId === null || agentId === null) {
+        return { event: "unknown", raw };
+      }
+      return {
+        event: "auto_denied",
+        request_id: requestId,
+        tool_name: toolName,
+        tool_use_id: toolUseId,
+        agent_id: agentId,
       };
     }
     case "relay_sent": {
@@ -947,9 +975,11 @@ export function parseHostEvent(raw: unknown): HostEvent {
     }
     case "ask_resolved": {
       const requestId = text("request_id");
+      const resolution = raw["resolution"];
+      const timedOut = isRecord(resolution) && resolution["kind"] === "timed_out";
       return requestId === null
         ? { event: "unknown", raw }
-        : { event: "ask_resolved", request_id: requestId };
+        : { event: "ask_resolved", request_id: requestId, timed_out: timedOut };
     }
     case "auth_gate_failed":
       return { event: "auth_gate_failed", reason: parseGateFailure(raw["reason"]) };

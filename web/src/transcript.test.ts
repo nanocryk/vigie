@@ -21,6 +21,7 @@ import {
   type TranscriptState,
   applyEvents,
   askContext,
+  denyCountdown,
   emptyTranscript,
   parseTaskNotification,
   planFileName,
@@ -381,6 +382,7 @@ describe("transcript from recordings", () => {
         file: null,
         plan: null,
         agentId: null,
+        denyAt: null,
       },
     ]);
   });
@@ -1112,6 +1114,50 @@ describe("subagents", () => {
       ["notice", "Agent stopped"],
     ]);
     expect(state.agents.get("t1")?.state).toBe("stopped");
+  });
+
+  it("an agent's timed-out ask and its later auto-denied one show in its view", () => {
+    const queued = applyEvents(emptyTranscript, [
+      started(1),
+      host(2, {
+        event: "ask_queued",
+        request_id: "r1",
+        tool_name: "Bash",
+        tool_use_id: "t8",
+        agent_id: "a1",
+        deny_at: "2026-09-30T12:04:00Z",
+      }),
+    ]);
+    expect(queued.asks.map((ask) => ask.denyAt)).toEqual([Date.parse("2026-09-30T12:04:00Z")]);
+    const state = applyEvents(queued, [
+      host(3, {
+        event: "ask_resolved",
+        request_id: "r1",
+        resolution: { kind: "timed_out", message: "Wrap up now." },
+      }),
+      host(4, {
+        event: "auto_denied",
+        request_id: "r2",
+        tool_name: "Edit",
+        tool_use_id: "t9",
+        agent_id: "a1",
+        message: "Wrap up now.",
+      }),
+    ]);
+    expect(state.asks).toEqual([]);
+    expect(scope(state, "t1").map(shape)).toEqual([
+      ["brief", "Sleep."],
+      ["notice", "Auto-denied: Bash (no answer in time, told to wrap up)"],
+      ["notice", "Auto-denied: Edit (wrapping up)"],
+    ]);
+  });
+});
+
+describe("denyCountdown", () => {
+  it("counts minutes and seconds down to the deny", () => {
+    expect(denyCountdown(240_000, 0)).toBe("auto-deny in 4:00");
+    expect(denyCountdown(240_000, 106_500)).toBe("auto-deny in 2:14");
+    expect(denyCountdown(240_000, 240_000)).toBe("auto-deny now");
   });
 });
 

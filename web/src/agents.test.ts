@@ -55,6 +55,7 @@ function ask(agentId: string | null): PendingAsk {
     plan: null,
     file: null,
     agentId,
+    denyAt: null,
   };
 }
 

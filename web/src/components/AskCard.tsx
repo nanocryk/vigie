@@ -1,4 +1,12 @@
-import { Fragment, type ReactNode, createContext, useContext, useMemo, useState } from "react";
+import {
+  Fragment,
+  type ReactNode,
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { DiffBlock } from "@/components/Diff";
 import { Markdown } from "@/components/Markdown";
@@ -7,7 +15,13 @@ import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import { type Segment, broadReason, offerSegments } from "@/grant";
 import type { Side } from "@/swipe";
-import { type PendingAsk, relativePath, toolDisplayName, toolSummary } from "@/transcript";
+import {
+  type PendingAsk,
+  denyCountdown,
+  relativePath,
+  toolDisplayName,
+  toolSummary,
+} from "@/transcript";
 import { type Answer, type Danger, type GrantKind, isRecord } from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
@@ -279,6 +293,7 @@ function CardFrame({
   children: ReactNode;
 }) {
   const goTo = useContext(GoToAgent);
+  const denyAt = useContext(DenyAt);
   return (
     <section
       className={`bg-card border-primary/40 flex max-h-[50%] shrink-0 flex-col border-t-2 px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
@@ -293,6 +308,7 @@ function CardFrame({
             Go to agent: {goTo.name}
           </button>
         )}
+        {denyAt !== null && <DenyCountdown denyAt={denyAt} />}
         {title !== null && (
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="voice-heading text-sm">{title}</h2>
@@ -589,6 +605,24 @@ export interface GoTo {
 }
 
 const GoToAgent = createContext<GoTo | null>(null);
+/** When the server denies the ask on screen; null for the main agent's asks. */
+const DenyAt = createContext<number | null>(null);
+
+function DenyCountdown({ denyAt }: { denyAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <p
+      className="text-destructive voice-ui text-xs"
+      title="The agent's cache expires soon: unanswered, the ask is denied and the agent told to wrap up"
+    >
+      {denyCountdown(denyAt, now)}
+    </p>
+  );
+}
 
 export function AskCard({
   submit,
@@ -611,11 +645,13 @@ export function AskCard({
 }) {
   return (
     <GoToAgent.Provider value={goTo}>
-      {ask.toolName !== "AskUserQuestion" ? (
-        <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
-      ) : (
-        <DecisionCard submit={submit} ask={ask} queued={queued} />
-      )}
+      <DenyAt.Provider value={ask.denyAt}>
+        {ask.toolName !== "AskUserQuestion" ? (
+          <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
+        ) : (
+          <DecisionCard submit={submit} ask={ask} queued={queued} />
+        )}
+      </DenyAt.Provider>
     </GoToAgent.Provider>
   );
 }

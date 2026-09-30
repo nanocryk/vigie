@@ -76,6 +76,18 @@ pub enum HostEvent {
         /// Task id of the subagent asking; `None` for the main agent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
+        /// When the host denies the ask if still unanswered; subagent asks only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deny_at: Option<DateTime<Utc>>,
+    },
+    /// An ask of a subagent whose earlier ask timed out, denied by the host
+    /// without queueing it.
+    AutoDenied {
+        request_id: String,
+        tool_name: String,
+        tool_use_id: String,
+        agent_id: String,
+        message: String,
     },
     /// An ask on a granted file, allowed by the host without queueing it.
     AutoAllowed {
@@ -266,6 +278,10 @@ pub enum Resolution {
     },
     /// The CLI withdrew the ask with `control_cancel_request`.
     Cancelled,
+    /// Unanswered at its `deny_at`: the host denied it with `message`.
+    TimedOut {
+        message: String,
+    },
 }
 
 /// Why a live child was stopped.
@@ -329,6 +345,7 @@ mod tests {
             file: None,
             plan: None,
             agent_id: None,
+            deny_at: None,
         };
         assert_eq!(
             serde_json::to_value(&queued).unwrap(),
@@ -340,7 +357,16 @@ mod tests {
             "request_id": "r", "tool_name": "Bash", "tool_use_id": "t"}))
         .unwrap();
         assert!(matches!(stored, HostEvent::AskQueued {
-            danger, accept_edits: false, folder: None, file: None, plan: None, agent_id: None, ..
+            danger, accept_edits: false, folder: None, file: None, plan: None, agent_id: None,
+            deny_at: None, ..
         } if danger == Danger::default()));
+
+        let timed_out = Resolution::TimedOut {
+            message: "wrap up".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&timed_out).unwrap(),
+            serde_json::json!({"kind": "timed_out", "message": "wrap up"}),
+        );
     }
 }

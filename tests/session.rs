@@ -1111,6 +1111,87 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
     harness.finish().await;
 }
 
+/// A subagent's ask and a main agent's ask both wait; once the subagent's times
+/// out, its next ask is denied on arrival, and the main agent's is still answered.
+const TIMEOUT_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "t1", "agent_id": "a1"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "pwd"}, "tool_use_id": "t2"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "deny", "message": "No answer within 4 minutes. Wrap up now: report what is done, what is left, and what needed permission. No other tool use will be approved."}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls -la"}, "tool_use_id": "t3", "agent_id": "a1"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"behavior": "deny", "message": "No answer within 4 minutes. Wrap up now: report what is done, what is left, and what needed permission. No other tool use will be approved."}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"command": "pwd"}}}}}
+"#;
+
+#[tokio::test]
+async fn an_unanswered_subagent_ask_times_out_and_the_agent_wraps_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("timeout.ndjson");
+    std::fs::write(&path, TIMEOUT_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let mut deny_ats = Vec::new();
+    for _ in 0..2 {
+        let HostEvent::AskQueued {
+            request_id,
+            deny_at,
+            ..
+        } = harness
+            .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+            .await
+        else {
+            unreachable!()
+        };
+        deny_ats.push((request_id, deny_at));
+    }
+    let wait = deny_ats[0].1.expect("the subagent's ask has a deny time") - chrono::Utc::now();
+    assert!(
+        (230..=240).contains(&wait.num_seconds()),
+        "4 minutes: {wait}"
+    );
+    assert_eq!(
+        deny_ats[1],
+        ("cli-2".to_string(), None),
+        "the main agent's ask waits"
+    );
+
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(241)).await;
+    tokio::time::resume();
+    let resolved = harness
+        .until_host(|host| matches!(host, HostEvent::AskResolved { .. }))
+        .await;
+    assert!(
+        matches!(&resolved, HostEvent::AskResolved {
+            request_id,
+            resolution: Resolution::TimedOut { message },
+        } if request_id == "cli-1" && message.starts_with("No answer within 4 minutes.")),
+        "{resolved:?}"
+    );
+    let denied = harness
+        .until_host(|host| matches!(host, HostEvent::AutoDenied { .. }))
+        .await;
+    assert!(
+        matches!(&denied, HostEvent::AutoDenied { request_id, agent_id, .. }
+            if request_id == "cli-3" && agent_id == "a1"),
+        "{denied:?}"
+    );
+
+    let allow = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: false,
+    };
+    harness
+        .session
+        .answer("cli-2".to_string(), allow)
+        .await
+        .unwrap();
+    harness.finish().await;
+}
+
 /// A read in the session's uploads folder is allowed by the host; an edit there,
 /// and a read in another session's folder, still ask.
 const UPLOADS_SCRIPT: &str = r#"

@@ -294,6 +294,16 @@ export interface PendingAsk {
   plan: PlanReview | null;
   /** Task id of the subagent asking; null for the main agent. */
   agentId: string | null;
+  /** When the server denies it if still unanswered, in ms since the epoch; subagent asks only. */
+  denyAt: number | null;
+}
+
+/** `auto-deny in m:ss` until `denyAt`, then `auto-deny now`. */
+export function denyCountdown(denyAt: number, now: number): string {
+  const left = Math.ceil((denyAt - now) / 1000);
+  if (left <= 0) return "auto-deny now";
+  const seconds = String(left % 60).padStart(2, "0");
+  return `auto-deny in ${Math.floor(left / 60)}:${seconds}`;
 }
 
 /** The plan an ask carries, else the one its input names (older CLIs). */
@@ -663,6 +673,18 @@ class Draft {
     return null;
   }
 
+  /** A notice in the view of task `taskId`'s agent; the main view when unknown. */
+  private agentNotice(
+    taskId: string | null,
+    key: string,
+    text: string,
+    tone: "info" | "error",
+  ): void {
+    const agent = this.agentOfTask(taskId);
+    const target = agent === null ? this : this.scoped(agent);
+    target.add({ kind: "notice", key, tone, text, detail: null });
+  }
+
   /** Records the Agent calls of an `assistant` line, main or subagent. */
   private agentCalls(line: Extract<CliLine, { type: "assistant" }>): void {
     for (const block of line.content) {
@@ -893,22 +915,28 @@ class Draft {
           file: event.file,
           plan: askPlan(event.tool_name, event.plan, request?.input),
           agentId: event.agent_id,
+          denyAt: event.deny_at === null ? null : Date.parse(event.deny_at),
         });
         return;
       }
-      case "auto_allowed": {
+      case "auto_denied":
         this.requests.delete(event.request_id);
-        const agent = this.agentOfTask(event.agent_id);
-        const target = agent === null ? this : this.scoped(agent);
-        target.add({
-          kind: "notice",
+        this.agentNotice(
+          event.agent_id,
           key,
-          tone: "info",
-          text: `Auto-allowed: ${event.tool_name} ${relativePath(event.file.path, this.cwd)}`,
-          detail: null,
-        });
+          `Auto-denied: ${event.tool_name} (wrapping up)`,
+          "error",
+        );
         return;
-      }
+      case "auto_allowed":
+        this.requests.delete(event.request_id);
+        this.agentNotice(
+          event.agent_id,
+          key,
+          `Auto-allowed: ${event.tool_name} ${relativePath(event.file.path, this.cwd)}`,
+          "info",
+        );
+        return;
       case "relay_sent":
         this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
         this.add({ kind: "user", key, text: event.wrapped, delivery: "on_host", clientId: null });
@@ -930,10 +958,20 @@ class Draft {
         );
         return;
       }
-      case "ask_resolved":
-        this.asks = this.asks.filter((ask) => ask.requestId !== event.request_id);
+      case "ask_resolved": {
+        const ask = this.asks.find((pending) => pending.requestId === event.request_id);
+        this.asks = this.asks.filter((pending) => pending.requestId !== event.request_id);
         this.requests.delete(event.request_id);
+        if (event.timed_out && ask !== undefined) {
+          this.agentNotice(
+            ask.agentId,
+            key,
+            `Auto-denied: ${ask.toolName} (no answer in time, told to wrap up)`,
+            "error",
+          );
+        }
         return;
+      }
       case "claude_attached":
         this.attachToReply(event.attachments);
         return;
