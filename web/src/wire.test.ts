@@ -257,6 +257,33 @@ describe("parseSessionList", () => {
       /list\.sessions\[0\]\.context\.categories\[0\]\.tokens: expected a number: "1"/,
     );
   });
+
+  it("reads held messages and names a bad mode", () => {
+    const held = {
+      id: "h",
+      text: "later",
+      attachments: ["C:\\a.png"],
+      mode: "turn_end",
+      created_at: "t",
+    };
+    const session = {
+      id: "a",
+      cwd: "/p",
+      created_at: "c",
+      updated_at: "u",
+      state: { kind: "stopped" },
+      last_seq: 1,
+      live: false,
+      busy: false,
+      asks: 0,
+      scratch: false,
+      held: [held],
+    };
+    expect(parseSessionList({ sessions: [session] }, "list")[0]?.held).toEqual([held]);
+    expect(() =>
+      parseSessionList({ sessions: [{ ...session, held: [{ ...held, mode: "soon" }] }] }, "list"),
+    ).toThrow(/list\.sessions\[0\]\.held\[0\]\.mode: expected "held" or "turn_end": "soon"/);
+  });
 });
 
 describe("parseUsageSnapshot", () => {

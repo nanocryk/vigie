@@ -55,6 +55,20 @@ export interface SessionView {
   background: BackgroundView[];
   /** Null once the user saw the discussion. */
   unread: Unread | null;
+  /** Messages kept until sent, in queue order. */
+  held: HeldMessage[];
+}
+
+/** `held` waits for the user; `turn_end` is sent when the main agent's turn ends normally. */
+export type HeldMode = "held" | "turn_end";
+
+export interface HeldMessage {
+  id: string;
+  text: string;
+  /** Absolute paths of the attached files. */
+  attachments: string[];
+  mode: HeldMode;
+  created_at: string;
 }
 
 /** A background task of the running child, such as a command run in the background. */
@@ -210,6 +224,28 @@ export type ClientMessage =
       client_id: string;
     }
   | { type: "interrupt"; session: string; client_id: string }
+  /** Queues a message; a `turn_end` one with no turn running is sent at once. */
+  | {
+      type: "hold";
+      session: string;
+      text: string;
+      attachments?: string[];
+      mode: HeldMode;
+      client_id: string;
+    }
+  /** An absent field keeps its value. */
+  | {
+      type: "edit_held";
+      session: string;
+      held_id: string;
+      text?: string;
+      attachments?: string[];
+      mode?: HeldMode;
+      client_id: string;
+    }
+  | { type: "drop_held"; session: string; held_id: string; client_id: string }
+  /** Takes the message out of the queue and sends it like `send`. */
+  | { type: "send_held"; session: string; held_id: string; rewarm?: true; client_id: string }
   /** A message for subagent `task_id`, relayed by the main agent. */
   | {
       type: "relay";
@@ -270,6 +306,8 @@ export type Command = Extract<ClientMessage, { client_id: string }>;
 export const CACHE_COLD = "cache_cold";
 /** Ack error of an `archive` refused while the child runs. */
 export const SESSION_LIVE = "session_live";
+/** Ack error of an action on a held message no longer queued. */
+export const HELD_GONE = "held_gone";
 
 /** Why an ask deserves a second look; `reasons` has one line per matched rule. */
 export interface Danger {
@@ -550,7 +588,32 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     agents: parseAgents(value["agents"], `${label}.agents`),
     background: parseBackground(value["background"], `${label}.background`),
     unread: parseUnread(value["unread"], `${label}.unread`),
+    held: parseHeld(value["held"], `${label}.held`),
   };
+}
+
+function parseHeld(raw: unknown, label: string): HeldMessage[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) fail(label, "expected an array", raw);
+  return raw.map((item: unknown, index) => {
+    const itemLabel = `${label}[${index}]`;
+    const value = record(item, itemLabel);
+    const mode = value["mode"];
+    if (mode !== "held" && mode !== "turn_end") {
+      fail(`${itemLabel}.mode`, 'expected "held" or "turn_end"', mode);
+    }
+    const attachments = value["attachments"];
+    if (!Array.isArray(attachments) || !attachments.every((path) => typeof path === "string")) {
+      fail(`${itemLabel}.attachments`, "expected an array of strings", attachments);
+    }
+    return {
+      id: str(value, "id", itemLabel),
+      text: str(value, "text", itemLabel),
+      attachments,
+      mode,
+      created_at: str(value, "created_at", itemLabel),
+    };
+  });
 }
 
 function parseBackground(raw: unknown, label: string): BackgroundView[] {

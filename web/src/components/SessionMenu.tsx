@@ -341,6 +341,7 @@ export function SessionMenu({
   revoke,
   restartEnabled,
   agents,
+  draft,
   onEntry,
   onCommands,
   onRestart,
@@ -365,6 +366,11 @@ export function SessionMenu({
     onOpen: () => void;
     stopAll: { enabled: boolean; busy: boolean; error: string | null; onStop: () => void };
   };
+  /**
+   * With a message in the composer: Hold queues it until sent by hand; Send now,
+   * null outside a turn, writes it to Claude during the turn.
+   */
+  draft: { onHold: () => void; onSendNow: (() => void) | null } | null;
   onEntry: (entry: MenuEntry | null) => void;
   onCommands: () => void;
   /** Opens the restart choices: resume, continue or blank. */
@@ -505,6 +511,31 @@ export function SessionMenu({
                 <p className="text-destructive voice-ui px-4 pb-2 text-xs">{revoke.error}</p>
               )}
             </Entry>
+            {draft !== null && (
+              <Entry>
+                <div className={ENTRY}>
+                  <span className={NAME}>Message</span>
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={draft.onHold}
+                      className={`${CHIP} bg-card hover:bg-muted border-dashed`}
+                    >
+                      Hold
+                    </button>
+                    {draft.onSendNow !== null && (
+                      <button
+                        type="button"
+                        onClick={draft.onSendNow}
+                        className={`${CHIP} bg-primary text-primary-foreground border-primary`}
+                      >
+                        Send now
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </Entry>
+            )}
           </ul>
         </div>
       </div>

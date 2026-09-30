@@ -22,7 +22,7 @@ import { AttachmentChip } from "@/components/Attachments";
 import { changeExplorer, openFileInLastFree } from "@/files";
 import { formatSpan } from "@/gauges";
 import { navigate } from "@/route";
-import type { BackgroundView } from "@/wire";
+import type { BackgroundView, HeldMessage, HeldMode } from "@/wire";
 import type { Beginning, Request } from "@/history";
 import {
   type Delivery,
@@ -149,17 +149,21 @@ function Dots() {
 function UserBubble({
   children,
   dim,
+  held = false,
   attachments,
   glow = null,
 }: {
   children: ReactNode;
   dim?: boolean;
+  /** Kept by vigie2 until sent: a dashed frame instead of the side bar. */
+  held?: boolean;
   attachments?: readonly string[];
   glow?: Glow | null;
 }) {
+  const frame = held ? "border-2 border-dashed" : "border-r-2 rounded-r-none";
   return (
     <div
-      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
+      className={`bg-bubble-user border-ring ml-16 ${BUBBLE} ${frame} ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
     >
       {children}
     </div>
@@ -538,7 +542,8 @@ const ItemView = memo(function ItemView({
     case "user": {
       const stops = wakeStops(item.text);
       if (stops !== null) return <WakeRow stops={stops} pending={false} />;
-      const label = last ? DELIVERY_LABEL[item.delivery] : null;
+      // A message still on the host says so wherever it sits: Claude takes it after its running tool call.
+      const label = last || item.delivery === "on_host" ? DELIVERY_LABEL[item.delivery] : null;
       // The room above opens each exchange; the first one sits at the top.
       return (
         <div className="space-y-1 pt-8 first:pt-0" data-item={item.key}>
@@ -729,6 +734,120 @@ function PendingView({
   );
 }
 
+/** What can be done to a held message from its bubble. */
+export interface HeldActions {
+  onSendNow: (held: HeldMessage) => void;
+  onEdit: (held: HeldMessage) => void;
+  onMode: (held: HeldMessage, mode: HeldMode) => void;
+  onDrop: (held: HeldMessage) => void;
+  /** Id of the message open in the composer, null when none. */
+  editing: string | null;
+}
+
+const HELD_TAG: Record<HeldMode, string> = { held: "held", turn_end: "at turn end" };
+
+const HELD_ACTION = "voice-ui rounded-[5px] border px-2.5 py-1.5 text-xs";
+
+/** A message vigie2 keeps until sent; tapping it opens its actions. */
+function HeldView({
+  held,
+  open,
+  onToggle,
+  actions,
+}: {
+  held: HeldMessage;
+  open: boolean;
+  onToggle: () => void;
+  actions: HeldActions;
+}) {
+  const editing = actions.editing === held.id;
+  const other: HeldMode = held.mode === "held" ? "turn_end" : "held";
+  return (
+    <div className="space-y-1 pt-8 first:pt-0">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={(event) => {
+          // Attachment chips keep their own tap.
+          if (event.target instanceof Element && event.target.closest("button, a") !== null) return;
+          onToggle();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onToggle();
+          }
+        }}
+        className="cursor-pointer"
+      >
+        <UserBubble dim held attachments={held.attachments}>
+          <Markdown text={held.text} />
+          <BubbleFiles paths={held.attachments} side="user" />
+        </UserBubble>
+      </div>
+      <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
+        {editing ? "editing in the composer" : HELD_TAG[held.mode]}
+      </div>
+      {open && !editing && (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => actions.onSendNow(held)}
+            className={`${HELD_ACTION} bg-primary text-primary-foreground border-primary`}
+          >
+            Send now
+          </button>
+          <button
+            type="button"
+            onClick={() => actions.onEdit(held)}
+            className={`${HELD_ACTION} bg-card hover:bg-muted`}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => actions.onMode(held, other)}
+            className={`${HELD_ACTION} bg-card hover:bg-muted`}
+          >
+            {other === "held" ? "Hold" : "At turn end"}
+          </button>
+          <button
+            type="button"
+            onClick={() => actions.onDrop(held)}
+            className={`${HELD_ACTION} bg-card hover:bg-muted border-destructive text-destructive`}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HeldList({
+  held,
+  actions,
+}: {
+  held: readonly HeldMessage[];
+  actions: HeldActions;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <>
+      {held.map((message) => (
+        <HeldView
+          key={message.id}
+          held={message}
+          open={open === message.id}
+          onToggle={() => setOpen((current) => (current === message.id ? null : message.id))}
+          actions={actions}
+        />
+      ))}
+    </>
+  );
+}
+
 /**
  * The scroller follows new content only while it sits at the bottom; once
  * scrolled up, nothing moves it until "latest" is tapped. Earlier history
@@ -753,6 +872,8 @@ export function TranscriptView({
   background,
   onStopTask,
   bottomRequest,
+  held,
+  heldActions,
   end,
   overlay,
   panel,
@@ -786,6 +907,9 @@ export function TranscriptView({
   onStopTask: (taskId: string) => Promise<void>;
   /** Each change scrolls the view to its bottom. */
   bottomRequest: number;
+  /** Messages kept until sent, pinned under everything else but `end`. */
+  held: readonly HeldMessage[];
+  heldActions: HeldActions;
   /** Closes the discussion, after the background tasks. */
   end?: ReactNode;
   /** Floats at the bottom right, under the "latest" button, aligned with the composer. */
@@ -919,7 +1043,7 @@ export function TranscriptView({
     }
     shownFirstSeq.current = firstSeq;
     stick();
-  }, [items, pending, firstSeq, stick]);
+  }, [items, pending, held, firstSeq, stick]);
 
   // A short window, or a page leaving the view near the top, asks for more.
   useEffect(checkTop, [items, request, checkTop]);
@@ -1003,7 +1127,7 @@ export function TranscriptView({
           onClickCapture={onSummaryClick}
           className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4 select-text"
         >
-          {items.length === 0 && pending.length === 0 && (
+          {items.length === 0 && pending.length === 0 && held.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">
               {loading ? "Loading..." : "No messages yet."}
             </p>
@@ -1049,6 +1173,9 @@ export function TranscriptView({
           {background.length > 0 && (
             <BackgroundRows tasks={background} waiting={!turnOpen} onStop={onStopTask} />
           )}
+          <OpenAttachment.Provider value={onOpenAttachment}>
+            <HeldList held={held} actions={heldActions} />
+          </OpenAttachment.Provider>
           {end}
         </div>
       </div>

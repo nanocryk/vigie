@@ -50,6 +50,7 @@ const session = (patch: Partial<SessionView>): SessionView => ({
   agents: [],
   background: [],
   unread: null,
+  held: [],
   ...patch,
 });
 

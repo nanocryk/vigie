@@ -21,6 +21,7 @@ import { attachmentName, attachmentsField, uploadFile } from "@/attachments";
 import type { Client } from "@/client";
 import {
   CacheColdError,
+  HeldGoneError,
   type ColdChoice,
   type ColdChoiceMade,
   archivedAction,
@@ -59,7 +60,7 @@ import {
 } from "@/components/SessionMenu";
 import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
-import { type PendingSend, TranscriptView } from "@/components/TranscriptView";
+import { type HeldActions, type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
 import { DiffIcon, FolderIcon, PaperclipIcon, navigateBackLeaves } from "@/components/Explorer";
 import {
@@ -98,6 +99,7 @@ import {
   parseTime,
   wakeText,
 } from "@/transcript";
+import type { HeldMessage, HeldMode } from "@/wire";
 
 /** Unsent composer text per discussion (`draftKey`), kept while the app stays open. */
 const drafts = new Map<string, string>();
@@ -109,6 +111,23 @@ function readyPaths(slot: string): string[] {
   return (draftFiles.get(slot) ?? []).flatMap((file) =>
     file.status === "ready" && file.path !== null ? [file.path] : [],
   );
+}
+
+/** Sets a draft's text and uploaded files, replacing what it held. */
+function fillDraft(slot: string, text: string, paths: readonly string[]): void {
+  if (text === "") drafts.delete(slot);
+  else drafts.set(slot, text);
+  const files = paths.map((path): ComposerFile => {
+    nextFileKey += 1;
+    return {
+      key: String(nextFileKey),
+      name: attachmentName(path),
+      status: "ready",
+      path,
+      error: null,
+    };
+  });
+  updateDraftFiles(slot, () => files);
 }
 
 /** Changes a draft's files, whether or not its composer is on screen. */
@@ -655,6 +674,151 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       current.kind === "open" && current.entry === entry ? closedMenu : { kind: "open", entry },
     );
 
+  // The composer reads its draft when mounted: a change made from outside remounts it.
+  const [composerEpoch, setComposerEpoch] = useState(0);
+  const focusComposer = useRef(false);
+  const refillComposer = (text: string, paths: readonly string[], focus: boolean) => {
+    fillDraft(draftSlot, text, paths);
+    focusComposer.current = focus;
+    setComposerEpoch((epoch) => epoch + 1);
+  };
+  /** The composer's message, emptied; null when blank or still uploading. */
+  const takeDraft = (): { text: string; attachments: string[] } | null => {
+    const text = drafts.get(draftSlot) ?? "";
+    const files = draftFiles.get(draftSlot) ?? [];
+    const attachments = readyPaths(draftSlot);
+    if (files.some((file) => file.status === "uploading")) return null;
+    if (text.trim() === "" && attachments.length === 0) return null;
+    refillComposer("", [], false);
+    return { text, attachments };
+  };
+  /** A message the composer lost to a refused command goes back into it when empty. */
+  const giveBack = (text: string, attachments: readonly string[]) => {
+    if ((drafts.get(draftSlot) ?? "") !== "" || draftFiles.has(draftSlot)) return;
+    refillComposer(text, attachments, false);
+  };
+
+  /** The held message open in the composer, and the draft it pushed aside. */
+  const [editing, setEditing] = useState<{
+    held: HeldMessage;
+    stash: { text: string; attachments: string[] };
+  } | null>(null);
+  const endEdit = (stash: { text: string; attachments: string[] }) => {
+    setEditing(null);
+    refillComposer(stash.text, stash.attachments, false);
+  };
+
+  const hold = (text: string, attachments: string[], mode: HeldMode) => {
+    setCommandError(null);
+    client
+      .command({
+        type: "hold",
+        session: id,
+        text,
+        ...attachmentsField(attachments),
+        mode,
+        client_id: client.newClientId(),
+      })
+      .catch((err: unknown) => {
+        noteRefusal(err);
+        setCommandError(`Not queued: ${errorMessage(err)}`);
+        giveBack(text, attachments);
+      });
+  };
+
+  const heldCommand = (command: Promise<void>, what: string) => {
+    setCommandError(null);
+    command.catch((err: unknown) => {
+      noteRefusal(err);
+      setCommandError(`${what}: ${errorMessage(err)}`);
+    });
+  };
+  const heldActions: HeldActions = {
+    editing: editing?.held.id ?? null,
+    onSendNow: (held) =>
+      heldCommand(
+        client.command({
+          type: "send_held",
+          session: id,
+          held_id: held.id,
+          ...rewarm,
+          client_id: client.newClientId(),
+        }),
+        "Not sent",
+      ),
+    onEdit: (held) => {
+      const stash = editing?.stash ?? {
+        text: drafts.get(draftSlot) ?? "",
+        attachments: readyPaths(draftSlot),
+      };
+      setEditing({ held, stash });
+      refillComposer(held.text, held.attachments, true);
+    },
+    onMode: (held, mode) =>
+      heldCommand(
+        client.command({
+          type: "edit_held",
+          session: id,
+          held_id: held.id,
+          mode,
+          client_id: client.newClientId(),
+        }),
+        "Not changed",
+      ),
+    onDrop: (held) =>
+      heldCommand(
+        client.command({
+          type: "drop_held",
+          session: id,
+          held_id: held.id,
+          client_id: client.newClientId(),
+        }),
+        "Not deleted",
+      ),
+  };
+
+  /** Saves the composer into the held message being edited. */
+  const saveEdit = (text: string, attachments: string[]) => {
+    if (editing === null) return;
+    const { held, stash } = editing;
+    setCommandError(null);
+    client
+      .command({
+        type: "edit_held",
+        session: id,
+        held_id: held.id,
+        text,
+        attachments,
+        client_id: client.newClientId(),
+      })
+      .then(
+        () => endEdit(stash),
+        (err: unknown) => {
+          // The edit stays in the composer; the pushed-aside draft is dropped only if never restored.
+          setEditing(null);
+          setCommandError(
+            err instanceof HeldGoneError
+              ? "That message was already sent: your edit stays in the composer"
+              : `Not saved: ${errorMessage(err)}`,
+          );
+          refillComposer(text, attachments, true);
+        },
+      );
+  };
+
+  /** Send from the composer: during a turn of the main agent, queued for its end. */
+  const composerSend = (text: string, attachments: string[]) => {
+    if (editing !== null) {
+      saveEdit(text, attachments);
+      return;
+    }
+    if (viewing === null && transcript.turnOpen) {
+      hold(text, attachments, "turn_end");
+      return;
+    }
+    send(text, { ...rewarm, ...attachmentsField(attachments) });
+  };
+
   /** Starts the change flow; the menu opens on `entry`, which lists its choices. */
   const startSettings = (entry: "model" | "effort") => {
     setPanel(closedPanel);
@@ -1095,6 +1259,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         pending={visiblePending}
         onRetry={retry}
         onDismiss={dismiss}
+        held={viewing === null ? (view?.held ?? []) : []}
+        heldActions={heldActions}
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
@@ -1189,6 +1355,28 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                   onStop: stopAllAgents,
                 },
               }}
+              draft={
+                viewing !== null ||
+                editing !== null ||
+                ((drafts.get(draftSlot) ?? "").trim() === "" && readyPaths(draftSlot).length === 0)
+                  ? null
+                  : {
+                      onHold: () => {
+                        setMenu(closedMenu);
+                        const draft = takeDraft();
+                        if (draft !== null) hold(draft.text, draft.attachments, "held");
+                      },
+                      onSendNow: transcript.turnOpen
+                        ? () => {
+                            setMenu(closedMenu);
+                            const draft = takeDraft();
+                            if (draft !== null) {
+                              send(draft.text, { ...rewarm, ...attachmentsField(draft.attachments) });
+                            }
+                          }
+                        : null,
+                    }
+              }
               onEntry={(entry) => setMenu({ kind: "open", entry })}
               onCommands={() => {
                 setMenu(closedMenu);
@@ -1279,11 +1467,31 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                 Stop failed: {stopError}
               </p>
             )}
+            {editing !== null && viewing === null && (
+              <div className="voice-ui mx-auto flex max-w-5xl items-center justify-between gap-2 pb-1 text-xs">
+                <span className="text-muted-foreground">
+                  {(view?.held ?? []).some((held) => held.id === editing.held.id)
+                    ? "Editing queued message"
+                    : "This queued message was sent meanwhile"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => endEdit(editing.stash)}
+                  className="text-primary underline"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             <Composer
-              key={draftSlot}
+              key={`${draftSlot}:${composerEpoch}`}
               session={draftSlot}
               uploadTo={id}
-              takeFocus={() => client.takeCreated(id)}
+              takeFocus={() => {
+                const focus = focusComposer.current;
+                focusComposer.current = false;
+                return client.takeCreated(id) || focus;
+              }}
               placeholder={
                 viewing === null
                   ? "Message Claude"
@@ -1292,9 +1500,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               turnOpen={transcript.turnOpen}
               stopping={stopping}
               menuOpen={menu.kind === "open"}
-              onSend={(text, attachments) =>
-                send(text, { ...rewarm, ...attachmentsField(attachments) })
-              }
+              onSend={composerSend}
               onSlash={(text) => {
                 setMenu(closedMenu);
                 panelEvent({ type: "open_slash", text });
