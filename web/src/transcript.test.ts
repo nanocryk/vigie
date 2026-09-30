@@ -20,6 +20,7 @@ import {
   RELAY_ACK,
   type TranscriptState,
   applyEvents,
+  askContext,
   emptyTranscript,
   parseTaskNotification,
   planFileName,
@@ -1286,5 +1287,55 @@ describe("quietWork", () => {
       false,
     );
     expect(quietWork([user, claude(true)], true)).toBe(false);
+  });
+});
+
+describe("ask context", () => {
+  const line = (seq: number, payload: unknown): WireEvent => ({
+    session: SESSION,
+    seq,
+    time: "t",
+    kind: "line",
+    payload,
+  });
+  const assistant = (seq: number, content: unknown[], parent: string | null = null) =>
+    line(seq, {
+      type: "assistant",
+      message: { id: `m${seq}`, role: "assistant", content },
+      parent_tool_use_id: parent,
+    });
+  const bash = (id: string) => ({ type: "tool_use", id, name: "Bash", input: { command: "ls" } });
+  const echo = (seq: number, text: string) =>
+    line(seq, {
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+    });
+
+  it("is the nearest Claude text before the call, shared by parallel calls", () => {
+    const state = applyEvents(emptyTranscript, [
+      assistant(1, [{ type: "text", text: "First." }]),
+      assistant(2, [{ type: "text", text: " Lists the folder. " }, bash("b1"), bash("b2")]),
+    ]);
+    expect(askContext(state, "b1")).toBe("Lists the folder.");
+    expect(askContext(state, "b2")).toBe("Lists the folder.");
+  });
+
+  it("is null when a user message comes first, or for an unknown call", () => {
+    const state = applyEvents(emptyTranscript, [
+      assistant(1, [{ type: "text", text: "Earlier." }]),
+      echo(2, "go"),
+      assistant(3, [bash("b1")]),
+    ]);
+    expect(askContext(state, "b1")).toBeNull();
+    expect(askContext(state, "nope")).toBeNull();
+  });
+
+  it("is found in a subagent's discussion", () => {
+    const state = applyEvents(emptyTranscript, [
+      assistant(1, [{ type: "tool_use", id: "a1", name: "Agent", input: { description: "look" } }]),
+      assistant(2, [{ type: "text", text: "Agent text." }, bash("b1")], "a1"),
+    ]);
+    expect(askContext(state, "b1")).toBe("Agent text.");
   });
 });

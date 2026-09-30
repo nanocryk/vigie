@@ -230,6 +230,26 @@ export function quietWork(items: readonly Item[], turnOpen: boolean): boolean {
   return !(last?.kind === "claude" && last.streaming);
 }
 
+/**
+ * The text Claude wrote before tool call `toolUseId`, in whichever discussion holds
+ * it: the nearest visible Claude text since the last user message, else null.
+ */
+export function askContext(state: TranscriptState, toolUseId: string): string | null {
+  for (const items of [state.items, ...[...state.scopes.values()].map((scope) => scope.items)]) {
+    const at = items.findIndex((item) => item.kind === "tool" && item.toolUseId === toolUseId);
+    if (at < 0) continue;
+    for (let index = at - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item === undefined || item.kind === "user") return null;
+      if (item.kind !== "claude" || item.hidden === true) continue;
+      const text = item.text.trim();
+      return text === "" ? null : text;
+    }
+    return null;
+  }
+  return null;
+}
+
 export interface PendingAsk {
   requestId: string;
   toolName: string;

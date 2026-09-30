@@ -91,7 +91,13 @@ import {
   settingsPlan,
   shownEffort,
 } from "@/settings";
-import { type TranscriptState, emptyTranscript, parseTime, wakeText } from "@/transcript";
+import {
+  type TranscriptState,
+  askContext,
+  emptyTranscript,
+  parseTime,
+  wakeText,
+} from "@/transcript";
 
 /** Unsent composer text per discussion (`draftKey`), kept while the app stays open. */
 const drafts = new Map<string, string>();
@@ -1239,6 +1245,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               ask={ask}
               queued={asks.length - 1}
               cwd={view?.cwd ?? null}
+              context={askContext(transcript, ask.toolUseId)}
               goTo={
                 askGoTo === null
                   ? null

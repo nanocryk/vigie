@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode, createContext, useContext, useMemo, useState } from "react";
 
 import { DiffBlock } from "@/components/Diff";
+import { Markdown } from "@/components/Markdown";
 import { PlanView } from "@/components/PlanView";
 import { Swipe } from "@/components/Swipe";
 import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
@@ -202,7 +203,18 @@ function QuestionView({
   );
 }
 
-function InputView({ ask, cwd = null }: { ask: PendingAsk; cwd?: string | null }) {
+/** Asks showing the text Claude wrote before the call: the command's explanation. */
+const CONTEXT_TOOLS: ReadonlySet<string> = new Set(["Bash"]);
+
+function InputView({
+  ask,
+  cwd = null,
+  context = null,
+}: {
+  ask: PendingAsk;
+  cwd?: string | null;
+  context?: string | null;
+}) {
   const diff = useMemo(
     () =>
       ask.input === undefined || !DIFF_TOOLS.has(ask.toolName)
@@ -221,6 +233,11 @@ function InputView({ ask, cwd = null }: { ask: PendingAsk; cwd?: string | null }
   }
   return (
     <>
+      {context !== null && CONTEXT_TOOLS.has(ask.toolName) && (
+        <div className="bg-bubble-claude border-ring voice-prose max-h-[25dvh] min-w-0 overflow-y-auto rounded-[5px] rounded-l-none border-l-2 px-3 py-2 text-sm">
+          <Markdown text={context} />
+        </div>
+      )}
       {diff === null ? (
         <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
           {toolSummary(ask.toolName, ask.input, cwd)}
@@ -410,11 +427,13 @@ function ApprovalCard({
   ask,
   queued,
   cwd,
+  context,
 }: {
   submit: SubmitAnswer;
   ask: PendingAsk;
   queued: number;
   cwd: string | null;
+  context: string | null;
 }) {
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -507,7 +526,7 @@ function ApprovalCard({
           {isPlan ? (
             <PlanView plan={ask.plan} />
           ) : (
-            <InputView ask={ask} cwd={cwd} />
+            <InputView ask={ask} cwd={cwd} context={context} />
           )}
           {ask.folder !== null && segments.length > 0 && (
             <FolderPicker
@@ -576,6 +595,7 @@ export function AskCard({
   ask,
   queued,
   cwd,
+  context,
   goTo,
 }: {
   submit: SubmitAnswer;
@@ -584,13 +604,15 @@ export function AskCard({
   queued: number;
   /** The session folder; paths inside it show relative. */
   cwd: string | null;
+  /** The text Claude wrote before the call, from `askContext`. */
+  context: string | null;
   /** Null when the ask belongs to the discussion on screen. */
   goTo: GoTo | null;
 }) {
   return (
     <GoToAgent.Provider value={goTo}>
       {ask.toolName !== "AskUserQuestion" ? (
-        <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} />
+        <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
       ) : (
         <DecisionCard submit={submit} ask={ask} queued={queued} />
       )}
