@@ -32,19 +32,20 @@ Supervised work with Claude Code, away from the desk as much as at it. You read 
 
 ### Build
 
-From the repository root:
+From the repository root, build the web app into `web/dist`:
 
 ```sh
 cd web
-npm install
-npx vite build
+npm ci
+npm run build
 cd ..
-cargo build --release
 ```
+
+Rebuild it after every update: the server does not rebuild it.
 
 ### Run
 
-The server serves the web app from `web/dist`, relative to the working directory, so start it from the repository root:
+The server serves the web app from `web/dist`, relative to the working directory, so start it from the repository root. This also builds the server:
 
 ```sh
 cargo run --release -- serve
@@ -121,6 +122,6 @@ Without Tailscale, forward a port on the router to the machine and bind vigie to
 
 ## Development
 
-- `web/`: the React and TypeScript client (`npx vite build`, `npm run check` for the type-check and tests).
+- `web/`: the React and TypeScript client (`npm run build`, `npm run check` for the type-check and tests).
 - `src/`: the Rust server. `cargo test` runs the suite against a fake `claude` that replays recorded sessions from `spike/runs`, so tests spend no usage.
 - `DESIGN.md` holds the design, `notes/` the protocol research and the client wire protocol.
