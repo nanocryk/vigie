@@ -4,6 +4,23 @@ export const IDLE_AFTER_MS = 2 * 60_000;
 // No `scroll`: the discussion scrolls itself as a reply streams in.
 const INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"];
 
+/** Calls `onInput` once, at the next input on the page. Returns the teardown. */
+export function onNextInput(onInput: () => void): () => void {
+  const input = (): void => {
+    stop();
+    onInput();
+  };
+  const stop = (): void => {
+    for (const name of INPUT_EVENTS) {
+      window.removeEventListener(name, input, { capture: true });
+    }
+  };
+  for (const name of INPUT_EVENTS) {
+    window.addEventListener(name, input, { passive: true, capture: true });
+  }
+  return stop;
+}
+
 /** The user is at this page: it is visible and got input recently. */
 export function isActive(lastInput: number, visible: boolean, now: number): boolean {
   return visible && now - lastInput < IDLE_AFTER_MS;

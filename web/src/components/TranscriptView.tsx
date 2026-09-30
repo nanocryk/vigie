@@ -34,12 +34,22 @@ import {
   relayFailureText,
   restartLabel,
   toolTimeVisible,
+  turnEndBubble,
   wakeStops,
 } from "@/transcript";
+import { onNextInput } from "@/presence";
 
-/** Class and duration of the glow on a bubble jumped to; matches `message-glow` in index.css. */
-const GLOW = "message-glow";
-const GLOW_MS = 1600;
+/** A bubble drawing the eye: breathing until the next input, then fading out. */
+type Glow = "on" | "fading";
+
+const GLOW_CLASS: Record<Glow, string> = {
+  on: "message-glow",
+  fading: "message-glow-out",
+};
+/** Input right after the glow starts (the tap that asked for it) does not end it. */
+const GLOW_GRACE_MS = 500;
+/** Matches the `message-glow-out` animation in index.css. */
+const GLOW_FADE_MS = 1000;
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
@@ -140,14 +150,16 @@ function UserBubble({
   children,
   dim,
   attachments,
+  glow = null,
 }: {
   children: ReactNode;
   dim?: boolean;
   attachments?: readonly string[];
+  glow?: Glow | null;
 }) {
   return (
     <div
-      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)}`}
+      className={`bg-bubble-user border-ring ml-16 border-r-2 ${BUBBLE} rounded-r-none ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
     >
       {children}
     </div>
@@ -504,9 +516,12 @@ const ItemView = memo(function ItemView({
   toolTime,
   awaiting,
   thinkingNow,
+  glow,
   onOpen,
 }: {
   item: Item;
+  /** A user or Claude bubble drawing the eye. */
+  glow: Glow | null;
   /** Switches to an agent's discussion, or to the main one with null. */
   onOpen: (toolUseId: string | null) => void;
   last: boolean;
@@ -527,7 +542,7 @@ const ItemView = memo(function ItemView({
       // The room above opens each exchange; the first one sits at the top.
       return (
         <div className="space-y-1 pt-8 first:pt-0" data-item={item.key}>
-          <UserBubble attachments={item.attachments}>
+          <UserBubble attachments={item.attachments} glow={glow}>
             <BubbleBody
               text={item.text}
               time={item.time}
@@ -555,7 +570,7 @@ const ItemView = memo(function ItemView({
     case "claude":
       return (
         <div
-          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none ${filesRoom(item.attachments)}`}
+          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none ${filesRoom(item.attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
         >
           <BubbleBody
             text={item.text}
@@ -734,6 +749,7 @@ export function TranscriptView({
   onOpen,
   onOpenAttachment,
   onOpenDiff,
+  glowTurnEnd,
   background,
   onStopTask,
   bottomRequest,
@@ -763,6 +779,8 @@ export function TranscriptView({
   onOpenAttachment: (path: string) => void;
   /** Opens the session's diff view; null outside a repository. */
   onOpenDiff: (() => void) | null;
+  /** A turn ending while shown glows its closing Claude bubble until the next input. */
+  glowTurnEnd: boolean;
   /** Background tasks, listed at the end with a Stop button each. */
   background: readonly BackgroundView[];
   onStopTask: (taskId: string) => Promise<void>;
@@ -793,6 +811,34 @@ export function TranscriptView({
     return null;
   }, [items]);
   const lastMessage = useRef(lastMessageKey);
+  const [glow, setGlow] = useState<{ key: string; phase: Glow } | null>(null);
+
+  // Breathing until the next input past a grace, then fading out.
+  useEffect(() => {
+    if (glow === null) return;
+    if (glow.phase === "fading") {
+      const timer = setTimeout(() => setGlow(null), GLOW_FADE_MS);
+      return () => clearTimeout(timer);
+    }
+    let stopWaiting = () => {};
+    const grace = setTimeout(() => {
+      stopWaiting = onNextInput(() => setGlow({ key: glow.key, phase: "fading" }));
+    }, GLOW_GRACE_MS);
+    return () => {
+      clearTimeout(grace);
+      stopWaiting();
+    };
+  }, [glow]);
+
+  // A turn ending live glows its closing Claude bubble.
+  const wasTurnOpen = useRef(turnOpen);
+  useEffect(() => {
+    const ended = wasTurnOpen.current && !turnOpen;
+    wasTurnOpen.current = turnOpen;
+    if (!ended || !glowTurnEnd) return;
+    const key = turnEndBubble(items);
+    if (key !== null) setGlow({ key, phase: "on" });
+  }, [turnOpen, glowTurnEnd, items]);
 
   useLayoutEffect(() => {
     nearTop.current = onNearTop;
@@ -934,13 +980,8 @@ export function TranscriptView({
     atBottom.current = false;
     element.scrollTop +=
       message.getBoundingClientRect().top - element.getBoundingClientRect().top;
-    const bubble = message.firstElementChild;
-    if (bubble === null) return;
-    // Removing then re-adding restarts the animation on a second jump.
-    bubble.classList.remove(GLOW);
-    void bubble.getBoundingClientRect();
-    bubble.classList.add(GLOW);
-    setTimeout(() => bubble.classList.remove(GLOW), GLOW_MS);
+    const key = lastMessage.current;
+    if (key !== null) setGlow({ key, phase: "on" });
   }, [lastMessageElement]);
 
   const lastBottomRequest = useRef(bottomRequest);
@@ -989,6 +1030,7 @@ export function TranscriptView({
                 toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
                 awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
                 thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
+                glow={glow?.key === item.key ? glow.phase : null}
               />
             ))}
             {pending.map((send) => (

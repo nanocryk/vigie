@@ -29,6 +29,7 @@ import {
   restartLabel,
   toolSummary,
   toolTimeVisible,
+  turnEndBubble,
   wakeStops,
   wakeText,
 } from "@/transcript";
@@ -1409,6 +1410,39 @@ describe("turn changes", () => {
       result(11),
     ]);
     expect(state.items.map(shape).at(-1)).toEqual(["changes", 2, 4, 2]);
+  });
+
+  it("a turn ending on Claude text names that bubble, past the changes row", () => {
+    const state = applyEvents(emptyTranscript, [
+      echo(1),
+      call(2, edit("e1", "/p/a.ts", "x", "y")),
+      done(3, "e1"),
+      call(4, { type: "text", text: "Done." }),
+      result(5),
+    ]);
+    expect(turnEndBubble(state.items)).toBe(state.items.find((item) => item.kind === "claude")?.key);
+  });
+
+  it("a turn ending on a tool call or an interrupt names no bubble", () => {
+    const onTool = applyEvents(emptyTranscript, [
+      echo(1),
+      call(2, { type: "text", text: "Editing." }),
+      call(3, edit("e1", "/p/a.ts", "x", "y")),
+      done(4, "e1"),
+      result(5),
+    ]);
+    expect(turnEndBubble(onTool.items)).toBeNull();
+    const interrupted = applyEvents(emptyTranscript, [
+      echo(1),
+      call(2, { type: "text", text: "Partial" }),
+      line(3, {
+        type: "user",
+        message: { role: "user", content: "[Request interrupted by user]" },
+        parent_tool_use_id: null,
+      }),
+      result(4),
+    ]);
+    expect(turnEndBubble(interrupted.items)).toBeNull();
   });
 
   it("counts only the turn it closes, and nothing for a turn without edits", () => {

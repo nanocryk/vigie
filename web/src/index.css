@@ -635,22 +635,38 @@
   }
 }
 
-/* A glow around a bubble jumped to, fading out once; a steady ring under reduced motion, removed with the class. */
+/* A glow around a bubble drawing the eye, breathing slowly; steady under reduced motion. */
 @utility message-glow {
-  box-shadow: 0 0 0 1.5px var(--ring);
+  box-shadow:
+    0 0 0 1.5px var(--ring),
+    0 0 14px 4px color-mix(in oklch, var(--ring) 60%, transparent);
   @media (prefers-reduced-motion: no-preference) {
-    animation: message-glow 1.6s ease-out forwards;
+    animation: message-glow-breathe 3s ease-in-out infinite;
   }
 }
 
-@keyframes message-glow {
-  0%,
-  30% {
+@keyframes message-glow-breathe {
+  50% {
+    box-shadow:
+      0 0 0 1.5px color-mix(in oklch, var(--ring) 50%, transparent),
+      0 0 5px 1px color-mix(in oklch, var(--ring) 25%, transparent);
+  }
+}
+
+/* The glow ending: fades out once; gone at once under reduced motion. */
+@utility message-glow-out {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: message-glow-out 1s ease-out forwards;
+  }
+}
+
+@keyframes message-glow-out {
+  from {
     box-shadow:
       0 0 0 1.5px var(--ring),
       0 0 14px 4px color-mix(in oklch, var(--ring) 60%, transparent);
   }
-  100% {
+  to {
     box-shadow:
       0 0 0 1.5px transparent,
       0 0 0 0 transparent;

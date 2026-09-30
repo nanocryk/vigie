@@ -1107,6 +1107,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           navigateBackLeaves();
         }}
         onOpenDiff={openDiff}
+        glowTurnEnd={viewing === null}
         background={viewing === null ? (view?.background ?? []) : []}
         onStopTask={stopBackground}
         bottomRequest={bottomRequest}

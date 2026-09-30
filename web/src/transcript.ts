@@ -263,6 +263,21 @@ export function askContext(state: TranscriptState, toolUseId: string): string | 
   return null;
 }
 
+/**
+ * Key of the Claude bubble ending a turn: the last item, past hidden ones and
+ * the changes row, when it is Claude text. Null when the turn ended otherwise
+ * (a tool call, an interrupt, an error).
+ */
+export function turnEndBubble(items: readonly Item[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item === undefined) return null;
+    if (item.hidden === true || item.kind === "changes") continue;
+    return item.kind === "claude" && item.text.trim() !== "" ? item.key : null;
+  }
+  return null;
+}
+
 export interface PendingAsk {
   requestId: string;
   toolName: string;
