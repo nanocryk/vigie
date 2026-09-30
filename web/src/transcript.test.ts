@@ -432,6 +432,7 @@ describe("times", () => {
             key: String(time),
             time,
             seq: 0,
+            messageId: null,
             toolUseId: "t",
             name: "Bash",
             summary: "",
@@ -1260,6 +1261,7 @@ describe("quietWork", () => {
   const tool = (status: "running" | "ok"): Item => ({
     kind: "tool",
     key: "t",
+    messageId: null,
     toolUseId: "t",
     name: "Bash",
     summary: "ls",
@@ -1275,6 +1277,7 @@ describe("quietWork", () => {
   const claude = (streaming: boolean): Item => ({
     kind: "claude",
     key: "c",
+    messageId: null,
     text: "hi",
     streaming,
     time: null,
@@ -1305,33 +1308,40 @@ describe("ask context", () => {
     kind: "line",
     payload,
   });
-  const assistant = (seq: number, content: unknown[], parent: string | null = null) =>
+  const assistant = (
+    seq: number,
+    content: unknown[],
+    parent: string | null = null,
+    id = `m${seq}`,
+  ) =>
     line(seq, {
       type: "assistant",
-      message: { id: `m${seq}`, role: "assistant", content },
+      message: { id, role: "assistant", content },
       parent_tool_use_id: parent,
     });
   const bash = (id: string) => ({ type: "tool_use", id, name: "Bash", input: { command: "ls" } });
-  const echo = (seq: number, text: string) =>
+  const done = (seq: number, id: string) =>
     line(seq, {
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
       parent_tool_use_id: null,
     });
 
-  it("is the nearest Claude text before the call, shared by parallel calls", () => {
+  it("is the text of the call's own message, shared by parallel calls", () => {
     const state = applyEvents(emptyTranscript, [
       assistant(1, [{ type: "text", text: "First." }]),
-      assistant(2, [{ type: "text", text: " Lists the folder. " }, bash("b1"), bash("b2")]),
+      assistant(2, [{ type: "text", text: " Lists the folder. " }], null, "m"),
+      assistant(3, [bash("b1")], null, "m"),
+      assistant(4, [bash("b2")], null, "m"),
     ]);
     expect(askContext(state, "b1")).toBe("Lists the folder.");
     expect(askContext(state, "b2")).toBe("Lists the folder.");
   });
 
-  it("is null when a user message comes first, or for an unknown call", () => {
+  it("is null when the call's message has no text, even with text in an earlier round", () => {
     const state = applyEvents(emptyTranscript, [
-      assistant(1, [{ type: "text", text: "Earlier." }]),
-      echo(2, "go"),
+      assistant(1, [{ type: "text", text: "Earlier round." }, bash("b0")]),
+      done(2, "b0"),
       assistant(3, [bash("b1")]),
     ]);
     expect(askContext(state, "b1")).toBeNull();

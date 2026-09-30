@@ -106,6 +106,8 @@ type ItemBody =
   | {
       kind: "claude";
       key: string;
+      /** Id of the Claude message holding it; null when not reported. */
+      messageId: string | null;
       text: string;
       streaming: boolean;
       /** Paths of the attached files; absent when none. */
@@ -115,6 +117,8 @@ type ItemBody =
   | {
       kind: "tool";
       key: string;
+      /** Id of the Claude message holding the call; null when not reported. */
+      messageId: string | null;
       toolUseId: string;
       name: string;
       summary: string;
@@ -236,19 +240,23 @@ export function quietWork(items: readonly Item[], turnOpen: boolean): boolean {
 }
 
 /**
- * The text Claude wrote before tool call `toolUseId`, in whichever discussion holds
- * it: the nearest visible Claude text since the last user message, else null.
+ * The text Claude wrote before tool call `toolUseId` in the same message, in
+ * whichever discussion holds it; null when that message has none.
  */
 export function askContext(state: TranscriptState, toolUseId: string): string | null {
   for (const items of [state.items, ...[...state.scopes.values()].map((scope) => scope.items)]) {
     const at = items.findIndex((item) => item.kind === "tool" && item.toolUseId === toolUseId);
-    if (at < 0) continue;
+    const call = items[at];
+    if (call?.kind !== "tool") continue;
+    if (call.messageId === null) return null;
     for (let index = at - 1; index >= 0; index -= 1) {
       const item = items[index];
-      if (item === undefined || item.kind === "user") return null;
+      if (item?.kind === "thinking") continue;
+      if (item?.kind !== "claude" && item?.kind !== "tool") return null;
+      if (item.messageId !== call.messageId) return null;
       if (item.kind !== "claude" || item.hidden === true) continue;
       const text = item.text.trim();
-      return text === "" ? null : text;
+      if (text !== "") return text;
     }
     return null;
   }
@@ -1209,9 +1217,9 @@ class Draft {
           const index = open?.shift();
           const item = index === undefined ? undefined : this.items[index];
           if (index !== undefined && item?.kind === "claude") {
-            this.items[index] = { ...item, text: block.text, streaming: false };
+            this.items[index] = { ...item, messageId, text: block.text, streaming: false };
           } else {
-            this.add({ kind: "claude", key: blockKey, text: block.text, streaming: false });
+            this.add({ kind: "claude", key: blockKey, messageId, text: block.text, streaming: false });
           }
           return;
         }
@@ -1232,6 +1240,7 @@ class Draft {
           this.add({
             kind: "tool",
             key: blockKey,
+            messageId,
             toolUseId: block.id,
             name: block.name,
             summary: toolSummary(block.name, block.input, this.cwd),
@@ -1261,7 +1270,13 @@ class Draft {
       return;
     }
     const created = this.items.length;
-    this.add({ kind: "claude", key: `${key}:live`, text, streaming: true });
+    this.add({
+      kind: "claude",
+      key: `${key}:live`,
+      messageId: this.streamMessage,
+      text,
+      streaming: true,
+    });
     this.liveBlocks.set(liveKey, created);
     const open = this.openText.get(id);
     if (open === undefined) this.openText.set(id, [created]);
