@@ -300,7 +300,8 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         );
         for host in &settings.public_hosts {
             eprintln!(
-                "  {scheme}://{host}{BASE_PATH_SLASH}#auth={}",
+                "  {}{BASE_PATH_SLASH}#auth={}",
+                net::origin(scheme, host, bind.port()),
                 auth.startup_token
             );
         }
