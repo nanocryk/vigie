@@ -243,7 +243,7 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - vigie sets its own env var on its children, so hooks can detect which host runs them. Every other `VIGIE_*` var (a parent session's, the shim's) is removed from their env.
 - Children run without claude.ai connectors (`ENABLE_CLAUDEAI_MCP_SERVERS=false`): an unauthorized connector otherwise gets reported by the model in its replies.
 - Server restart:
-  - `serve.sh` is a shim. It builds once at launch, then loops: copy `target/release/vigie.exe` to `target/serve/`, run the copy with `VIGIE_SUPERVISED=1`, run it again when it exits with code 75, stop on any other code. The build output is never locked, so `server/build` works while the server runs.
+  - `serve.sh`, at the repository root, is a shim and the documented way to run the server; its arguments go to `vigie serve`. `serve.bat` runs it with Git for Windows' bash, and `.canif/serve.sh` wraps it. It builds once at launch, then loops: copy `target/release/vigie.exe` to `target/serve/`, run the copy with `VIGIE_SUPERVISED=1`, run it again when it exits with code 75, stop on any other code. The build output is never locked, so `server/build` works while the server runs.
   - The copy goes to a temp file, is checked against the build's hash, then renamed over the running copy. When that fails the shim runs the previous copy with `VIGIE_STALE_COPY=1`, and the app shows a thin bar across every page: the restart ran the previous build.
   - Once the WebSocket to a supervised server has been down for 30 s, the same kind of bar says the server is unreachable and likely needs a manual restart. It clears on reconnect.
   - A restart never builds: it runs the last built binary again.

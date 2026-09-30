@@ -45,11 +45,13 @@ Rebuild it after every update: the server does not rebuild it.
 
 ### Run
 
-The server serves the web app from `web/dist`, relative to the working directory, so start it from the repository root. This also builds the server:
+From the repository root, build and start the server:
 
 ```sh
-cargo run --release -- serve
+./serve.sh
 ```
+
+Its arguments go to the server, e.g. `./serve.sh --bind 0.0.0.0:7879`. It restarts the server when asked from the app. On Windows, run `serve.bat` instead, from any terminal or by double-clicking it: it runs `serve.sh` with the bash of [Git for Windows](https://gitforwindows.org/).
 
 By default it listens on `https://127.0.0.1:7879/vigie/` with a self-signed certificate, and prints a pair URL:
 
