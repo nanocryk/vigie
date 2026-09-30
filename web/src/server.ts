@@ -1,11 +1,13 @@
 import { fetchBuild } from "@/version";
 
 /**
- * Whether the server can restart itself, whether a restart waits for every turn
- * to end, and how many turns run.
+ * Whether the server can restart itself, whether it runs a previous build because
+ * copying the latest failed, whether a restart waits for every turn to end, and
+ * how many turns run.
  */
 export interface ServerStatus {
   supervised: boolean;
+  staleCopy: boolean;
   pending: boolean;
   turns: number;
 }
@@ -15,10 +17,14 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
     throw new Error(`${label}: expected an object: ${JSON.stringify(raw)}`);
   }
   const supervised: unknown = Reflect.get(raw, "supervised");
+  const staleCopy: unknown = Reflect.get(raw, "stale_copy");
   const pending: unknown = Reflect.get(raw, "pending");
   const turns: unknown = Reflect.get(raw, "turns");
   if (typeof supervised !== "boolean") {
     throw new Error(`${label}.supervised: expected a boolean: ${JSON.stringify(supervised)}`);
+  }
+  if (typeof staleCopy !== "boolean") {
+    throw new Error(`${label}.stale_copy: expected a boolean: ${JSON.stringify(staleCopy)}`);
   }
   if (typeof pending !== "boolean") {
     throw new Error(`${label}.pending: expected a boolean: ${JSON.stringify(pending)}`);
@@ -26,7 +32,7 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
   if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 0) {
     throw new Error(`${label}.turns: expected a count: ${JSON.stringify(turns)}`);
   }
-  return { supervised, pending, turns };
+  return { supervised, staleCopy, pending, turns };
 }
 
 async function check(response: Response): Promise<void> {

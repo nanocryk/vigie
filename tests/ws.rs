@@ -554,7 +554,7 @@ async fn a_supervised_server_restarts_on_request() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
-        json!({"supervised": true, "pending": false, "turns": 0})
+        json!({"supervised": true, "stale_copy": false, "pending": false, "turns": 0})
     );
 
     server.manager.server_restart().when_idle().unwrap();

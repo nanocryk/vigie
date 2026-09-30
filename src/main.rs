@@ -18,7 +18,9 @@ use vigie2::http::net;
 use vigie2::http::push::{self, Pusher};
 use vigie2::http::server::{AppState, build_app};
 use vigie2::session::manager::{Probe, SessionManager};
-use vigie2::session::server_restart::{self, RestartState, ServerRestart, Supervision};
+use vigie2::session::server_restart::{
+    self, RestartState, RunningBuild, ServerRestart, Supervision,
+};
 use vigie2::state_dir;
 use vigie2::store::Store;
 
@@ -248,7 +250,8 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
-    let restart = ServerRestart::new(Supervision::from_env());
+    let restart =
+        ServerRestart::new(Supervision::from_env()).with_running_build(RunningBuild::from_env());
     let manager = SessionManager::start(store, Program::claude(), &dir, restart).await?;
     let probe_dir = store_path.with_file_name("probe");
     tokio::spawn({

@@ -18,7 +18,7 @@ use tracing::warn;
 use crate::AppState;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
 use crate::session::manager::SessionManager;
-use crate::session::server_restart::{RestartState, Supervision};
+use crate::session::server_restart::{RestartState, RunningBuild, Supervision};
 
 /// A failed request, answered `{"error": code}` with its status.
 #[derive(Debug)]
@@ -130,14 +130,22 @@ pub async fn version(State(state): State<AppState>) -> Response {
     Json(json!({"build": format!("{:016x}", hasher.finish())})).into_response()
 }
 
-/// Whether the server can restart itself, whether a restart waits for every turn
-/// to end, and how many turns run.
+/// Whether the server can restart itself, whether it runs a previous build because
+/// copying the latest failed, whether a restart waits for every turn to end, and
+/// how many turns run.
 pub async fn server(State(state): State<AppState>) -> Response {
     let restart = state.manager.server_restart();
     let supervised = restart.supervision() == Supervision::Shim;
+    let stale_copy = restart.running_build() == RunningBuild::Previous;
     let pending = restart.state() == RestartState::Pending;
     let turns = state.manager.running_turns().await;
-    Json(json!({"supervised": supervised, "pending": pending, "turns": turns})).into_response()
+    Json(json!({
+        "supervised": supervised,
+        "stale_copy": stale_copy,
+        "pending": pending,
+        "turns": turns,
+    }))
+    .into_response()
 }
 
 /// Drops a restart waiting for every turn to end; messages held meanwhile stay held.

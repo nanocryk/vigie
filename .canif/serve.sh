@@ -19,9 +19,20 @@ exe=""
 built=target/release/vigie2$exe
 running=target/serve/vigie2$exe
 mkdir -p target/serve
+staging=$running.tmp
 while true; do
-  cp "$built" "$running" || exit $?
-  VIGIE2_SUPERVISED=1 "$running" serve ${CANIF_BIND:+--bind "$CANIF_BIND"}
+  # A partial copy never replaces a working one: copy aside, compare, then rename.
+  stale=0
+  if ! { cp "$built" "$staging" && cmp -s "$built" "$staging" && mv -f "$staging" "$running"; }; then
+    rm -f "$staging"
+    if [[ ! -f $running ]]; then
+      echo "copying $built failed and no previous copy exists"
+      exit 1
+    fi
+    echo "copying $built failed, running the previous copy"
+    stale=1
+  fi
+  VIGIE2_SUPERVISED=1 VIGIE2_STALE_COPY=$stale "$running" serve ${CANIF_BIND:+--bind "$CANIF_BIND"}
   code=$?
   if [[ $code -ne $restart_code ]]; then
     echo "vigie2 exited with code $code"

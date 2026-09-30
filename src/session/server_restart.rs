@@ -8,6 +8,8 @@ use tokio::sync::watch;
 pub const EXIT_CODE: u8 = 75;
 /// Set by the shim on the server it runs.
 const SUPERVISED_VAR: &str = "VIGIE2_SUPERVISED";
+/// Set by the shim when copying the new build failed and it ran the previous copy.
+const STALE_COPY_VAR: &str = "VIGIE2_STALE_COPY";
 
 /// Whether a shim runs the server again when it exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,24 @@ impl Supervision {
     }
 }
 
+/// Which build the shim runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningBuild {
+    Latest,
+    /// Copying the latest build failed, so the previous copy runs.
+    Previous,
+}
+
+impl RunningBuild {
+    pub fn from_env() -> Self {
+        if std::env::var_os(STALE_COPY_VAR).is_some_and(|value| value == "1") {
+            Self::Previous
+        } else {
+            Self::Latest
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartState {
     Idle,
@@ -38,6 +58,7 @@ pub enum RestartState {
 #[derive(Debug, Clone)]
 pub struct ServerRestart {
     supervision: Supervision,
+    running_build: RunningBuild,
     state: watch::Sender<RestartState>,
 }
 
@@ -45,12 +66,24 @@ impl ServerRestart {
     pub fn new(supervision: Supervision) -> Self {
         Self {
             supervision,
+            running_build: RunningBuild::Latest,
             state: watch::channel(RestartState::Idle).0,
+        }
+    }
+
+    pub fn with_running_build(self, running_build: RunningBuild) -> Self {
+        Self {
+            running_build,
+            ..self
         }
     }
 
     pub fn supervision(&self) -> Supervision {
         self.supervision
+    }
+
+    pub fn running_build(&self) -> RunningBuild {
+        self.running_build
     }
 
     pub fn state(&self) -> RestartState {
