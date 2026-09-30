@@ -23,7 +23,7 @@ use rusqlite::Connection;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-pub use bash_asks::{BashAnswer, BashAsk, Denial};
+pub use bash_asks::{BashAnswer, BashAsk, BashAskFilter, Denial};
 pub use catalog::SharedCatalog;
 pub use events::{EventKind, PageStart, StoredEvent};
 pub use held::{HeldEdit, HeldMessage, HeldMode};
@@ -33,7 +33,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 20] = [
+const MIGRATIONS: [&str; 21] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -179,6 +179,7 @@ CREATE TABLE held_messages (
 CREATE INDEX held_messages_by_session ON held_messages (session_id, position);
 "#,
     bash_asks::MIGRATION,
+    bash_asks::FILTERS_MIGRATION,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -406,6 +407,7 @@ mod tests {
         assert_eq!(
             tables,
             [
+                "bash_ask_filters",
                 "bash_asks",
                 "cli_catalog",
                 "events",

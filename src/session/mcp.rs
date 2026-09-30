@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::store::{BashAsk, Store};
+use crate::store::{BashAsk, BashAskFilter, Store};
 
 pub const SERVER_NAME: &str = "vigie2";
 /// The CLI's name for `set_attachments`, allowed without asking. The other tools ask.
@@ -14,6 +15,7 @@ pub const SET_ATTACHMENTS_TOOL: &str = "mcp__vigie2__set_attachments";
 const SET_ATTACHMENTS: &str = "set_attachments";
 const BASH_ASKS: &str = "bash_asks";
 const BASH_ASKS_CLEAR: &str = "bash_asks_clear";
+const BASH_ASKS_FILTER: &str = "bash_asks_filter";
 /// Answered when the client asks for none.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -21,7 +23,9 @@ const INVALID_PARAMS: i64 = -32602;
 
 const SET_ATTACHMENTS_DESCRIPTION: &str = "Attach files to your reply as chips the user can open, under your last message of this turn. Use it when this turn produced a file meant to be viewed rather than read as code: a generated image, a rendered document, an export, a report. Call it before ending the turn, without being asked. Do not attach source or config files you edited: the user reviews those as diffs. Attach them only if the user asks for the file itself. Each call replaces the whole list for the current turn: call again without a file to drop it, or with an empty list to attach nothing. The chips appear when the turn ends.";
 
-const BASH_ASKS_DESCRIPTION: &str = "List the Bash commands the user was asked to approve, across all sessions and projects, to find the ones worth turning into canif scripts. Rows are grouped by session folder; each gives an id, how many times the command was allowed and denied, when it was asked, the command, its last description, and the user's typed deny messages. Identical commands asked in one folder share a row. Filters combine. Results come in pages: the last line names the offset of the next one.";
+const BASH_ASKS_DESCRIPTION: &str = "List the Bash commands the user was asked to approve, across all sessions and projects, to find the ones worth turning into canif scripts. Rows are grouped by session folder; each gives an id, how many times the command was allowed and denied, when it was asked, the command, its last description, and the user's typed deny messages. Identical commands asked in one folder share a row. Filters combine. Rows matching a `bash_asks_filter` rule are hidden unless `filtered` asks for them. Results come in pages: the last line names the offset of the next one.";
+
+const BASH_ASKS_FILTER_DESCRIPTION: &str = "Manage the rules hiding rows from `bash_asks`: commands that are not canif script candidates, such as ones the user approves one by one on purpose (`git add <paths>`) or one-off exploration. A rule is a regex matched anywhere in the command (anchor it with `^`), for one project folder and below it or for all projects, with a reason saying what it hides and why. Hidden rows are kept: removing a rule shows them again. `list` gives each rule and how many rows it matches.";
 
 const BASH_ASKS_CLEAR_DESCRIPTION: &str = "Delete rows from the list `bash_asks` returns, for instance the ones a canif script now covers, so later reviews show only new commands. Session transcripts are not touched. Rows matching every given filter are deleted; at least one filter is required.";
 
@@ -74,6 +78,7 @@ pub async fn handle(message: &Value, cwd: &Path, store: Option<&Store>) -> Handl
             set_attachments_tool(),
             bash_asks_tool(),
             bash_asks_clear_tool(),
+            bash_asks_filter_tool(),
         ]}))),
         Some("tools/call") => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -90,6 +95,9 @@ pub async fn handle(message: &Value, cwd: &Path, store: Option<&Store>) -> Handl
                 }
                 Some(BASH_ASKS_CLEAR) => Handled::reply(success(outcome(
                     bash_asks_clear(arguments, cwd, store).await,
+                ))),
+                Some(BASH_ASKS_FILTER) => Handled::reply(success(outcome(
+                    bash_asks_filter(arguments, cwd, store).await,
                 ))),
                 name => Handled::reply(failure(
                     INVALID_PARAMS,
@@ -151,6 +159,44 @@ fn bash_asks_tool() -> Value {
                 "limit": {
                     "type": "integer",
                     "description": "Rows per page. Default 100.",
+                },
+                "filtered": {
+                    "type": "boolean",
+                    "description": "List only the rows the filter rules hide, each with the id of the rule hiding it.",
+                },
+            },
+        },
+    })
+}
+
+fn bash_asks_filter_tool() -> Value {
+    json!({
+        "name": BASH_ASKS_FILTER,
+        "description": BASH_ASKS_FILTER_DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "add", "remove"],
+                    "description": "Default `list`.",
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "For `add`: the regex (Rust `regex` syntax) matched anywhere in the command.",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "For `add`: the folder the rule applies in, and below it, absolute or relative to the working directory. Absent: all projects.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "For `add`: what the rule hides and why, in one sentence.",
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "For `remove`: the rules, by the id `list` gives.",
                 },
             },
         },
@@ -249,11 +295,30 @@ async fn bash_asks(arguments: &Value, cwd: &Path, store: Option<&Store>) -> Resu
         },
         ..AskFilter::default()
     };
+    let filtered = match arguments.get("filtered") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(filtered)) => *filtered,
+        Some(_) => return Err("`filtered` must be a boolean.".into()),
+    };
     let offset = count_argument(arguments, "offset")?.unwrap_or(0);
     let limit = count_argument(arguments, "limit")?.unwrap_or(DEFAULT_LIMIT);
-    let asks = selected(store, &filter).await?;
+    let rules = rules(store).await?;
+    let (hidden, shown): (Vec<_>, Vec<_>) = selected(store, &filter)
+        .await?
+        .into_iter()
+        .map(|ask| (hiding(&rules, &ask), ask))
+        .partition(|(rule, _)| rule.is_some());
+    let (asks, set) = if filtered {
+        (hidden, " hidden by filters".to_string())
+    } else {
+        let set = match hidden.len() {
+            0 => String::new(),
+            count => format!(" ({count} more hidden by filters, see `filtered`)"),
+        };
+        (shown, set)
+    };
     if asks.is_empty() {
-        return Ok("No asked Bash command matches.".into());
+        return Ok(format!("No asked Bash command matches{set}."));
     }
     let page = asks.iter().skip(offset).take(limit);
     let end = offset + page.len();
@@ -264,20 +329,24 @@ async fn bash_asks(arguments: &Value, cwd: &Path, store: Option<&Store>) -> Resu
         ));
     }
     let mut lines = vec![format!(
-        "Rows {}-{end} of {}, by folder then command. A row: id, allowed/denied, last asked \
-         (first..last when on different days), command, `# description`. Typed deny \
+        "Rows {}-{end} of {}{set}, by folder then command. A row: id, allowed/denied, last \
+         asked (first..last when on different days), command, `# description`. Typed deny \
          messages follow their row. A newline in a command shows as \\n; commands past \
          {COMMAND_CHARS} characters are cut.",
         offset + 1,
         asks.len(),
     )];
     let mut folder = None;
-    for ask in page {
+    for (rule, ask) in page {
         if folder != Some(&ask.cwd) {
             folder = Some(&ask.cwd);
             lines.push(ask.cwd.display().to_string());
         }
-        lines.push(ask_line(ask));
+        let mut line = ask_line(ask);
+        if let Some(rule) = rule {
+            line.push_str(&format!("  [filter {rule}]"));
+        }
+        lines.push(line);
         for denial in &ask.denials {
             lines.push(format!(
                 "      denied {}: {}",
@@ -330,17 +399,8 @@ async fn bash_asks_clear(
     cwd: &Path,
     store: Option<&Store>,
 ) -> Result<String, String> {
-    let ids = match arguments.get("ids") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(
-            value
-                .as_array()
-                .and_then(|ids| ids.iter().map(Value::as_i64).collect::<Option<Vec<_>>>())
-                .ok_or("`ids` must be a list of integers.")?,
-        ),
-    };
     let filter = AskFilter {
-        ids,
+        ids: ids_argument(arguments)?,
         project: project_argument(arguments, cwd)?,
         before: time_argument(arguments, "before")?,
         ..AskFilter::default()
@@ -370,6 +430,136 @@ async fn selected(store: Option<&Store>, filter: &AskFilter) -> Result<Vec<BashA
         .await
         .map_err(|err| format!("{err:#}"))?;
     Ok(asks.into_iter().filter(|ask| filter.keeps(ask)).collect())
+}
+
+/// A `BashAskFilter` ready to match.
+struct Rule {
+    filter: BashAskFilter,
+    regex: Regex,
+}
+
+async fn rules(store: Option<&Store>) -> Result<Vec<Rule>, String> {
+    let filters = store
+        .ok_or(NO_HISTORY)?
+        .bash_ask_filters()
+        .await
+        .map_err(|err| format!("{err:#}"))?;
+    filters
+        .into_iter()
+        .map(|filter| {
+            let regex = Regex::new(&filter.pattern)
+                .map_err(|err| format!("filter {} does not compile: {err}", filter.id))?;
+            Ok(Rule { filter, regex })
+        })
+        .collect()
+}
+
+/// The id of the first rule hiding `ask`.
+fn hiding(rules: &[Rule], ask: &BashAsk) -> Option<i64> {
+    rules
+        .iter()
+        .find(|rule| {
+            rule.filter
+                .project
+                .as_ref()
+                .is_none_or(|project| ask.cwd.starts_with(project))
+                && rule.regex.is_match(&ask.command)
+        })
+        .map(|rule| rule.filter.id)
+}
+
+async fn bash_asks_filter(
+    arguments: &Value,
+    cwd: &Path,
+    store: Option<&Store>,
+) -> Result<String, String> {
+    let history = store.ok_or(NO_HISTORY)?;
+    match string_argument(arguments, "action")? {
+        Some("add") => {
+            let pattern = string_argument(arguments, "pattern")?
+                .ok_or("`add` needs a `pattern`.")?
+                .to_owned();
+            let regex = Regex::new(&pattern).map_err(|err| format!("Nothing added: {err}"))?;
+            let reason = string_argument(arguments, "reason")?
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .ok_or("`add` needs a `reason`.")?
+                .to_owned();
+            let project = project_argument(arguments, cwd)?;
+            let filter = history
+                .add_bash_ask_filter(pattern, project, reason)
+                .await
+                .map_err(|err| format!("{err:#}"))?;
+            let rule = [Rule { filter, regex }];
+            let hides = hidden_counts(&rule, store).await?[0];
+            Ok(format!(
+                "Added filter {}, hiding {hides} rows.",
+                rule[0].filter.id
+            ))
+        }
+        Some("remove") => {
+            let ids = ids_argument(arguments)?.ok_or("`remove` needs `ids`.")?;
+            let deleted = history
+                .delete_bash_ask_filters(ids)
+                .await
+                .map_err(|err| format!("{err:#}"))?;
+            Ok(format!("Removed {deleted} filters."))
+        }
+        None | Some("list") => {
+            let rules = rules(store).await?;
+            if rules.is_empty() {
+                return Ok("No filters.".into());
+            }
+            let counts = hidden_counts(&rules, store).await?;
+            let lines: Vec<String> = rules
+                .iter()
+                .zip(counts)
+                .map(|(rule, hides)| {
+                    let filter = &rule.filter;
+                    let scope = filter
+                        .project
+                        .as_ref()
+                        .map_or("all projects".into(), |project| {
+                            project.display().to_string()
+                        });
+                    format!(
+                        "{} /{}/ in {scope}, hiding {hides} rows  # {}",
+                        filter.id,
+                        filter.pattern,
+                        one_line(&filter.reason)
+                    )
+                })
+                .collect();
+            Ok(lines.join("\n"))
+        }
+        Some(other) => Err(format!(
+            "`action` must be \"add\", \"remove\" or \"list\", not {other:?}."
+        )),
+    }
+}
+
+/// How many rows each rule matches, rows another rule hides included.
+async fn hidden_counts(rules: &[Rule], store: Option<&Store>) -> Result<Vec<usize>, String> {
+    let asks = selected(store, &AskFilter::default()).await?;
+    Ok(rules
+        .iter()
+        .map(|rule| {
+            asks.iter()
+                .filter(|ask| hiding(std::slice::from_ref(rule), ask).is_some())
+                .count()
+        })
+        .collect())
+}
+
+fn ids_argument(arguments: &Value) -> Result<Option<Vec<i64>>, String> {
+    match arguments.get("ids") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_array()
+            .and_then(|ids| ids.iter().map(Value::as_i64).collect::<Option<Vec<_>>>())
+            .map(Some)
+            .ok_or_else(|| "`ids` must be a list of integers.".into()),
+    }
 }
 
 fn string_argument<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
@@ -569,6 +759,81 @@ mod tests {
         let no_history = super::handle(&call_tool(BASH_ASKS, json!({})), &vigie, None).await;
         assert_eq!(no_history.reply["result"]["isError"], true);
         assert_eq!(no_history.reply["result"]["content"][0]["text"], NO_HISTORY);
+    }
+
+    #[tokio::test]
+    async fn filter_rules_hide_rows_until_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let (vigie, other) = (dir.path().join("vigie"), dir.path().join("other"));
+        let at = "2026-09-20T10:00:00Z".parse().unwrap();
+        for (command, cwd) in [
+            ("git add src", &vigie),
+            ("git add web", &vigie),
+            ("cargo test", &vigie),
+            ("git add x", &other),
+        ] {
+            store.record_bash_ask(command.into(), cwd, None, BashAnswer::Allowed, at);
+        }
+        let run = async |name: &str, arguments: Value| {
+            let handled = super::handle(&call_tool(name, arguments), &vigie, Some(&store)).await;
+            let result = &handled.reply["result"];
+            (
+                result["content"][0]["text"].as_str().unwrap().to_owned(),
+                result["isError"].as_bool().unwrap(),
+            )
+        };
+
+        let (text, _) = run(BASH_ASKS_FILTER, json!({})).await;
+        assert_eq!(text, "No filters.");
+        for bad in [
+            json!({"action": "add", "pattern": "(", "reason": "x"}),
+            json!({"action": "add", "pattern": "^git add ", "reason": " "}),
+            json!({"action": "drop"}),
+        ] {
+            let (text, failed) = run(BASH_ASKS_FILTER, bad).await;
+            assert!(failed, "{text}");
+        }
+        let (text, failed) = run(
+            BASH_ASKS_FILTER,
+            json!({"action": "add", "pattern": "^git add ", "project": ".",
+                "reason": "Paths differ per commit."}),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        assert_eq!(text, "Added filter 1, hiding 2 rows.");
+        let (text, _) = run(BASH_ASKS_FILTER, json!({"action": "list"})).await;
+        assert_eq!(
+            text,
+            format!(
+                "1 /^git add / in {}, hiding 2 rows  # Paths differ per commit.",
+                vigie.display()
+            )
+        );
+
+        let (text, _) = run(BASH_ASKS, json!({})).await;
+        assert!(
+            text.starts_with("Rows 1-2 of 2 (2 more hidden by filters, see `filtered`),"),
+            "{text}"
+        );
+        assert!(
+            text.contains("git add x") && !text.contains("git add src"),
+            "{text}"
+        );
+        let (text, _) = run(BASH_ASKS, json!({"filtered": true})).await;
+        assert!(
+            text.starts_with("Rows 1-2 of 2 hidden by filters,"),
+            "{text}"
+        );
+        assert!(
+            text.contains("git add src  [filter 1]") && !text.contains("cargo test"),
+            "{text}"
+        );
+
+        let (text, _) = run(BASH_ASKS_FILTER, json!({"action": "remove", "ids": [1]})).await;
+        assert_eq!(text, "Removed 1 filters.");
+        let (text, _) = run(BASH_ASKS, json!({})).await;
+        assert!(text.starts_with("Rows 1-4 of 4,"), "{text}");
     }
 
     #[test]

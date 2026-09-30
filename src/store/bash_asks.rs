@@ -66,6 +66,18 @@ FROM ranked
 GROUP BY command, cwd;
 "#;
 
+/// Rules hiding rows from `bash_asks`: a regex on the command, in one folder and
+/// below it or everywhere, and why.
+pub const FILTERS_MIGRATION: &str = r#"
+CREATE TABLE bash_ask_filters (
+    id INTEGER PRIMARY KEY,
+    pattern TEXT NOT NULL,
+    project TEXT,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+) STRICT;
+"#;
+
 /// The deny message the web sends when none was typed, `DEFAULT_DENY` in `AskCard.tsx`;
 /// kept out of `denials` like a blank one, and repeated in `MIGRATION`.
 const DEFAULT_DENY: &str = "The user denied this request.";
@@ -95,6 +107,17 @@ pub struct BashAsk {
 pub struct Denial {
     pub message: String,
     pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BashAskFilter {
+    pub id: i64,
+    /// A regex, unanchored, on the command.
+    pub pattern: String,
+    /// The folder the rule applies in, below it included; `None` applies everywhere.
+    pub project: Option<PathBuf>,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
 }
 
 impl Store {
@@ -180,8 +203,79 @@ impl Store {
 
     /// Deletes these rows; resolves to how many were there.
     pub async fn delete_bash_asks(&self, ids: Vec<i64>) -> Result<usize> {
+        self.delete_ids("bash_asks", ids).await
+    }
+
+    /// Stores a rule as given; the caller checks the pattern.
+    pub async fn add_bash_ask_filter(
+        &self,
+        pattern: String,
+        project: Option<PathBuf>,
+        reason: String,
+    ) -> Result<BashAskFilter> {
+        let created_at = parse_time(&format_time(Utc::now()))?;
         self.call(move |connection| {
-            let mut statement = connection.prepare("DELETE FROM bash_asks WHERE id = ?1")?;
+            connection.execute(
+                "INSERT INTO bash_ask_filters (pattern, project, reason, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    pattern,
+                    project.as_ref().map(|path| path.display().to_string()),
+                    reason,
+                    format_time(created_at),
+                ],
+            )?;
+            Ok(BashAskFilter {
+                id: connection.last_insert_rowid(),
+                pattern,
+                project,
+                reason,
+                created_at,
+            })
+        })
+        .await
+    }
+
+    /// Every rule, oldest first.
+    pub async fn bash_ask_filters(&self) -> Result<Vec<BashAskFilter>> {
+        self.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, pattern, project, reason, created_at FROM bash_ask_filters ORDER BY id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>("id")?,
+                    row.get::<_, String>("pattern")?,
+                    row.get::<_, Option<String>>("project")?,
+                    row.get::<_, String>("reason")?,
+                    row.get::<_, String>("created_at")?,
+                ))
+            })?;
+            let mut filters = Vec::new();
+            for row in rows {
+                let (id, pattern, project, reason, created_at) = row?;
+                filters.push(BashAskFilter {
+                    id,
+                    pattern,
+                    project: project.map(PathBuf::from),
+                    reason,
+                    created_at: parse_time(&created_at)?,
+                });
+            }
+            Ok(filters)
+        })
+        .await
+    }
+
+    /// Deletes these rules; resolves to how many were there.
+    pub async fn delete_bash_ask_filters(&self, ids: Vec<i64>) -> Result<usize> {
+        self.delete_ids("bash_ask_filters", ids).await
+    }
+
+    async fn delete_ids(&self, table: &'static str, ids: Vec<i64>) -> Result<usize> {
+        self.call(move |connection| {
+            let mut statement =
+                connection.prepare(&format!("DELETE FROM {table} WHERE id = ?1"))?;
             let mut deleted = 0;
             for id in ids {
                 deleted += statement.execute([id])?;
