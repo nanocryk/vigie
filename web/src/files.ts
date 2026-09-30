@@ -498,7 +498,7 @@ export function parseStoredState(text: string | null): ExplorerState {
   return { tabs, active, lastFree, showHidden: raw["showHidden"] === true };
 }
 
-const STORAGE_KEY = "vigie2.explorer";
+const STORAGE_KEY = "vigie.explorer";
 const SAVE_DELAY_MS = 300;
 
 function load(): ExplorerState {

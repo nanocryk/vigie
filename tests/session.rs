@@ -10,11 +10,11 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vigie2::claude::child::{Effort, Launch, ModelSettings};
-use vigie2::claude::protocol::{Delta, Inbound, PermissionMode, ResultMessage, StreamEventBody};
-use vigie2::claude::replay::Recording;
-use vigie2::session::grant::GrantKind;
-use vigie2::session::{
+use vigie::claude::child::{Effort, Launch, ModelSettings};
+use vigie::claude::protocol::{Delta, Inbound, PermissionMode, ResultMessage, StreamEventBody};
+use vigie::claude::replay::Recording;
+use vigie::session::grant::GrantKind;
+use vigie::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
 };
 
@@ -718,7 +718,7 @@ const CONTROL_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "hook_callback", "callback_id": "c1"}}}
-{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "error", "request_id": "cli-1", "error": "vigie2 does not handle control request hook_callback"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "error", "request_id": "cli-1", "error": "vigie does not handle control request hook_callback"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "t2"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "a"}, "tool_use_id": "t3"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_cancel_request", "request_id": "cli-2"}}
@@ -901,7 +901,7 @@ fn relay_script(wrapped: &str) -> String {
 
 #[tokio::test]
 async fn a_subagent_asks_through_the_parent_and_takes_a_faithful_relay() {
-    use vigie2::session::agents::{self, AgentState, RelayOutcome};
+    use vigie::session::agents::{self, AgentState, RelayOutcome};
 
     let text = "Say PINEAPPLE.";
     let wrapped = agents::wrap("sleeper", "a1", text);
@@ -1028,7 +1028,7 @@ const FILE_SCRIPT: &str = r#"
 #[cfg(windows)]
 #[tokio::test]
 async fn a_file_granted_for_good_is_allowed_by_the_host() {
-    use vigie2::session::grant::{FileKind, FileOffer};
+    use vigie::session::grant::{FileKind, FileOffer};
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("file.ndjson");
@@ -1260,7 +1260,7 @@ async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
         record(
             "out",
             json!({"type": "control_request", "request_id": request_id, "request": {
-                "subtype": "mcp_message", "server_name": "vigie2", "message": {
+                "subtype": "mcp_message", "server_name": "vigie", "message": {
                     "jsonrpc": "2.0", "id": id, "method": "tools/call",
                     "params": {"name": "set_attachments", "arguments": {"paths": paths}}}}}),
         )
@@ -1286,7 +1286,7 @@ async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
         record(
             "in",
             json!({"type": "control_request", "request_id": "init", "request": {
-                "subtype": "initialize", "sdkMcpServers": ["vigie2"]}}),
+                "subtype": "initialize", "sdkMcpServers": ["vigie"]}}),
         ),
         record(
             "out",
@@ -1296,7 +1296,7 @@ async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
         record(
             "out",
             json!({"type": "control_request", "request_id": "mcp-1", "request": {
-                "subtype": "mcp_message", "server_name": "vigie2",
+                "subtype": "mcp_message", "server_name": "vigie",
                 "message": {"jsonrpc": "2.0", "method": "notifications/initialized"}}}),
         ),
         record(

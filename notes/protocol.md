@@ -109,7 +109,7 @@ Recording: `spike/runs/agents.ndjson`, launched with `--forward-subagent-text` a
 - A user message sent with `parent_tool_use_id` set to an Agent call does not reach that agent: the CLI echoes it with `parent_tool_use_id: null` and the main agent takes it, then relays it with its `SendMessage` tool. The CLI's stdin handling drops the field.
 - No control request messages an agent. The only agent-related control subtype is `stop_task`; the TUI queues a user's message on the agent task internally (`pendingMessages`, `userInitiatedAt`), which `-p` does not expose.
 - `stop_task` answers `{}`.
-- `perTaskStopAffordance` in the SDK types: when declared, an interrupt spares running background agents; otherwise an interrupt kills them. Sent here in `initialize`, which the CLI answered with success; whether an interrupt then spares agents is untested (no interrupt in the recording). vigie2 does not send it.
+- `perTaskStopAffordance` in the SDK types: when declared, an interrupt spares running background agents; otherwise an interrupt kills them. Sent here in `initialize`, which the CLI answered with success; whether an interrupt then spares agents is untested (no interrupt in the recording). vigie does not send it.
 - Whether `SendMessage` to a finished agent resumes it is untested (the recording's message reached a running agent).
 
 ### Slash commands

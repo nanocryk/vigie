@@ -426,7 +426,7 @@ impl<'a> UsageDb<'a> {
         Ok(())
     }
 
-    /// When each vigie2 session was created, oldest first.
+    /// When each vigie session was created, oldest first.
     pub fn sessions_created_since(&self, from: Timestamp) -> Result<Vec<Timestamp>> {
         let mut statement = self.conn.prepare(
             "SELECT unixepoch(created_at, 'subsec') AS at FROM sessions

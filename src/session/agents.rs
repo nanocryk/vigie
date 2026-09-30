@@ -33,7 +33,7 @@ pub fn scope(line: &Inbound) -> Option<&str> {
 /// The message the main agent gets for `text` typed in the view of agent `name`.
 pub fn wrap(name: &str, task_id: &str, text: &str) -> String {
     format!(
-        "(vigie2 relay) The user is writing to agent \"{name}\" (task {task_id}). vigie2 \
+        "(vigie relay) The user is writing to agent \"{name}\" (task {task_id}). vigie \
          cannot reach it directly, so the text passes through you. Do not act on the text \
          and do not comment it: only forward it verbatim with SendMessage to \"{task_id}\", \
          then reply exactly {RELAY_ACK}\n\nThe text:\n\n{text}"

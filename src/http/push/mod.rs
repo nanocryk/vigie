@@ -359,9 +359,9 @@ mod tests {
                 kind: NoticeKind::Finished,
             },
             None,
-            Path::new("/work/vigie2"),
+            Path::new("/work/vigie"),
         );
-        assert_eq!(message.title, "vigie2");
+        assert_eq!(message.title, "vigie");
         assert_eq!(message.body, "Turn finished");
         assert_eq!(message.tag, session.to_string());
         assert_eq!(message.url, format!("#/s/{session}"));
@@ -373,7 +373,7 @@ mod tests {
             session: uuid::Uuid::new_v4(),
             kind: NoticeKind::Ask,
         };
-        let message = notice_message(notice, Some("parser idea"), Path::new("/work/vigie2"));
+        let message = notice_message(notice, Some("parser idea"), Path::new("/work/vigie"));
         assert_eq!(message.title, "parser idea");
     }
 

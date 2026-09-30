@@ -1,5 +1,5 @@
 [package]
-name = "vigie2"
+name = "vigie"
 version = "0.1.0"
 edition = "2024"
 description = "Phone-reachable chat UI driving Claude Code headlessly"
@@ -50,4 +50,4 @@ tokio = { version = "1", features = ["test-util"] }
 tokio-tungstenite = "0.29"
 tower = { version = "0.5", features = ["util"] }
 # Turns `test-support` on for the tests of this package.
-vigie2 = { path = ".", features = ["test-support"] }
+vigie = { path = ".", features = ["test-support"] }

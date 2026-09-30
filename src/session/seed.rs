@@ -1,4 +1,4 @@
-//! The seed of a continued discussion: its last exchanges, rendered from vigie2's
+//! The seed of a continued discussion: its last exchanges, rendered from vigie's
 //! stored events the way `/tail-session` renders a transcript.
 //!
 //! An exchange is a user message echoed by the CLI and every main-conversation
@@ -244,7 +244,7 @@ impl History {
         let total = self.exchanges.len();
         let shown = &self.exchanges[total.saturating_sub(SEED_EXCHANGES)..];
         let mut text = format!(
-            "This is a new session. The previous vigie2 session in {} (started {}, {} exchanges) \
+            "This is a new session. The previous vigie session in {} (started {}, {} exchanges) \
              was restarted into this one. Its last {} exchanges, oldest first:",
             cwd.display(),
             started.format("%Y-%m-%d"),
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(seed.total_exchanges, 1);
         assert_eq!(
             seed.text,
-            "This is a new session. The previous vigie2 session in /work/p \
+            "This is a new session. The previous vigie session in /work/p \
              (started 2026-09-27, 1 exchanges) was restarted into this one. \
              Its last 1 exchanges, oldest first:\n\n\
              ## Exchange 1\n\
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn an_earlier_seed_is_stripped_from_its_message() {
-        let earlier = "This is a new session. The previous vigie2 session in /p.".to_string();
+        let earlier = "This is a new session. The previous vigie session in /p.".to_string();
         let events = [
             user(1, Value::String("first".into())),
             assistant(2, serde_json::json!([{"type": "text", "text": "one"}])),

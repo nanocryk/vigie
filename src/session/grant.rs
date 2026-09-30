@@ -722,19 +722,19 @@ mod tests {
 
     #[test]
     fn reads_within_a_folder_only_below_it() {
-        let folder = Path::new(r"C:\Users\user\.vigie2\uploads\s1");
+        let folder = Path::new(r"C:\Users\user\.vigie\uploads\s1");
         let read = |path: &str| FileOffer {
             kind: FileKind::Read,
             path: path.into(),
         };
-        assert!(read(r"c:\users\USER\.vigie2\uploads\s1\a.png").reads_within(folder));
-        assert!(read(r"C:\Users\user\.vigie2\uploads\s1\sub\b.txt").reads_within(folder));
-        assert!(!read(r"C:\Users\user\.vigie2\uploads\s1").reads_within(folder));
-        assert!(!read(r"C:\Users\user\.vigie2\uploads\s2\a.png").reads_within(folder));
-        assert!(!read(r"C:\Users\user\.vigie2\uploads\s1\..\s2\a.png").reads_within(folder));
+        assert!(read(r"c:\users\USER\.vigie\uploads\s1\a.png").reads_within(folder));
+        assert!(read(r"C:\Users\user\.vigie\uploads\s1\sub\b.txt").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie\uploads\s1").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie\uploads\s2\a.png").reads_within(folder));
+        assert!(!read(r"C:\Users\user\.vigie\uploads\s1\..\s2\a.png").reads_within(folder));
         let edit = FileOffer {
             kind: FileKind::Edit,
-            ..read(r"C:\Users\user\.vigie2\uploads\s1\a.png")
+            ..read(r"C:\Users\user\.vigie\uploads\s1\a.png")
         };
         assert!(!edit.reads_within(folder));
     }

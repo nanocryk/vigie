@@ -3,12 +3,12 @@
 
 import type { CommandInfo } from "@/wire";
 
-/** vigie2's own commands, run by the app instead of being sent to Claude. */
+/** vigie's own commands, run by the app instead of being sent to Claude. */
 export type OwnCommand = "clear" | "model" | "effort";
 
 export interface CommandCard {
   name: string;
-  /** Shown instead of `/name` for vigie2's own commands; null for Claude's. */
+  /** Shown instead of `/name` for vigie's own commands; null for Claude's. */
   title: string | null;
   description: string;
   argumentHint: string;
@@ -40,8 +40,8 @@ export const OWN_COMMANDS: readonly CommandCard[] = [
 ];
 
 /**
- * vigie2's own commands first, then Claude's commands and skills, minus the
- * terminal-only ones and the ones vigie2's own replace.
+ * vigie's own commands first, then Claude's commands and skills, minus the
+ * terminal-only ones and the ones vigie's own replace.
  */
 export function commandCards(
   commands: readonly CommandInfo[],

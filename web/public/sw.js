@@ -26,7 +26,7 @@ self.addEventListener("push", (event) => {
     );
     return;
   }
-  const message = { title: "vigie2", body: "", tag: "vigie2", url: "", ...raw };
+  const message = { title: "vigie", body: "", tag: "vigie", url: "", ...raw };
   event.waitUntil(
     self.registration.showNotification(message.title, {
       body: message.body,
@@ -37,7 +37,7 @@ self.addEventListener("push", (event) => {
   );
 });
 
-// Focuses an open vigie2 window on the discussion, else opens one.
+// Focuses an open vigie window on the discussion, else opens one.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = event.notification.data?.url ?? self.registration.scope;

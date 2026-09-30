@@ -83,7 +83,7 @@ function Notifications() {
       </div>
       {!pushSupported() && (
         <p className="text-muted-foreground voice-ui text-sm">
-          This browser cannot receive push notifications. On iOS, add vigie2 to the home screen
+          This browser cannot receive push notifications. On iOS, add vigie to the home screen
           first.
         </p>
       )}

@@ -53,7 +53,7 @@ impl Vapid {
                 let pkcs8 =
                     EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
                         .map_err(|err| anyhow!("generate vapid pkcs8: {err}"))?;
-                let subject = "mailto:vigie2@localhost".to_string();
+                let subject = "mailto:vigie@localhost".to_string();
                 let file = VapidFile {
                     pkcs8_b64: URL_SAFE_NO_PAD.encode(pkcs8.as_ref()),
                     subject: subject.clone(),

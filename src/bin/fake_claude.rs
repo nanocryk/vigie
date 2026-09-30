@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use tokio::io::BufReader;
-use vigie2::claude::replay::{Options, Pace, Recording, replay};
+use vigie::claude::replay::{Options, Pace, Recording, replay};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {

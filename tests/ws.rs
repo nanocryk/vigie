@@ -22,19 +22,19 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 use uuid::Uuid;
-use vigie2::claude::child::{Effort, Launch};
-use vigie2::claude::protocol::PermissionMode;
-use vigie2::claude::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
-use vigie2::http::auth::{self, Auth};
-use vigie2::http::server::{AppState, build_app};
-use vigie2::http::wire::{
+use vigie::claude::child::{Effort, Launch};
+use vigie::claude::protocol::PermissionMode;
+use vigie::claude::replay::{CANNED_DEFAULT_EFFORT, CANNED_DEFAULT_MODEL};
+use vigie::http::auth::{self, Auth};
+use vigie::http::server::{AppState, build_app};
+use vigie::http::wire::{
     Action, BAD_NAME, CACHE_COLD, ClientMessage, Command, MAX_NAME_CHARS, SESSION_LIVE,
     ServerMessage, SessionList, SessionView, Subscription, WireEvent,
 };
-use vigie2::session::manager::SessionManager;
-use vigie2::session::server_restart::RestartState;
-use vigie2::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
-use vigie2::store::{EventKind, HeldMode, SessionState};
+use vigie::session::manager::SessionManager;
+use vigie::session::server_restart::RestartState;
+use vigie::session::{Answer, Event, EventBody, HostEvent, Line, RestartMode, StopReason};
+use vigie::store::{EventKind, HeldMode, SessionState};
 
 use common::{TIMEOUT, fake};
 
@@ -98,7 +98,7 @@ impl Server {
     }
 
     async fn rest(&self, method: Method, body: Option<Value>) -> (StatusCode, Value) {
-        self.request(method, "/vigie2/api/sessions", body).await
+        self.request(method, "/vigie/api/sessions", body).await
     }
 
     async fn request(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -158,7 +158,7 @@ impl Server {
         cookie: Option<&str>,
         origin: Option<&str>,
     ) -> Result<Client, tungstenite::Error> {
-        let mut request = format!("ws://{}/vigie2/api/ws", self.addr)
+        let mut request = format!("ws://{}/vigie/api/ws", self.addr)
             .into_client_request()
             .unwrap();
         if let Some(cookie) = cookie {
@@ -548,9 +548,7 @@ const USAGE_SCRIPT: &str = r#"
 #[tokio::test]
 async fn a_supervised_server_restarts_on_request() {
     let server = Server::start(USAGE_SCRIPT).await;
-    let (status, body) = server
-        .request(Method::GET, "/vigie2/api/server", None)
-        .await;
+    let (status, body) = server.request(Method::GET, "/vigie/api/server", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
@@ -558,18 +556,16 @@ async fn a_supervised_server_restarts_on_request() {
     );
 
     server.manager.server_restart().when_idle().unwrap();
-    let (_, body) = server
-        .request(Method::GET, "/vigie2/api/server", None)
-        .await;
+    let (_, body) = server.request(Method::GET, "/vigie/api/server", None).await;
     assert_eq!(body["pending"], true);
     let (status, _) = server
-        .request(Method::POST, "/vigie2/api/server/restart/cancel", None)
+        .request(Method::POST, "/vigie/api/server/restart/cancel", None)
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(server.manager.server_restart().state(), RestartState::Idle);
 
     let (status, _) = server
-        .request(Method::POST, "/vigie2/api/server/restart", None)
+        .request(Method::POST, "/vigie/api/server/restart", None)
         .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(server.manager.server_restart().state(), RestartState::Now);
@@ -587,7 +583,7 @@ async fn usage_is_announced_after_a_turn_and_served_over_rest() {
         client.pump().await;
     }
 
-    let (status, body) = server.request(Method::GET, "/vigie2/api/usage", None).await;
+    let (status, body) = server.request(Method::GET, "/vigie/api/usage", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["sessions"][0]["id"], json!(id));
     assert_eq!(
@@ -1495,7 +1491,7 @@ async fn the_shared_catalog_is_served_and_announced() {
     let server = Server::start(CATALOG_SCRIPT).await;
     let mut client = server.client().await;
     let (status, body) = server
-        .request(Method::GET, "/vigie2/api/catalog", None)
+        .request(Method::GET, "/vigie/api/catalog", None)
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -1509,7 +1505,7 @@ async fn the_shared_catalog_is_served_and_announced() {
             continue;
         }
         let (_, body) = server
-            .request(Method::GET, "/vigie2/api/catalog", None)
+            .request(Method::GET, "/vigie/api/catalog", None)
             .await;
         if !body["models"].is_null() && !body["defaults"].is_null() {
             break body;

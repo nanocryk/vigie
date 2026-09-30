@@ -11,18 +11,18 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
-use vigie2::BASE_PATH_SLASH;
-use vigie2::claude::child::Program;
-use vigie2::http::auth::{Auth, Registry};
-use vigie2::http::net;
-use vigie2::http::push::{self, Pusher};
-use vigie2::http::server::{AppState, build_app};
-use vigie2::session::manager::{Probe, SessionManager};
-use vigie2::session::server_restart::{
+use vigie::BASE_PATH_SLASH;
+use vigie::claude::child::Program;
+use vigie::http::auth::{Auth, Registry};
+use vigie::http::net;
+use vigie::http::push::{self, Pusher};
+use vigie::http::server::{AppState, build_app};
+use vigie::session::manager::{Probe, SessionManager};
+use vigie::session::server_restart::{
     self, RestartState, RunningBuild, ServerRestart, Supervision,
 };
-use vigie2::state_dir;
-use vigie2::store::Store;
+use vigie::state_dir;
+use vigie::store::Store;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7879";
 /// Vite build output, relative to the working directory.
@@ -32,7 +32,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "vigie2",
+    name = "vigie",
     about = "Phone-reachable chat UI driving Claude Code headlessly"
 )]
 struct Cli {
@@ -143,7 +143,7 @@ impl Settings {
             .unwrap_or_else(|| DEFAULT_BIND.parse().expect("valid default bind"));
         if args.http && !bind.ip().is_loopback() {
             bail!(
-                "--http refused on non-loopback bind {bind}: vigie2 never carries session data over plaintext off-loopback",
+                "--http refused on non-loopback bind {bind}: vigie never carries session data over plaintext off-loopback",
             );
         }
         let provided = match (args.cert.or(config.cert), args.key.or(config.key)) {
@@ -197,7 +197,7 @@ async fn main() -> Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "vigie2=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "vigie=info,tower_http=info".into()),
         )
         .init();
 
@@ -232,7 +232,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
     let registry = Registry::load(devices_path.clone())?;
     let auth = Arc::new(Auth::new(registry, settings.tls_on()));
 
-    // `vigie2 auth revoke-all` rewrites devices.json from a second process.
+    // `vigie auth revoke-all` rewrites devices.json from a second process.
     // Reloading here is what makes the panic button reach a running server.
     let _registry_watcher = spawn_file_watcher(&devices_path, "devices", {
         let auth = Arc::clone(&auth);
@@ -288,7 +288,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
     if settings.print_token {
         let loopback_origin = format!("{scheme}://127.0.0.1:{}", bind.port());
-        eprintln!("\nvigie2 listening on {scheme}://{bind}{BASE_PATH_SLASH}");
+        eprintln!("\nvigie listening on {scheme}://{bind}{BASE_PATH_SLASH}");
         eprintln!("Pair URL (single use, valid until this process exits):");
         eprintln!(
             "  {loopback_origin}{BASE_PATH_SLASH}#auth={}",
@@ -420,7 +420,7 @@ fn allowed_origins(settings: &Settings, reachable_ips: &[IpAddr]) -> BTreeSet<St
 
 /// Watch a single file for external mutation, running `on_change` on every
 /// event whose path matches. `devices.json` is rewritten by
-/// `vigie2 auth revoke-all` from a second process while a server is up.
+/// `vigie auth revoke-all` from a second process while a server is up.
 ///
 /// Returned watcher must be kept alive for the process lifetime; dropping it
 /// stops the watch.

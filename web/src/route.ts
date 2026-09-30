@@ -53,7 +53,7 @@ export function useRoute(): Route {
 }
 
 /** History state key: how many entries separate this one from the Home entry below it. */
-const DEPTH = "vigie2-depth";
+const DEPTH = "vigie-depth";
 
 /** Entries above the Home entry; null when none is behind (opened on a screen directly). */
 function homeDistance(): number | null {

@@ -1,4 +1,4 @@
-# vigie2
+# vigie
 
 A web app, reachable from a phone or a computer, that drives Claude Code on your own machine. The server runs `claude -p` headlessly with stream-json input and output and renders a native chat UI around it. No terminal in the loop.
 
@@ -28,7 +28,7 @@ Supervised work with Claude Code, away from the desk as much as at it. You read 
 
 - [Rust](https://rustup.rs/) 1.85 or newer (edition 2024).
 - [Node.js](https://nodejs.org/) with npm, to build the web app.
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) installed, with `claude` on the `PATH`, and logged in with a Claude subscription. vigie2 refuses to run sessions billed through an API key: it removes `ANTHROPIC_API_KEY` from Claude's environment, and stops a session that reports any other key source.
+- [Claude Code](https://docs.claude.com/en/docs/claude-code) installed, with `claude` on the `PATH`, and logged in with a Claude subscription. vigie refuses to run sessions billed through an API key: it removes `ANTHROPIC_API_KEY` from Claude's environment, and stops a session that reports any other key source.
 
 ### Build
 
@@ -50,19 +50,19 @@ The server serves the web app from `web/dist`, relative to the working directory
 cargo run --release -- serve
 ```
 
-By default it listens on `https://127.0.0.1:7879/vigie2/` with a self-signed certificate, and prints a pair URL:
+By default it listens on `https://127.0.0.1:7879/vigie/` with a self-signed certificate, and prints a pair URL:
 
 ```
-vigie2 listening on https://127.0.0.1:7879/vigie2/
+vigie listening on https://127.0.0.1:7879/vigie/
 Pair URL (single use, valid until this process exits):
-  https://127.0.0.1:7879/vigie2/#auth=...
+  https://127.0.0.1:7879/vigie/#auth=...
 ```
 
 Open the pair URL in a browser to pair that device. The browser warns about the self-signed certificate on first visit. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
 
 ### Configuration
 
-Settings live in `~/.vigie2/config.json`, next to the database, keys and device registry. Every field is optional, and a command-line flag overrides its field.
+Settings live in `~/.vigie/config.json`, next to the database, keys and device registry. Every field is optional, and a command-line flag overrides its field.
 
 | Field           | Flag                     | Default          | Meaning                                                  |
 |-----------------|--------------------------|------------------|----------------------------------------------------------|
@@ -83,38 +83,38 @@ cargo run --release -- auth revoke-all
 
 [Tailscale](https://tailscale.com/) puts your phone and your machine on a private network (a tailnet), and can issue a real TLS certificate for the machine's tailnet name. This is the recommended setup: nothing is exposed to the internet, and the phone trusts the certificate, so there is no warning page, and the installed app and push notifications work.
 
-1. Install Tailscale on the machine running vigie2 and on the phone, logged in to the same tailnet.
+1. Install Tailscale on the machine running vigie and on the phone, logged in to the same tailnet.
 2. In the Tailscale admin console, on the DNS page, enable MagicDNS and HTTPS Certificates.
 3. Find the machine's full tailnet name, for example `mybox.tail1234.ts.net`: it is listed on the Machines page of the admin console.
-4. Get a certificate for that name. `tailscale cert` writes it to the current directory, so run it from `~/.vigie2`:
+4. Get a certificate for that name. `tailscale cert` writes it to the current directory, so run it from `~/.vigie`:
 
    ```sh
-   cd ~/.vigie2
+   cd ~/.vigie
    tailscale cert mybox.tail1234.ts.net
    ```
 
    This writes `mybox.tail1234.ts.net.crt` and `mybox.tail1234.ts.net.key`.
 
-5. Point vigie2 at them in `~/.vigie2/config.json`. Binding to the machine's Tailscale IP (shown by `tailscale ip -4`) makes vigie2 reachable only through the tailnet; bind `0.0.0.0:7879` instead to also reach it on the local network.
+5. Point vigie at them in `~/.vigie/config.json`. Binding to the machine's Tailscale IP (shown by `tailscale ip -4`) makes vigie reachable only through the tailnet; bind `0.0.0.0:7879` instead to also reach it on the local network.
 
    ```json
    {
      "bind": "100.101.102.103:7879",
-     "cert": "C:\\Users\\me\\.vigie2\\mybox.tail1234.ts.net.crt",
-     "key": "C:\\Users\\me\\.vigie2\\mybox.tail1234.ts.net.key",
+     "cert": "C:\\Users\\me\\.vigie\\mybox.tail1234.ts.net.crt",
+     "key": "C:\\Users\\me\\.vigie\\mybox.tail1234.ts.net.key",
      "public_hosts": ["mybox.tail1234.ts.net"]
    }
    ```
 
    A public host without a port gets the bind port.
 
-6. Start vigie2. The startup output now includes a pair URL on `https://mybox.tail1234.ts.net:7879/vigie2/`; open it on the phone, or pair from an already paired device and pick the tailnet name.
+6. Start vigie. The startup output now includes a pair URL on `https://mybox.tail1234.ts.net:7879/vigie/`; open it on the phone, or pair from an already paired device and pick the tailnet name.
 
-The certificate is valid for 90 days. Renew it by running `tailscale cert` again, then restart vigie2: the certificate is loaded at startup. Certificates are published in public Certificate Transparency logs, so the tailnet name becomes public, though the machine stays unreachable outside the tailnet.
+The certificate is valid for 90 days. Renew it by running `tailscale cert` again, then restart vigie: the certificate is loaded at startup. Certificates are published in public Certificate Transparency logs, so the tailnet name becomes public, though the machine stays unreachable outside the tailnet.
 
 ## Remote access with port forwarding
 
-Without Tailscale, forward a port on the router to the machine and bind vigie2 to `0.0.0.0`. This exposes vigie2 to the whole internet: the pairing token and device authentication are then all that stand between the internet and a Claude Code able to run commands on your machine. Prefer Tailscale.
+Without Tailscale, forward a port on the router to the machine and bind vigie to `0.0.0.0`. This exposes vigie to the whole internet: the pairing token and device authentication are then all that stand between the internet and a Claude Code able to run commands on your machine. Prefer Tailscale.
 
 - Bring your own certificate for a domain name pointing at the router (`cert` and `key`), and add that name to `public_hosts`. With the self-signed certificate, the phone shows a warning on every new visit, and the installed app and push notifications may not work.
 - Keep the forwarded port the same as the bind port, or give the public host its port explicitly (`"example.com:443"`).

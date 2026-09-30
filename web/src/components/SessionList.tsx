@@ -451,7 +451,7 @@ export function SessionList({ client }: { client: Client }) {
   return (
     <>
       <Header
-        left={<span className="text-primary voice-heading px-2 text-lg">vigie2</span>}
+        left={<span className="text-primary voice-heading px-2 text-lg">vigie</span>}
         right={<ConnectionDot status={snapshot.status} />}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}

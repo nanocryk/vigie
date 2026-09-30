@@ -1,4 +1,4 @@
-//! vigie2's MCP server, hosted in each session actor and reached through `mcp_message`.
+//! vigie's MCP server, hosted in each session actor and reached through `mcp_message`.
 
 use std::path::{Path, PathBuf};
 
@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 use crate::session::server_restart::ServerRestart;
 use crate::store::{BashAsk, BashAskFilter, Store};
 
-pub const SERVER_NAME: &str = "vigie2";
+pub const SERVER_NAME: &str = "vigie";
 /// The CLI's name for `set_attachments`, allowed without asking. The other tools ask.
-pub const SET_ATTACHMENTS_TOOL: &str = "mcp__vigie2__set_attachments";
+pub const SET_ATTACHMENTS_TOOL: &str = "mcp__vigie__set_attachments";
 
 const SET_ATTACHMENTS: &str = "set_attachments";
 const BASH_ASKS: &str = "bash_asks";
@@ -31,7 +31,7 @@ const BASH_ASKS_FILTER_DESCRIPTION: &str = "Manage the rules hiding rows from `b
 
 const BASH_ASKS_CLEAR_DESCRIPTION: &str = "Delete rows from the list `bash_asks` returns, for instance the ones a canif script now covers, so later reviews show only new commands. Session transcripts are not touched. Rows matching every given filter are deleted; at least one filter is required.";
 
-const RESTART_SERVER_DESCRIPTION: &str = "Restart the vigie2 server on the last built binary, for instance after `server/build` built a server change. The restart waits until no turn runs in any session, this one included, so end the turn after calling it. Messages the user sends meanwhile are held and show in their discussion. Only works when the server was started by `serve.sh`. It never builds.";
+const RESTART_SERVER_DESCRIPTION: &str = "Restart the vigie server on the last built binary, for instance after `server/build` built a server change. The restart waits until no turn runs in any session, this one included, so end the turn after calling it. Messages the user sends meanwhile are held and show in their discussion. Only works when the server was started by `serve.sh`. It never builds.";
 
 const RESTART_SCHEDULED: &str =
     "Restart scheduled: it happens once no turn runs in any session, so end this turn now.";
@@ -451,7 +451,7 @@ async fn bash_asks_clear(
     Ok(format!("Deleted {deleted} rows."))
 }
 
-const NO_HISTORY: &str = "vigie2 keeps no history for this session.";
+const NO_HISTORY: &str = "vigie keeps no history for this session.";
 
 async fn selected(store: Option<&Store>, filter: &AskFilter) -> Result<Vec<BashAsk>, String> {
     let asks = store

@@ -36,11 +36,11 @@ Every other frame is a command on one session. It carries `session` and `client_
 
 ## Attachments
 
-`POST /api/sessions/{id}/upload?name=` stores the raw body (up to 100 MB) as `~/.vigie2/uploads/{id}/{random}-{name}`, `name` reduced to a safe base name, and answers `{path}`. Unknown sessions get 404. Read asks on files in that folder are allowed by the server.
+`POST /api/sessions/{id}/upload?name=` stores the raw body (up to 100 MB) as `~/.vigie/uploads/{id}/{random}-{name}`, `name` reduced to a safe base name, and answers `{path}`. Unknown sessions get 404. Read asks on files in that folder are allowed by the server.
 
 A message with attachments reaches Claude as its text, a blank line, then `Attachments:` and one `- {path}` line per file (the block alone when the text is blank). `user_sent` and `relay_sent` record `text` and `attachments` apart, so clients show the files apart from the text; the CLI's echo holds the composed text.
 
-Claude attaches files to its own reply with the `set_attachments {paths}` tool of vigie2's MCP server (`mcp__vigie2__set_attachments`, allowed without asking, loaded up front rather than behind tool search via `_meta["anthropic/alwaysLoad"]`). Its description asks Claude to attach, unprompted, files meant to be viewed (generated images, rendered documents, exports) and not source or config files it edited, unless the user asks for the file. Each call replaces the turn's list; `[]` clears it. Relative paths resolve from the session folder; every path must be an existing file, else the call fails, naming the bad paths, and the list stays as it was. Calls from subagents count for the main turn. When the main agent's turn ends (its `result` line) with a non-empty list, `claude_attached {attachments}` follows, absolute paths; clients show them on the turn's last Claude text. A child that stops mid-turn drops the list.
+Claude attaches files to its own reply with the `set_attachments {paths}` tool of vigie's MCP server (`mcp__vigie__set_attachments`, allowed without asking, loaded up front rather than behind tool search via `_meta["anthropic/alwaysLoad"]`). Its description asks Claude to attach, unprompted, files meant to be viewed (generated images, rendered documents, exports) and not source or config files it edited, unless the user asks for the file. Each call replaces the turn's list; `[]` clears it. Relative paths resolve from the session folder; every path must be an existing file, else the call fails, naming the bad paths, and the list stays as it was. Calls from subagents count for the main turn. When the main agent's turn ends (its `result` line) with a non-empty list, `claude_attached {attachments}` follows, absolute paths; clients show them on the turn's last Claude text. A child that stops mid-turn drops the list.
 
 ## Server to client
 
@@ -72,7 +72,7 @@ Claude attaches files to its own reply with the `set_attachments {paths}` tool o
 
 `GET /api/catalog` is what all discussions share, persisted: `models` and `commands` (shaped as in `catalog`) from the latest `initialize` of any Claude start, `terminal_commands` (names of the commands that only work in the terminal) from the latest `system/init`, and `defaults {model, effort}`, what `get_settings` reports applying for a child launched without a model or effort whose discussion still has none. Each is null until first reported. With `models` or `defaults` unknown at launch, the server starts one Claude in its state folder to read them (`initialize` and `get_settings`, no user message), then stops it; a failure waits for the next launch.
 
-`POST /api/sessions {cwd}` starts a session in `cwd`, an existing absolute folder (else 400 `bad_cwd`), in permission mode `default`. `POST /api/sessions/scratch` (no body) creates a new folder in `~/.vigie2/scratch` and starts a session there in `acceptEdits`. Both answer 201 with the session, shaped as in `GET /api/sessions`.
+`POST /api/sessions {cwd}` starts a session in `cwd`, an existing absolute folder (else 400 `bad_cwd`), in permission mode `default`. `POST /api/sessions/scratch` (no body) creates a new folder in `~/.vigie/scratch` and starts a session there in `acceptEdits`. Both answer 201 with the session, shaped as in `GET /api/sessions`.
 
 Each session of `GET /api/sessions` carries:
 

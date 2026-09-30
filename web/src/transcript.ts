@@ -39,7 +39,7 @@ const WAKE_ONE = "Stopped background task: ";
 const WAKE_MANY = "Stopped background tasks: ";
 const WAKE_SEPARATOR = "; ";
 
-/** The message vigie2 sends to wake Claude after stopping background tasks. */
+/** The message vigie sends to wake Claude after stopping background tasks. */
 export function wakeText(names: readonly string[]): string {
   return names.length === 1
     ? `${WAKE_ONE}${names[0] ?? ""}`
@@ -401,8 +401,11 @@ export const emptyTranscript: TranscriptState = {
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
 const SKILL_TOOL = "Skill";
-/** vigie2's attach tool: its effect shows as chips on the reply, so its row is hidden. */
-const SET_ATTACHMENTS_TOOL = "mcp__vigie2__set_attachments";
+/**
+ * vigie's attach tool: its effect shows as chips on the reply, so its row is hidden.
+ * History recorded before the rename names it after the `vigie2` server.
+ */
+const SET_ATTACHMENTS_TOOLS = new Set(["mcp__vigie__set_attachments", "mcp__vigie2__set_attachments"]);
 
 const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
@@ -1324,7 +1327,7 @@ class Draft {
             endTime: null,
             attached: null,
           });
-          if (block.name === SET_ATTACHMENTS_TOOL) this.hideLast();
+          if (SET_ATTACHMENTS_TOOLS.has(block.name)) this.hideLast();
           return;
         case "tool_result":
         case "other":

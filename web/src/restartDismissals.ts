@@ -26,7 +26,7 @@ export function adviceHidden(hiddenAt: number | undefined, usedTokens: number): 
   return hiddenAt !== undefined && usedTokens >= hiddenAt;
 }
 
-const STORAGE_KEY = "vigie2.restart-dismissals";
+const STORAGE_KEY = "vigie.restart-dismissals";
 
 let current: Dismissals | null = null;
 const listeners = new Set<() => void>();

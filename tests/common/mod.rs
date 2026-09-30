@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use vigie2::claude::child::Program;
+use vigie::claude::child::Program;
 
 pub const TIMEOUT: Duration = Duration::from_secs(20);
 

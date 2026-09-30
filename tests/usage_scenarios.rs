@@ -4,11 +4,11 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use rusqlite::Connection;
 use uuid::Uuid;
-use vigie2::usage::db::{MessageTokens, UsageDb};
-use vigie2::usage::mix::Family;
-use vigie2::usage::units::{Pct, Timestamp};
-use vigie2::usage::window::{WindowKind, WindowState};
-use vigie2::usage::{self, SessionContext, Snapshot, WindowReport};
+use vigie::usage::db::{MessageTokens, UsageDb};
+use vigie::usage::mix::Family;
+use vigie::usage::units::{Pct, Timestamp};
+use vigie::usage::window::{WindowKind, WindowState};
+use vigie::usage::{self, SessionContext, Snapshot, WindowReport};
 
 /// 2026-09-14 00:00:00 UTC, a Monday.
 const MONDAY: f64 = 1_789_344_000.0;
@@ -29,7 +29,7 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let connection = Connection::open_in_memory().expect("in-memory database");
-        vigie2::store::migrate(&connection).expect("migrate");
+        vigie::store::migrate(&connection).expect("migrate");
         Self { connection }
     }
 

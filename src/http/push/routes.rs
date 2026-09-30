@@ -84,7 +84,7 @@ pub async fn test(
         .map_err(|err| ApiError::internal("read the push subscription", err))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no_subscription"))?;
     let message = Message {
-        title: "vigie2".into(),
+        title: "vigie".into(),
         body: "Test notification".into(),
         tag: "test".into(),
         url: String::new(),

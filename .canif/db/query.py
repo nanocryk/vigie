@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ---
 # description: >
-#   Run one read-only SQL query on vigie2's history database (~/.vigie2/history.db):
+#   Run one read-only SQL query on vigie's history database (~/.vigie/history.db):
 #   events, sessions, usage samples. Rows tab-separated, long cells cut.
 # risky: true
 # args:
@@ -36,7 +36,7 @@ limit = int(os.environ["CANIF_LIMIT"])
 if re.search(r"\bvacuum\b", sql, re.IGNORECASE):
     sys.exit("refused: VACUUM")
 
-path = os.path.expanduser("~/.vigie2/history.db")
+path = os.path.expanduser("~/.vigie/history.db")
 db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 db.execute("PRAGMA query_only = 1")
 

@@ -12,7 +12,7 @@ describe("attachments", () => {
   });
 
   it("are named without the upload prefix", () => {
-    expect(attachmentName("C:\\h\\.vigie2\\uploads\\s\\0a1b2c3d4e5f-shot.png")).toBe("shot.png");
+    expect(attachmentName("C:\\h\\.vigie\\uploads\\s\\0a1b2c3d4e5f-shot.png")).toBe("shot.png");
     expect(attachmentName("/tmp/notes-v2.md")).toBe("notes-v2.md");
   });
 

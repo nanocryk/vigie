@@ -160,7 +160,7 @@ describe("parseSessionList", () => {
         sessions: [
           {
             id: "a",
-            cwd: "C:\\work\\vigie2",
+            cwd: "C:\\work\\vigie",
             created_at: "c",
             updated_at: "u",
             state: { kind: "exited", code: 1 },
@@ -368,7 +368,7 @@ describe("routes", () => {
 
 describe("folderName", () => {
   it("takes the last segment of either path style", () => {
-    expect(folderName("C:\\work\\vigie2\\")).toBe("vigie2");
+    expect(folderName("C:\\work\\vigie\\")).toBe("vigie");
     expect(folderName("/home/me/proj")).toBe("proj");
   });
 });

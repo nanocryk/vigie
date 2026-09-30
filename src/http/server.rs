@@ -22,10 +22,10 @@ use crate::session::manager::SessionManager;
 /// Path prefix everything is served under. Android builds a WebAPK's intent
 /// filter from scheme, host and path, never the port, so two apps behind one
 /// hostname collide at the root and only one can install.
-pub const BASE_PATH: &str = "/vigie2";
+pub const BASE_PATH: &str = "/vigie";
 /// `BASE_PATH` with the trailing slash, which is the form the app document is
 /// actually served at.
-pub const BASE_PATH_SLASH: &str = "/vigie2/";
+pub const BASE_PATH_SLASH: &str = "/vigie/";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -150,7 +150,7 @@ async fn no_store(req: Request, next: Next) -> Response {
     resp
 }
 
-/// Send `/vigie2` to `/vigie2/`. The document addresses its assets relative to
+/// Send `/vigie` to `/vigie/`. The document addresses its assets relative to
 /// itself, so without the trailing slash every one of them would resolve
 /// against the root. Runs as a layer rather than a route because the nest
 /// claims the bare prefix for itself.
@@ -442,7 +442,7 @@ mod auth_gate_tests {
     async fn assets_are_served_under_the_base_path() {
         let app = build_test_app().await;
         let mut served = Vec::new();
-        for uri in [BASE_PATH_SLASH, "/vigie2/assets/app.js"] {
+        for uri in [BASE_PATH_SLASH, "/vigie/assets/app.js"] {
             served.push((uri, get_raw(&app.router, uri).await.status()));
         }
         let missing: Vec<_> = served

@@ -30,7 +30,7 @@ const COMMAND_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// vigie2's id for the session, exported to the child as `VIGIE2_SESSION_ID`.
+    /// vigie's id for the session, exported to the child as `VIGIE_SESSION_ID`.
     pub id: Uuid,
     pub cwd: PathBuf,
     pub launch: Launch,

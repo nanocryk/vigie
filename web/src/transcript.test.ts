@@ -263,12 +263,14 @@ describe("transcript from recordings", () => {
       },
     });
     const state = applyEvents(emptyTranscript, [
-      call("1", "mcp__vigie2__set_attachments"),
+      call("1", "mcp__vigie__set_attachments"),
       call("2", "Read"),
+      call("3", "mcp__vigie2__set_attachments"),
     ]);
     expect(state.items.map((item) => [item.kind === "tool" && item.name, item.hidden])).toEqual([
-      ["mcp__vigie2__set_attachments", true],
+      ["mcp__vigie__set_attachments", true],
       ["Read", undefined],
+      ["mcp__vigie2__set_attachments", true],
     ]);
   });
 
@@ -570,7 +572,7 @@ describe("synthetic user lines", () => {
 });
 
 describe("restarts", () => {
-  const SEED = "This is a new session. The previous vigie2 session in /p.\n\n## Exchange 1\nUser: hi";
+  const SEED = "This is a new session. The previous vigie session in /p.\n\n## Exchange 1\nUser: hi";
   const event = (seq: number, kind: "host" | "line", payload: unknown): WireEvent =>
     kind === "host"
       ? { session: SESSION, seq, time: "t", kind, payload: parseHostEvent(payload) }
@@ -784,7 +786,7 @@ describe("streaming", () => {
 });
 
 describe("paged history", () => {
-  const SEED = "This is a new session. The previous vigie2 session in /p.";
+  const SEED = "This is a new session. The previous vigie session in /p.";
   const host = (payload: unknown): WireEvent => ({
     session: SESSION,
     seq: 0,
@@ -1001,7 +1003,7 @@ describe("subagents", () => {
       description: "sleeper",
       prompt: "Sleep.",
     });
-  const WRAPPED = "(vigie2 relay) ... The text:\n\nSay PINEAPPLE.";
+  const WRAPPED = "(vigie relay) ... The text:\n\nSay PINEAPPLE.";
 
   function relayed(sendMessageTo: string, reply: string, outcome: unknown): TranscriptState {
     return applyEvents(emptyTranscript, [
@@ -1208,15 +1210,15 @@ describe("plan asks", () => {
 
 describe("toolDisplayName", () => {
   it("titles an MCP tool and names its server", () => {
-    expect(toolDisplayName("mcp__vigie2__bash_asks")).toBe("Bash Asks (vigie2)");
+    expect(toolDisplayName("mcp__vigie__bash_asks")).toBe("Bash Asks (vigie)");
     expect(toolDisplayName("mcp__claude-in-chrome__read_page")).toBe("Read Page (claude-in-chrome)");
   });
 
   it("leaves built-in and malformed names unchanged", () => {
     expect(toolDisplayName("Bash")).toBe("Bash");
-    expect(toolDisplayName("mcp__vigie2")).toBe("mcp__vigie2");
+    expect(toolDisplayName("mcp__vigie")).toBe("mcp__vigie");
     expect(toolDisplayName("mcp____tool")).toBe("mcp____tool");
-    expect(toolDisplayName("mcp__vigie2__")).toBe("mcp__vigie2__");
+    expect(toolDisplayName("mcp__vigie__")).toBe("mcp__vigie__");
   });
 });
 
@@ -1241,18 +1243,18 @@ describe("toolSummary", () => {
       "1 question",
     );
     expect(toolSummary("Grep", { pattern: "fn main", path: "src" })).toBe("fn main in src");
-    const cwd = "E:\\work\\vigie2";
-    expect(toolSummary("Edit", { file_path: "E:\\work\\vigie2\\src\\main.rs" }, cwd)).toBe(
+    const cwd = "E:\\work\\vigie";
+    expect(toolSummary("Edit", { file_path: "E:\\work\\vigie\\src\\main.rs" }, cwd)).toBe(
       "src\\main.rs",
     );
-    expect(toolSummary("Read", { file_path: "e:/work/vigie2/web/a.ts" }, cwd)).toBe("web/a.ts");
-    expect(toolSummary("Write", { file_path: "E:\\work\\vigie2x\\a.rs" }, cwd)).toBe(
-      "E:\\work\\vigie2x\\a.rs",
+    expect(toolSummary("Read", { file_path: "e:/work/vigie/web/a.ts" }, cwd)).toBe("web/a.ts");
+    expect(toolSummary("Write", { file_path: "E:\\work\\vigiex\\a.rs" }, cwd)).toBe(
+      "E:\\work\\vigiex\\a.rs",
     );
     expect(toolSummary("Read", { file_path: "C:\\Users\\me\\.claude\\plans\\p.md" }, cwd)).toBe(
       "C:\\Users\\me\\.claude\\plans\\p.md",
     );
-    expect(toolSummary("Grep", { pattern: "x", path: "E:\\work\\vigie2\\src" }, cwd)).toBe(
+    expect(toolSummary("Grep", { pattern: "x", path: "E:\\work\\vigie\\src" }, cwd)).toBe(
       "x in src",
     );
     expect(toolSummary("Read", { file_path: "/home/me/p/a.ts" }, "/home/me/p/")).toBe("a.ts");

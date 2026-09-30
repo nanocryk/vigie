@@ -1,8 +1,8 @@
-# vigie2
+# vigie
 
 A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`, the client protocol in `notes/wire.md`.
 
-Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use vigie in the meantime without breaking anything or if the billing changes". Vigie's hook already does nothing without the `VIGIE_HOOK_URL` and `VIGIE_HOOK_SECRET` env vars, so vigie2 removes every `VIGIE_*` var from its children's env.
+It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI through a PTY.
 
 ## Usage profile
 
@@ -20,7 +20,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Access and clients
 
-- Remote access and authentication work as in Vigie.
+- Remote access and authentication work as in vigie-tui.
 - Several clients (phone, computer) can be on the same session at once. A card answered on one client disappears on all of them.
 - Compose drafts can be stored on the server.
 
@@ -28,11 +28,11 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 - The host owns every session; clients connect to the server.
 - A session is never continued in a terminal.
-- vigie2 keeps its own history of messages per session and never asks the SDK or the transcript files for past messages: "history is not edited".
-- vigie2 serves past context from its own history, more efficiently than a script reading transcripts. `/tail-session` stays independent of vigie2, for when vigie2 is broken or not in use.
-- Search across all discussions, served from vigie2's history without touching Claude's context or the SDK.
-- Background tasks started by Claude are visible to vigie2, shown in the session, and count in the session's idle state.
-- vigie2 remembers where sessions were started; no favorites. A session that ended through a server reboot or a failure stays known, and is continued with the same choices as a cold cache.
+- vigie keeps its own history of messages per session and never asks the SDK or the transcript files for past messages: "history is not edited".
+- vigie serves past context from its own history, more efficiently than a script reading transcripts. `/tail-session` stays independent of vigie, for when vigie is broken or not in use.
+- Search across all discussions, served from vigie's history without touching Claude's context or the SDK.
+- Background tasks started by Claude are visible to vigie, shown in the session, and count in the session's idle state.
+- vigie remembers where sessions were started; no favorites. A session that ended through a server reboot or a failure stays known, and is continued with the same choices as a cold cache.
 
 ## Continuity
 
@@ -43,7 +43,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Cache and context
 
-- The top bar has three slots: a fixed-width left slot (the vigie2 mark on Home, a Home icon on every other screen, pulsing like a Home row in the strongest state among the sessions not on screen: ask, unexpected stop, finished turn; not work), the gauges in the middle, and a fixed-width right slot with the connection status and the device settings cogwheel. The account column sits at exactly the same place on Home and in a session.
+- The top bar has three slots: a fixed-width left slot (the vigie mark on Home, a Home icon on every other screen, pulsing like a Home row in the strongest state among the sessions not on screen: ask, unexpected stop, finished turn; not work), the gauges in the middle, and a fixed-width right slot with the connection status and the device settings cogwheel. The account column sits at exactly the same place on Home and in a session.
 - The gauges have two columns: the account usage windows (see Account usage), then the session: a context bar (bar and numbers yellow from 50% of the window, red from 70%) and a cache bar of the same length, the cache bar draining over the TTL. Every gauge bar has a notch each 10%, except the cache bar: each 10 minutes of a 1 hour TTL, each minute of a 5 minute one. Side by side from about 600 px wide (unfolded phone, desktop), stacked below.
 - On Home the session column is replaced by "needs you": pending asks across all sessions (colored when any) and the number of sessions working, on its first row; its second row stays empty so the top bar keeps its height.
 - A thin bar under the top bar holds the session's name and status on the left (on Home, nothing), and in a session a "Project folder" button on the right, opening the session's explorer tab. Reloading is the browser's pull-down on the top bar.
@@ -68,12 +68,12 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - One notification per discussion: each push replaces the previous one of that discussion. Once the discussion is seen on any device, every device that got a push for it since it was last seen receives a silent push closing that notification, so they never pile up. Tapping one opens the discussion.
 - Cold cache: sending and approving are blocked until the user picks one of:
   - rewarm: send on the cold cache, in the same Claude session;
-  - continue: a fresh Claude session seeded with past context from vigie2's history;
+  - continue: a fresh Claude session seeded with past context from vigie's history;
   - blank: a fresh empty Claude session.
 - Continue and blank keep the same discussion: same Home entry, same history, same permission mode. Only the Claude session behind it changes; later messages go to the new one. The discussion shows a divider row across its full width, on a solid background: "Restarted: N exchanges given as context" or "Restarted: blank"; tapping it shows the seed that was sent.
-- Seed of a continue, built from vigie2's history as `/tail-session` renders a transcript: a header "This is a new session. The previous vigie2 session in <folder> (started <date>, M exchanges) was restarted into this one. Its last N exchanges, oldest first:", then the last 5 exchanges (an exchange is a user message and everything until the next one). Each keeps the user text cut at 1200 characters, each Claude text block cut at 800, and one line per tool call `Name(key=arg) → result` with argument and result cut at 100; thinking is dropped. The message the user had typed follows the seed in the same first message, so no turn is spent on the seed alone; with nothing typed, the seed ends with "The user has not typed a request yet: summarize where things stand and ask what to do next."
+- Seed of a continue, built from vigie's history as `/tail-session` renders a transcript: a header "This is a new session. The previous vigie session in <folder> (started <date>, M exchanges) was restarted into this one. Its last N exchanges, oldest first:", then the last 5 exchanges (an exchange is a user message and everything until the next one). Each keeps the user text cut at 1200 characters, each Claude text block cut at 800, and one line per tool call `Name(key=arg) → result` with argument and result cut at 100; thinking is dropped. The message the user had typed follows the seed in the same first message, so no turn is spent on the seed alone; with nothing typed, the seed ends with "The user has not typed a request yet: summarize where things stand and ask what to do next."
 - The choice shows the context usage % and, when available, the estimated cost of rewarming in the 5h and 7d usage windows. At low %, rewarming costs about what a new session plus recovering the context costs; at high %, it costs too much.
-- vigie2 never picks for the user; it only prevents interacting with a cold cache by accident.
+- vigie never picks for the user; it only prevents interacting with a cold cache by accident.
 - The server enforces it too: while the cache is cold (by the same rule as the client), a message or an ask answer is refused unless it carries the rewarm choice; restarting (continue, blank) and interrupting are always accepted. A client bug cannot bypass the choice.
 - The choice is one panel replacing the composer, shared with archived sessions. Rewarm is red, continue green, blank blue. Rewarm asks for confirmation behind a large warning that it re-sends the whole context at full price.
 
@@ -105,29 +105,29 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Panels that accept notes have a button opening a text field; the note is sent with the swipe. A deny note is the deny message; an allow note follows as a queued user message framed as attached to the approval.
   - Edit-tool asks (Edit, Write, MultiEdit, NotebookEdit) have an "Accept edits" toggle beside the notes button: allowing with it on also switches the discussion to Accept edits. Hidden on dangerous asks.
   - Asks the CLI pairs with a folder suggestion (access outside the allowed folders) show the path as segments. None is highlighted by default; tapping a segment highlights it, meaning "allowing also allows this folder for the session", and tapping it again clears it. Any segment can be picked, so a parent covers its subfolders at once. The grant keeps the kind the CLI suggested, moved to the picked folder: read access for Read, Glob, Grep and Bash, a working folder for Write. Picking a folder matching the list of bad picks (drive roots, the home folder, `~/.claude`, `Documents`, ...) makes the ask dangerous. The grant lives in the Claude process: after a restart it is asked again.
-  - Read and edit-tool asks have an "Always for this file" toggle, shown on dangerous asks too. Allowing with it on makes vigie2 itself allow the later asks on that exact file of the same kind (reading, or any edit tool), from the main agent or a subagent; each shows a one-line "Auto-allowed" row in the discussion. When the ask is not a CLI safety check, the allow also sends the CLI a session rule for the file, so the CLI stops asking. vigie2 answers safety-check asks itself because the CLI ignores rules for them (edits under `~/.claude`). The file grants last as long as the Claude process: a restart of it or of vigie2 asks again.
+  - Read and edit-tool asks have an "Always for this file" toggle, shown on dangerous asks too. Allowing with it on makes vigie itself allow the later asks on that exact file of the same kind (reading, or any edit tool), from the main agent or a subagent; each shows a one-line "Auto-allowed" row in the discussion. When the ask is not a CLI safety check, the allow also sends the CLI a session rule for the file, so the CLI stops asking. vigie answers safety-check asks itself because the CLI ignores rules for them (edits under `~/.claude`). The file grants last as long as the Claude process: a restart of it or of vigie asks again.
   - The danger reasons have a copy button: the swipe surface leaves no text to select.
   - Bash asks show, above the command, the text Claude wrote before the call in the same message (one round of text and tool calls, before their results come back; none when that message has no text), muted and height-capped: the command's explanation.
-  - Dangerous means what the CLI flags, plus vigie2's own checks on top: `rm -r` / `rm -rf`, `git push --force`, `git reset --hard`, writes outside the session folder.
+  - Dangerous means what the CLI flags, plus vigie's own checks on top: `rm -r` / `rm -rf`, `git push --force`, `git reset --hard`, writes outside the session folder.
   - The swipe is a shared component, used elsewhere in the app too (e.g. swipe left on a discussion to archive it).
   - Animation: at rest the panel is undecided yellow, the "waiting for a decision" color. While the finger moves, it goes toward the decision's green or red, and snaps to a more intense shade on reaching the threshold, like a latch. After the first swipe, the yellow fills back in over the 3 s, showing the choice fading away. The fill sweeps toward the chosen side: left to right after a right swipe, right to left after a left swipe.
 - Diffs viewable like a developer reads code. Edit and Write rows show their diff as the TUI does: `Update(path)` with the path relative to the session folder, an "Added N lines, removed M lines" summary, a line-number gutter, added lines on teal with `+`, removed lines on red with `-`, syntax highlighting. Expanded by default and collapsible; a reload expands them again. The raw tool result stays one toggle away. While an edit waits for approval, its diff is in the approval panel (the thing swiped), and the discussion shows a one-line "awaiting approval" row in its place.
 - A turn whose Edit, MultiEdit or Write calls succeeded, the main agent's and its subagents', ends with one row: "Changed 4 files, +120 -30", lines summed over the calls. Tapping it opens the session tab's diff view; in a folder outside a repository the row is not tappable. Changes made through Bash are not counted.
 - Subagents integrated directly, their discussion visible.
   - An agent is named by its task description (the Agent call's `description`), as the TUI does.
-  - Discussions never mix: a subagent's discussion shows only in its own view, reached only by switching to it manually. The main discussion shows one line when an agent is created, nothing of its discussion. vigie2 still receives the subagents' text (`--forward-subagent-text`), each line routed to its agent's view only; workflows keeping a subagent secret rely on not switching to its view. An agent's view opens with its brief, the prompt its parent gave it, as a folded row like a tool call.
+  - Discussions never mix: a subagent's discussion shows only in its own view, reached only by switching to it manually. The main discussion shows one line when an agent is created, nothing of its discussion. vigie still receives the subagents' text (`--forward-subagent-text`), each line routed to its agent's view only; workflows keeping a subagent secret rely on not switching to its view. An agent's view opens with its brief, the prompt its parent gave it, as a folded row like a tool call.
   - A subagent's permission asks reach the parent's ask panel (the CLI sends them on the parent's control channel, with `agent_id`). An ask from any agent can be answered from any agent's view.
   - A subagent's ask left unanswered until 1 minute before its cache expires (the agent's TTL from the ask's arrival, so 4 minutes for 5) is denied by the server, open client or not: "No answer within 4 minutes. Wrap up now: report what is done, what is left, and what needed permission. No other tool use will be approved." Every later ask of that agent is denied at once with the same message. The card counts down to the deny; the agent's view shows a line per auto-denied ask. The main agent's asks never time out.
   - When the ask belongs to another agent than the one on screen, its card offers a "Go to agent: <name>" button switching to that agent's discussion for context. In that agent's own view, the button is absent.
   - Glance: a pill in the thin bar, next to the mode and model pills, gives the number of agents working ("2 agents working"); hidden when no agent exists. Tapping it opens the agents panel.
   - The agents panel (also a menu entry) shows the tree of agents, each with its current or last activity. It hides agents last active more than 1 hour ago, except the one on screen. Tap or swipe right switches to that agent's discussion; double swipe left stops it (`stop_task`). On desktop, buttons. The menu's Agents entry is also a panic control stopping every running agent: double swipe left on it; on desktop, a "Stop all" button beside it, pressed twice. Both stay available with no agent running, for discoverability, and then only say so.
-  - Messages to a subagent: `-p` cannot reach a subagent directly, so a message typed in an agent's view is relayed by the main agent. vigie2 sends the main agent a wrapped message: a short note that the user is writing to agent `<name>` (task `<task_id>`), that vigie2 cannot reach it directly so the text passes through it, that it must not act on or comment the text, only forward it verbatim with SendMessage to `<task_id>`, then reply exactly `[Relay acknowledged]`; then the text. In the agent's view the message shows as a user bubble marked "via main agent". In the main discussion the wrapped message, the SendMessage call and the acknowledgement are hidden when the relay was faithful (SendMessage `to` is that task id and `message` the exact text); anything else shows as usual. A failed relay (other recipient, altered text, no acknowledgement) shows a warning line in the agent's view pointing to the main discussion. A relay sent while the main agent works is queued like any message.
+  - Messages to a subagent: `-p` cannot reach a subagent directly, so a message typed in an agent's view is relayed by the main agent. vigie sends the main agent a wrapped message: a short note that the user is writing to agent `<name>` (task `<task_id>`), that vigie cannot reach it directly so the text passes through it, that it must not act on or comment the text, only forward it verbatim with SendMessage to `<task_id>`, then reply exactly `[Relay acknowledged]`; then the text. In the agent's view the message shows as a user bubble marked "via main agent". In the main discussion the wrapped message, the SendMessage call and the acknowledgement are hidden when the relay was faithful (SendMessage `to` is that task id and `message` the exact text); anything else shows as usual. A failed relay (other recipient, altered text, no acknowledgement) shows a warning line in the agent's view pointing to the main discussion. A relay sent while the main agent works is queued like any message.
   - A relay to a finished agent resumes it. Subagents cache with a 5-minute TTL (the main agent 1 hour): an agent's view has its own cache bar over 5 minutes from that agent's last request, and a relay to an agent whose cache is cold goes through the cold-cache confirmation, showing the context to re-cache. The main discussion's own cold check applies to the relay first.
   - An agent's view shows that agent's context, never the main one's: the prompt of its last request as a token count ("84k") over a dashed empty bar, "--" before its first request. The agents panel shows the same count after each agent's state ("done · 84k").
 - Notification and visibility settings per session or project. Example: an RPG with a game-master agent keeping a secret adventure state must not leak it.
 - Session controls: model, effort, permission mode.
 - Send takes gestures: tap or swipe right sends, swipe left stops, swipe up opens the menu. Single swipes, no confirmation. Stop works only while a turn runs (not for background tasks alone); Send stays available to queue messages. Nothing floats over the discussion.
-- Held messages: vigie2 keeps a queue of messages per discussion on the server, so every device sees it and it works with the phone asleep.
+- Held messages: vigie keeps a queue of messages per discussion on the server, so every device sees it and it works with the phone asleep.
   - Each has a mode: held (waits for the user) or at turn end (sent automatically when the main agent's turn ends).
   - Send during a turn queues the message at turn end. The menu, with text in the composer, offers Hold (held, with or without a turn) and, during a turn, Send now (written to Claude at once; the CLI gives it to Claude after the running tool call, in the same turn).
   - They show pinned at the bottom of the discussion, below Claude's output: dashed border, dimmed, tagged "held" or "at turn end". Tapping one opens its actions: Send now, Edit, Delete, switch the mode. Edit loads it into the composer with an "Editing queued message" strip; Send saves; if it was sent meanwhile, the composer keeps the text and says so.
@@ -140,9 +140,9 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - With a keyboard, Shift+Tab cycles the permission mode in the TUI order: Manual, Accept edits, Plan, Manual. A mode outside that list cycles as Manual.
 - The permission mode is stored per session and kept current (picked in the menu, or reported by the CLI). Every start of the child (resume after a cold cache, a crash or a server restart) passes it with `--permission-mode`, so a session comes back in its mode. On a stopped session, picking a mode only stores it; the next message starts the child in it. New sessions start in Manual; a cold-cache "continue" inherits the mode of the session it continues.
 - Model and effort: a pick is stored per discussion and passed on every start of the child; without a pick the CLI chooses. The menu always shows what the CLI actually applies, read with `get_settings` (`applied.model`, `applied.effort`) when the child starts, after each turn and after a change, and kept for stopped discussions: e.g. "Opus 5.5" and "medium effort", never "Default" or "auto". Only those two values are kept from that reply, which also carries the user's settings. The catalog (models, commands) and the applied values with no pick are shared by all discussions: the server keeps the latest seen from any Claude start, persisted, so a stopped or cold discussion still shows its values and opens its lists; a discussion without its own applied values shows its pick, else those defaults. With nothing stored yet, the server starts a short-lived Claude at launch to read them, without any model request. Since a change reloads the cache (model always; effort treated the same), the model and effort menu entries each open a single choice, "Stop here and change model" (or effort). It interrupts a running turn and puts the discussion in the cold-cache state: the choice panel shows and the entry used opens its list (models from the CLI's `initialize`; effort levels those the chosen model supports, none on a model without effort). While the panel shows, the menu's model and effort entries open their lists; a pick, a tap elsewhere or Escape closes it. The panel's first button is a green "Resume, same model" when nothing changed (no cache cost), or a red "Rewarm with new settings" with the reload warning and a confirmation when something did; continue and blank start on the picked settings.
-- Commands: the menu's commands entry opens a panel in front of the discussion, one card per command with its name, a short description and its argument hint. vigie2's own commands come first: Clear (a fresh Claude session and a "Cleared" divider, like blank, without the cold check), Change model, Change effort. Then Claude's commands and skills from `initialize`, minus the terminal-only ones. A card is used by a double swipe right, or on desktop a Use button on its right pressed twice; for Clear that is its confirmation. The filter field sits at the bottom, in the composer's place. Typing `/` as the composer's first character opens the same panel, the composer text acting as the filter. A command without an argument is sent at once; one with an argument turns the bottom field into its argument entry, prefilled with `/name `. A composer draft present when the panel is used is never touched: the command goes alone, and the draft is back afterwards. A `/...` typed in the composer is the command itself and is consumed.
+- Commands: the menu's commands entry opens a panel in front of the discussion, one card per command with its name, a short description and its argument hint. vigie's own commands come first: Clear (a fresh Claude session and a "Cleared" divider, like blank, without the cold check), Change model, Change effort. Then Claude's commands and skills from `initialize`, minus the terminal-only ones. A card is used by a double swipe right, or on desktop a Use button on its right pressed twice; for Clear that is its confirmation. The filter field sits at the bottom, in the composer's place. Typing `/` as the composer's first character opens the same panel, the composer text acting as the filter. A command without an argument is sent at once; one with an argument turns the bottom field into its argument entry, prefilled with `/name `. A composer draft present when the panel is used is never touched: the command goes alone, and the draft is back afterwards. A `/...` typed in the composer is the command itself and is consumed.
 - File references (`path:line`) and URLs in messages are links, opened inside the app.
-- Attachments in prompts, including screenshots taken on the phone, better integrated than in Vigie.
+- Attachments in prompts, including screenshots taken on the phone, better integrated than in vigie-tui.
 - Commit card: a commit is presented as a card, not a bare command. Generalizes to custom presentations: specific commands get a customized interface.
 - Verification chips: checks (command, pass or fail, output tail) reported through the MCP server, expandable. Checks are registered per project, so the full list shows, including the ones skipped; the agent answers why a check was not run (not needed, not relevant, ...).
 - Plan file progress shown in the session. Mentions of a plan part (e.g. "Phase 3 of the plan") are clickable and show that part.
@@ -150,10 +150,10 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## MCP server
 
-- vigie2 exposes an MCP server to its sessions. Claude drives the UI through tool calls instead of text syntax parsed out of messages.
-- Hosted in each session's actor as an SDK MCP server: calls arrive on the child's control channel, so they reach their session with no port or auth. vigie2's tools that only affect the session's display are allowed without asking; their descriptions alone tell Claude when to use them.
+- vigie exposes an MCP server to its sessions. Claude drives the UI through tool calls instead of text syntax parsed out of messages.
+- Hosted in each session's actor as an SDK MCP server: calls arrive on the child's control channel, so they reach their session with no port or auth. vigie's tools that only affect the session's display are allowed without asking; their descriptions alone tell Claude when to use them.
 - Attachments: `set_attachments` sets the files shown on Claude's reply at the end of the turn; each call replaces the list, so a wrong file is dropped by calling again (see `notes/wire.md`).
-- Asked Bash commands, to find the ones worth turning into canif scripts. vigie2 keeps one row per command and session folder in the `bash_asks` table: allowed and denied counts, first and last time asked, last description, and the typed deny messages. Every Bash ask the user answers updates it; the first migration filled it from the asks already in the events. `bash_asks` lists the rows as compact text grouped by folder, in pages of 100 with long commands cut (filters: since, project, decision) and `bash_asks_clear` deletes rows (by ids, project, or before a date), never the events. `bash_asks_filter` adds, removes and lists rules hiding rows that are not script candidates (such as `git add <paths>`, approved per instance on purpose): a regex on the command, for one project folder or all, with its reason. `bash_asks` hides the rows a rule matches, counts them in its first line, and lists only them on request; rows are kept, so removing a rule shows them again. All three ask the user on every call, since they read and change data from every project. The analysis is an agent's, through the user-invoked `canif-suggest` skill: vigie2 groups nothing itself.
+- Asked Bash commands, to find the ones worth turning into canif scripts. vigie keeps one row per command and session folder in the `bash_asks` table: allowed and denied counts, first and last time asked, last description, and the typed deny messages. Every Bash ask the user answers updates it; the first migration filled it from the asks already in the events. `bash_asks` lists the rows as compact text grouped by folder, in pages of 100 with long commands cut (filters: since, project, decision) and `bash_asks_clear` deletes rows (by ids, project, or before a date), never the events. `bash_asks_filter` adds, removes and lists rules hiding rows that are not script candidates (such as `git add <paths>`, approved per instance on purpose): a regex on the command, for one project folder or all, with its reason. `bash_asks` hides the rows a rule matches, counts them in its first line, and lists only them on request; rows are kept, so removing a rule shows them again. All three ask the user on every call, since they read and change data from every project. The analysis is an agent's, through the user-invoked `canif-suggest` skill: vigie groups nothing itself.
 - Server restart: `restart_server` schedules a restart for once no turn runs in any session (see Host). It asks the user on every call.
 - Presentation: show images (e.g. a screenshot a command took), file excerpts, diffs, and other content in the discussion.
 - Interaction: custom blocking widgets whose answer returns as the tool result, a richer `AskUserQuestion`.
@@ -162,17 +162,17 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Projects and Home
 
-- Projects Home designed anew. Vigie's Home (file explorer, favorites, discussions per project) is "a bit messy".
+- Projects Home designed anew. vigie-tui's Home (file explorer, favorites, discussions per project) is "a bit messy".
 - No workspace concept: commands reach the whole machine anyway. Projects are the folders sessions were started in.
 - Home lists projects and scratch discussions as two kinds of entries.
 - A full-screen file explorer (see File explorer), opened from a "File explorer" button on Home. Sessions start from it; there is no path field.
 - Buttons switch between a session and its related folder or file, "so it becomes more fluid to switch between them".
-- Opening a file or folder lands where expected. Vigie often lands in the wrong directory; the navigation logic is designed anew.
+- Opening a file or folder lands where expected. vigie-tui often lands in the wrong directory; the navigation logic is designed anew.
 - Handoffs are detected and give their project a special status. Opening the session suggests starting from the handoff. The handoff, clear, read-handoff sequence is integrated as a workflow.
 - canif scripts are first-class: shown with their description and what each argument is.
 - Items with positive and negative actions take them by swipe: negative ones to the left, positive ones to the right. On desktop, each action's button sits on the side the item slides toward. On touch screens, the action is shown either by a button or by a hint above the list, on that same side.
 - Session rows on Home: a double swipe left kills a live session (stops its Claude process; it stays listed), a single swipe left archives a stopped one, a single swipe right restores an archived one. The background a swipe reveals is red for kill, blue for archive and green for restore, snapping brighter once the swipe reaches its threshold, like the ask panel. On touch screens, a small "‹ Kill / Archive" hint sits once at the left above the first active row, and "Restore ›" at the right above the first archived row. Desktop has Kill and Archive buttons on the row's left and Restore on its right, narrow with the label written vertically. The session screen has no kill; its menu's "Revoke all folders" stops the process the same way, only while no turn runs. The discussion shows why the process stopped ("Stopped from Home", "Folders revoked", "Server stopped"), not the process exit.
-- A session can be given a name, stored by vigie2; its folder never changes. The name shows wherever the folder name would (Home row, session title, push notifications). It is set from the Name entry of the session menu, archived sessions included; clearing it brings the folder name back.
+- A session can be given a name, stored by vigie; its folder never changes. The name shows wherever the folder name would (Home row, session title, push notifications). It is set from the Name entry of the session menu, archived sessions included; clearing it brings the folder name back.
 - A session row shows its name (or folder name) and last activity time, then its path; no status line and no status dot. A row whose Claude process is not running has a dashed border and faded contents. While a kill or a restore runs, its label replaces the time.
 - Session rows keep last-activity order, frozen while Home is visible so a row never moves under a tap: a new or restored session goes on top of its list, and the order refreshes on the next visit or when the app is hidden. A row's border pulses slowly in the color of its strongest state: yellow while an ask waits (until answered), red for an unexpected stop not yet seen, green for a finished turn not yet seen, a very dim blue while working. Idle and seen: no highlight. Unexpected stops are the child exiting unasked and a failed auth gate; Kill from Home, revoking folders and a server stop are not.
 - Seen is shared across devices: a session is seen once any device has it on screen with an active user, the page visible and some input (pointer, touch, key, wheel) within the last 2 minutes. Scrolling is not input: the discussion scrolls itself as replies stream in. A window left open while away does not count.
@@ -198,7 +198,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Pending changes of a git repository: HEAD against the working tree, staged, unstaged and untracked merged into one view. Read through the `git` command line.
 - A view of an explorer tab, like a folder or a file; the system back button leaves it the same way. Opened by a Diff button in the explorer header when the current folder is inside a repository, and by a Diff button in a session's thin bar when its folder is, which opens the session tab on it. Both buttons show their label on wide screens and only their icon on narrow ones, like Project folder.
 - Top: a summary (files, lines added and removed), Refresh, and Collapse all or Expand all. Then the changed files grouped by folder, each with its status color and counts, tapping one scrolling to its diff.
-- Then each file's diff, rendered by vigie2 itself, long lines wrapped: a header with status, path (old and new for a rename) and counts, tapping it collapsing or expanding the diff. Files over 200 changed lines and lockfiles start collapsed. A deleted file shows its removed lines. Binary files show a one-line note instead of lines.
+- Then each file's diff, rendered by vigie itself, long lines wrapped: a header with status, path (old and new for a rename) and counts, tapping it collapsing or expanding the diff. Files over 200 changed lines and lockfiles start collapsed. A deleted file shows its removed lines. Binary files show a one-line note instead of lines.
 - Tapping a line number on the new side opens the file view at that line; the back button returns to the diff. In a deleted file, tapping a line number opens the folder that held it, where it shows as a deleted row.
 - Refreshed when opened, when the app returns to the foreground, and by Refresh; no file watcher.
 - File view of a file with pending changes: its line-number column marks added lines green and modified lines orange (a block that both removes and adds), and draws a red rule between two line numbers where lines were removed. Opened from the diff, it scrolls to the line and flashes it. Tapping a marked line number opens the diff at that file and line, the row outlined for a moment.
@@ -206,10 +206,10 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Scratch discussions
 
-- A discussion can start without a project, in a new folder under the scratch root `~/.vigie2/scratch`, named by the local date and two random words (`2026-09-29-amber-fox`).
+- A discussion can start without a project, in a new folder under the scratch root `~/.vigie/scratch`, named by the local date and two random words (`2026-09-29-amber-fox`).
 - A session is scratch while its folder sits directly in the scratch root; nothing else marks it.
 - Home has a Scratch section under the session list, with a New scratch button that creates the folder and opens the empty session, its composer focused. Scratch sessions are listed there, not in the main list, with the same swipes. Archived ones join the shared Archived section.
-- A scratch folder can be promoted when the idea turns out interesting: vigie2 moves it to a chosen destination. vigie2 implements promotion itself; `/cd` is unavailable under `-p`.
+- A scratch folder can be promoted when the idea turns out interesting: vigie moves it to a chosen destination. vigie implements promotion itself; `/cd` is unavailable under `-p`.
 - Scratch folders are never deleted automatically; deletion is a manual action.
 - Scratch sessions start in `acceptEdits`; project sessions start in `default`.
 
@@ -218,7 +218,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - Usage module inside the app, doing what the custom Claude status bar does today, and more: 5h and 7d windows with projections, stats. Remade in this service to avoid useless dependencies, porting the existing Rust code from `../claude-projection-status`.
 - Estimates are calibrated from the tokens each turn reports, window usage measured before and after turns, and history. The same data feeds stats and projections.
 - History stores the raw CLI lines and periodic `get_usage` samples.
-- The usage storage is vigie2's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
+- The usage storage is vigie's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
 - The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
 - Each window row starts with the time left before its reset over the window length, as in the status bar (`3h55/5h`).
 - Bars use the text color by default (white on the dark theme). Window colors follow the status bar:
@@ -232,7 +232,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 
 ## Usage credits
 
-- Usage credits are disabled on the user's account. Their use is detected on a best-effort basis; on detection vigie2 stops the discussion automatically and warns the user so they can investigate.
+- Usage credits are disabled on the user's account. Their use is detected on a best-effort basis; on detection vigie stops the discussion automatically and warns the user so they can investigate.
 - Signals: `rate_limit_event` reporting overage use or an `overage` limit type, main-conversation cache writes moving from the 1 hour to the 5 minute TTL, `get_usage` extra-usage credits increasing.
 
 ## Host
@@ -240,11 +240,11 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 - One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart. A Claude session no message reached yet has no conversation to resume, so it launches again with `--session-id` until one does.
 - Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
 - History in SQLite, for queries and search.
-- Runs next to Vigie on its own port and state directory. vigie2 sets its own env var on its children, so hooks can detect which host runs them.
+- vigie sets its own env var on its children, so hooks can detect which host runs them. Every other `VIGIE_*` var (a parent session's, the shim's) is removed from their env.
 - Children run without claude.ai connectors (`ENABLE_CLAUDEAI_MCP_SERVERS=false`): an unauthorized connector otherwise gets reported by the model in its replies.
 - Server restart:
-  - `serve.sh` is a shim. It builds once at launch, then loops: copy `target/release/vigie2.exe` to `target/serve/`, run the copy with `VIGIE2_SUPERVISED=1`, run it again when it exits with code 75, stop on any other code. The build output is never locked, so `server/build` works while the server runs.
-  - The copy goes to a temp file, is checked against the build's hash, then renamed over the running copy. When that fails the shim runs the previous copy with `VIGIE2_STALE_COPY=1`, and the app shows a thin bar across every page: the restart ran the previous build.
+  - `serve.sh` is a shim. It builds once at launch, then loops: copy `target/release/vigie.exe` to `target/serve/`, run the copy with `VIGIE_SUPERVISED=1`, run it again when it exits with code 75, stop on any other code. The build output is never locked, so `server/build` works while the server runs.
+  - The copy goes to a temp file, is checked against the build's hash, then renamed over the running copy. When that fails the shim runs the previous copy with `VIGIE_STALE_COPY=1`, and the app shows a thin bar across every page: the restart ran the previous build.
   - Once the WebSocket to a supervised server has been down for 30 s, the same kind of bar says the server is unreachable and likely needs a manual restart. It clears on reconnect.
   - A restart never builds: it runs the last built binary again.
   - Device settings has a Restart button, shown only under the shim. It confirms first and says how many running turns it stops. The server stops as on Ctrl+C, then exits with 75. Sessions resume on demand as after any restart. The page reloads once the new process answers.
@@ -253,16 +253,16 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
 ## Frontend stack
 
 - React, TypeScript and Vite: a single-page app served by the host server.
-- Tailwind and shadcn/ui, restyled with vigie2's own theme rather than the shadcn defaults.
+- Tailwind and shadcn/ui, restyled with vigie's own theme rather than the shadcn defaults.
 - Motion for gestures and animation (swipe cards).
 - Recursive for all text, its settings varying by role to keep the UI "varied while consistent". Code (spans and blocks) is monospaced and fully linear; everything else (message prose, UI, headings) is proportional, prose and headings half casual. Text needing alignment comes in code blocks, so it keeps it.
 
 ## Development
 
 - Lots of unit and integration tests. A fake `claude` replays recorded stream-json sessions, so tests cost no usage and stay deterministic. Recordings also catch regressions across Claude Code updates and show what changed.
-- vigie2 is developed with vigie2 (dogfooding), so it must stay usable with degraded features. When it is too broken and a plain Claude Code TUI is used instead, the user's hooks, skills and tools must handle not running under vigie2.
-- The first slice holds the core features the others build on. Authentication is copied from Vigie. Content:
-  - Server with Vigie's authentication.
+- vigie is developed with vigie (dogfooding), so it must stay usable with degraded features. When it is too broken and a plain Claude Code TUI is used instead, the user's hooks, skills and tools must handle not running under vigie.
+- The first slice holds the core features the others build on. Authentication is copied from vigie-tui. Content:
+  - Server with vigie-tui's authentication.
   - Sessions: start one in a chosen folder, list, reopen.
   - Child process with the auth gate: no API key in the child env; `apiKeySource` other than `"none"` stops the session.
   - SQLite history; clients connect over a websocket and get a replay on reconnect.
@@ -271,7 +271,7 @@ Vigie (`../vigie`) stays unchanged and usable alongside it: "still allow to use 
   - Several clients on one session; a card answered on one disappears on the others.
   - Fake `claude` replaying the recordings in tests.
 - Outside the first slice: directory explorer, swipe, cache and usage header, cold-cache blocking, MCP server, scratch folders.
-- Second slice, making vigie2 the daily tool:
+- Second slice, making vigie the daily tool:
   - Markdown rendering in bubbles; diffs for Edit and Write.
   - Usage module (see Account usage).
   - Cache and context header with cold-cache blocking.

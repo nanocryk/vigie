@@ -1065,9 +1065,9 @@ function FileViewer({
 
 // ---- Page ----
 
-const UP_ENTRY = "vigie2-explorer-up";
+const UP_ENTRY = "vigie-explorer-up";
 /** Marks an explorer entry whose back leaves the explorer until the user moves inside it. */
-const BACK_LEAVES = "vigie2-explorer-back-leaves";
+const BACK_LEAVES = "vigie-explorer-back-leaves";
 
 /** Opens the explorer so that back returns to the screen before, as for an attachment. */
 export function navigateBackLeaves(): void {

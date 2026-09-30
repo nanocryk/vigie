@@ -14,7 +14,7 @@ use serde_json::{Map, Number, Value};
 
 pub type Extra = Map<String, Value>;
 
-/// The CLI's permission mode. `Other` keeps a mode vigie2 does not know as it
+/// The CLI's permission mode. `Other` keeps a mode vigie does not know as it
 /// was written, so any mode the CLI accepts or reports goes through.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
@@ -1137,7 +1137,7 @@ pub struct GetUsageResponse {
     pub extra: Extra,
 }
 
-/// The parts of a `get_context_usage` reply vigie2 reads; the rest describes the
+/// The parts of a `get_context_usage` reply vigie reads; the rest describes the
 /// user's configuration and is dropped unread.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1150,7 +1150,7 @@ pub struct ContextUsageResponse {
     pub categories: Vec<ContextCategory>,
 }
 
-/// The part of a `get_settings` reply vigie2 reads; the rest holds the user's
+/// The part of a `get_settings` reply vigie reads; the rest holds the user's
 /// settings and is dropped unread.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SettingsResponse {

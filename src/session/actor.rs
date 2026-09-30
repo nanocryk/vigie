@@ -442,7 +442,7 @@ impl Actor {
                     .unwrap_or("(none)");
                 let response = ControlResponse::error(
                     request.request_id.clone(),
-                    format!("vigie2 does not handle control request {subtype}"),
+                    format!("vigie does not handle control request {subtype}"),
                 );
                 if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
                     tracing::warn!("answer control request {subtype}: {err:#}");
@@ -905,7 +905,7 @@ impl Actor {
 
     fn next_request_id(&mut self) -> String {
         self.next_request += 1;
-        format!("vigie2-{}", self.next_request)
+        format!("vigie-{}", self.next_request)
     }
 
     fn emit_host(&mut self, event: HostEvent) {
@@ -1000,7 +1000,7 @@ mod tests {
     }
 
     fn cwd() -> PathBuf {
-        std::env::temp_dir().join("vigie2-session").join("project")
+        std::env::temp_dir().join("vigie-session").join("project")
     }
 
     #[test]
@@ -1057,7 +1057,7 @@ mod tests {
             rule[0]["rules"][0]["ruleContent"]
                 .as_str()
                 .unwrap()
-                .ends_with("/vigie2-session/project/notes.md")
+                .ends_with("/vigie-session/project/notes.md")
         );
         let questions = Answer::Questions {
             answers: BTreeMap::from([("Pick?".to_string(), "blue".to_string())]),

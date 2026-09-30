@@ -32,7 +32,7 @@ use crate::BASE_PATH;
 use crate::http::server::AppState;
 use tokens::{PairTokens, RateLimiter, mint_token, same_token};
 
-pub const COOKIE_NAME: &str = "vigie2_session";
+pub const COOKIE_NAME: &str = "vigie_session";
 const COOKIE_MAX_AGE_DAYS: i64 = 60;
 
 pub struct Auth {
@@ -225,7 +225,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            "vigie2_session=from_prefix_path; vigie2_session=stale_root"
+            "vigie_session=from_prefix_path; vigie_session=stale_root"
                 .parse()
                 .expect("header value"),
         );
@@ -254,9 +254,9 @@ mod tests {
         registry.insert(device("live")).expect("insert");
 
         for header in [
-            "vigie2_session=live; vigie2_session=stale",
-            "vigie2_session=stale; vigie2_session=live",
-            "vigie_session=other; vigie2_session=stale; vigie2_session=live",
+            "vigie_session=live; vigie_session=stale",
+            "vigie_session=stale; vigie_session=live",
+            "other_session=other; vigie_session=stale; vigie_session=live",
         ] {
             let mut headers = HeaderMap::new();
             headers.insert(header::COOKIE, header.parse().expect("header value"));

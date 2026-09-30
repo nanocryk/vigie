@@ -8,13 +8,13 @@
 use chrono::FixedOffset;
 use rusqlite::Connection;
 use uuid::Uuid;
-use vigie2::usage::db::UsageDb;
-use vigie2::usage::estimate::{Confidence, Estimate, Inputs, project};
-use vigie2::usage::history;
-use vigie2::usage::profile::Profile;
-use vigie2::usage::slots;
-use vigie2::usage::units::{Pct, Timestamp};
-use vigie2::usage::window::{WindowKind, WindowState};
+use vigie::usage::db::UsageDb;
+use vigie::usage::estimate::{Confidence, Estimate, Inputs, project};
+use vigie::usage::history;
+use vigie::usage::profile::Profile;
+use vigie::usage::slots;
+use vigie::usage::units::{Pct, Timestamp};
+use vigie::usage::window::{WindowKind, WindowState};
 
 /// 2026-09-14 00:00:00 UTC, a Monday.
 const MONDAY: f64 = 1_789_344_000.0;
@@ -54,7 +54,7 @@ struct Simulation {
 impl Simulation {
     fn new() -> Self {
         let connection = Connection::open_in_memory().expect("in-memory database");
-        vigie2::store::migrate(&connection).expect("migrate");
+        vigie::store::migrate(&connection).expect("migrate");
         Self {
             connection,
             seven_day_pct: 0.0,

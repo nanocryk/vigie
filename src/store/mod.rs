@@ -165,7 +165,7 @@ WHERE claude_session_fresh = 0 AND NOT EXISTS (
         ), 0)
 );
 "#,
-    // Messages vigie2 keeps for a discussion until the user or the end of a turn sends them.
+    // Messages vigie keeps for a discussion until the user or the end of a turn sends them.
     r#"
 CREATE TABLE held_messages (
     id TEXT PRIMARY KEY,
@@ -195,7 +195,7 @@ pub struct Store {
 }
 
 impl Store {
-    /// `~/.vigie2/history.db`.
+    /// `~/.vigie/history.db`.
     pub fn default_path() -> Result<PathBuf> {
         Ok(state_dir::path()?.join("history.db"))
     }
@@ -218,7 +218,7 @@ impl Store {
         migrate(&connection).with_context(|| format!("migrate {}", path.display()))?;
         let (jobs, queue) = mpsc::channel();
         std::thread::Builder::new()
-            .name("vigie2-history".into())
+            .name("vigie-history".into())
             .spawn(move || run_writer(connection, queue))
             .context("spawn history writer")?;
         Ok(Self { jobs })

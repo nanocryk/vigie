@@ -1,5 +1,5 @@
 //! The `bash_asks` table: the Bash commands the user was asked about, one row per
-//! command and session folder. Read and cleared through vigie2's MCP tools.
+//! command and session folder. Read and cleared through vigie's MCP tools.
 
 use std::path::{Path, PathBuf};
 

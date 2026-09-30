@@ -156,7 +156,7 @@ function UserBubble({
 }: {
   children: ReactNode;
   dim?: boolean;
-  /** Kept by vigie2 until sent: a dashed frame instead of the side bar. */
+  /** Kept by vigie until sent: a dashed frame instead of the side bar. */
   held?: boolean;
   attachments?: readonly string[];
   glow?: Glow | null;
@@ -749,7 +749,7 @@ const HELD_TAG: Record<HeldMode, string> = { held: "held", turn_end: "at turn en
 
 const HELD_ACTION = "voice-ui rounded-[5px] border px-2.5 py-1.5 text-xs";
 
-/** A message vigie2 keeps until sent; tapping it opens its actions. */
+/** A message vigie keeps until sent; tapping it opens its actions. */
 function HeldView({
   held,
   open,

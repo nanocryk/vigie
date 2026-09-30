@@ -6,6 +6,6 @@ set -uo pipefail
 source "$HOME/.canif/_lib/cargo.sh"
 cd "$CANIF_PROJECT"
 
-cargo_capture build --release --bin vigie2 --message-format short
+cargo_capture build --release --bin vigie --message-format short
 summarize_diagnostics
 exit "$cargo_code"

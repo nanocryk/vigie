@@ -7,9 +7,9 @@ use tokio::sync::watch;
 /// Exit code asking the shim to run the server again.
 pub const EXIT_CODE: u8 = 75;
 /// Set by the shim on the server it runs.
-const SUPERVISED_VAR: &str = "VIGIE2_SUPERVISED";
+const SUPERVISED_VAR: &str = "VIGIE_SUPERVISED";
 /// Set by the shim when copying the new build failed and it ran the previous copy.
-const STALE_COPY_VAR: &str = "VIGIE2_STALE_COPY";
+const STALE_COPY_VAR: &str = "VIGIE_STALE_COPY";
 
 /// Whether a shim runs the server again when it exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

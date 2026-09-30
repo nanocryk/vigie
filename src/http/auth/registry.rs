@@ -84,7 +84,7 @@ impl Registry {
     }
 
     /// Re-read the on-disk registry into memory. Required when a second
-    /// process (`vigie2 auth revoke-all`) rewrites the file: without it the
+    /// process (`vigie auth revoke-all`) rewrites the file: without it the
     /// running server keeps honouring cookies that were revoked on disk.
     pub fn reload(&self) -> Result<()> {
         let devices = read_locked(&self.path)?;
@@ -209,7 +209,7 @@ impl Registry {
     /// own result plus whether the vector needs writing back.
     ///
     /// Re-reading inside the lock is load-bearing: without it a mutation here
-    /// writes a stale in-memory copy over whatever `vigie2 auth revoke-all`
+    /// writes a stale in-memory copy over whatever `vigie auth revoke-all`
     /// just did from another process, silently un-revoking those devices.
     fn with_file<F, R>(&self, apply: F) -> Result<R>
     where
@@ -279,7 +279,7 @@ fn read_locked(path: &Path) -> Result<Vec<Device>> {
 #[cfg(test)]
 pub mod tests {
     //! Two `Registry` values over one path stand in for the two processes that
-    //! really share `devices.json`: the running server, and a `vigie2 auth
+    //! really share `devices.json`: the running server, and a `vigie auth
     //! revoke-all` invocation.
     use super::*;
 

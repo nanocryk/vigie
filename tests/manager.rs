@@ -10,18 +10,18 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::broadcast::{self, error::RecvError};
 use uuid::Uuid;
-use vigie2::claude::child::Launch;
-use vigie2::claude::protocol::{AppliedSettings, Inbound, PermissionMode};
-use vigie2::claude::replay::{
+use vigie::claude::child::Launch;
+use vigie::claude::protocol::{AppliedSettings, Inbound, PermissionMode};
+use vigie::claude::replay::{
     CANNED_AUTOCOMPACT_THRESHOLD, CANNED_CONTEXT_MAX, CANNED_CONTEXT_START, CANNED_DEFAULT_EFFORT,
     CANNED_DEFAULT_MODEL, Direction, Recording,
 };
-use vigie2::session::attachments;
-use vigie2::session::gauges::ContextSource;
-use vigie2::session::manager::{ColdCheck, Notice, NoticeKind, Probe, SessionManager};
-use vigie2::session::server_restart::{RestartState, ServerRestart, Supervision};
-use vigie2::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
-use vigie2::store::{
+use vigie::session::attachments;
+use vigie::session::gauges::ContextSource;
+use vigie::session::manager::{ColdCheck, Notice, NoticeKind, Probe, SessionManager};
+use vigie::session::server_restart::{RestartState, ServerRestart, Supervision};
+use vigie::session::{Answer, Event, EventBody, HostEvent, RestartMode, Session, StopReason};
+use vigie::store::{
     EventKind, HeldEdit, HeldMessage, HeldMode, SessionState, SharedCatalog, Store, StoredEvent,
     Unread,
 };
@@ -466,9 +466,9 @@ async fn a_rename_stores_the_trimmed_name_and_a_blank_one_clears_it() {
     let row = store.session(id).await.unwrap().unwrap();
     assert_eq!(row.name.as_deref(), Some("parser idea"));
 
-    let too_long = "x".repeat(vigie2::http::wire::MAX_NAME_CHARS + 1);
+    let too_long = "x".repeat(vigie::http::wire::MAX_NAME_CHARS + 1);
     let err = manager.rename(id, Some(too_long)).await.unwrap_err();
-    assert_eq!(err.to_string(), vigie2::http::wire::BAD_NAME);
+    assert_eq!(err.to_string(), vigie::http::wire::BAD_NAME);
     let row = store.session(id).await.unwrap().unwrap();
     assert_eq!(row.name.as_deref(), Some("parser idea"));
 
@@ -991,7 +991,7 @@ async fn discussion_from_cd(env: &Env) -> (Uuid, u64) {
     for step in lines {
         seq += 1;
         let raw = step.msg.to_string();
-        let body = EventBody::Line(Box::new(vigie2::session::Line {
+        let body = EventBody::Line(Box::new(vigie::session::Line {
             parsed: serde_json::from_str(&raw).ok(),
             raw,
         }));
@@ -1024,7 +1024,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     let store = Store::open(&env.db).unwrap();
     let row = store.session(id).await.unwrap().unwrap();
     let expected_seed =
-        vigie2::session::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap())
+        vigie::session::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap())
             .seed(
                 &env.cwd,
                 row.created_at.with_timezone(&chrono::Local).date_naive(),
@@ -1033,7 +1033,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     let attached = vec![r"C:\uploads\a.png".to_string()];
     let script = env.script(
         "seeded.ndjson",
-        &user_script(&vigie2::session::seed::first_message(
+        &user_script(&vigie::session::seed::first_message(
             &expected_seed.text,
             &attachments::compose("next step", &attached),
         )),

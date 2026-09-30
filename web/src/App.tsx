@@ -16,7 +16,7 @@ function Gate({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
       <div className="bg-card text-card-foreground w-full max-w-sm rounded-xl border p-6 shadow-sm">
-        <h1 className="text-primary voice-heading mb-3 text-xl">vigie2</h1>
+        <h1 className="text-primary voice-heading mb-3 text-xl">vigie</h1>
         <div className="text-muted-foreground space-y-2 text-sm">{children}</div>
       </div>
     </div>
@@ -67,7 +67,7 @@ export function App({ boot }: { boot: Promise<BootResult> }) {
       return (
         <Gate>
           <p>Not paired.</p>
-          <p>Open the pair URL printed by vigie2 on the server.</p>
+          <p>Open the pair URL printed by vigie on the server.</p>
         </Gate>
       );
     case "bad-token":

@@ -1,4 +1,4 @@
-//! `~/.vigie2`, where the server keeps its database, keys and device registry.
+//! `~/.vigie`, where the server keeps its database, keys and device registry.
 
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 
 pub fn path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("no home dir")?;
-    Ok(home.join(".vigie2"))
+    Ok(home.join(".vigie"))
 }
 
 /// Writes `contents` to `path`, readable by the owner only.

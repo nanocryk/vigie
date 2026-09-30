@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---
-# description: Run the vigie2 server (opens a network port, prints the pair link); runs a copy of the binary, so it can be rebuilt meanwhile and restarted from the app
+# description: Run the vigie server (opens a network port, prints the pair link); runs a copy of the binary, so it can be rebuilt meanwhile and restarted from the app
 # risky: true
 # args:
 #   bind:
@@ -10,14 +10,14 @@
 # ---
 set -uo pipefail
 cd "$CANIF_PROJECT"
-cargo build --release --bin vigie2 || exit $?
+cargo build --release --bin vigie || exit $?
 
 # The server exits with this code to ask for a restart.
 restart_code=75
 exe=""
 [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && exe=.exe
-built=target/release/vigie2$exe
-running=target/serve/vigie2$exe
+built=target/release/vigie$exe
+running=target/serve/vigie$exe
 mkdir -p target/serve
 staging=$running.tmp
 while true; do
@@ -32,11 +32,11 @@ while true; do
     echo "copying $built failed, running the previous copy"
     stale=1
   fi
-  VIGIE2_SUPERVISED=1 VIGIE2_STALE_COPY=$stale "$running" serve ${CANIF_BIND:+--bind "$CANIF_BIND"}
+  VIGIE_SUPERVISED=1 VIGIE_STALE_COPY=$stale "$running" serve ${CANIF_BIND:+--bind "$CANIF_BIND"}
   code=$?
   if [[ $code -ne $restart_code ]]; then
-    echo "vigie2 exited with code $code"
+    echo "vigie exited with code $code"
     exit "$code"
   fi
-  echo "vigie2 restarting"
+  echo "vigie restarting"
 done

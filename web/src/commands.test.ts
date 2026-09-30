@@ -40,7 +40,7 @@ function run(state: PanelState, ...events: PanelEvent[]) {
 }
 
 describe("commandCards", () => {
-  it("lists vigie2's own first, then Claude's without terminal-only or replaced ones", () => {
+  it("lists vigie's own first, then Claude's without terminal-only or replaced ones", () => {
     const cards = commandCards(COMMANDS, ["doctor"]);
     expect(cards.map((entry) => [entry.name, entry.own])).toEqual([
       ["clear", "clear"],
@@ -104,7 +104,7 @@ describe("panelStep", () => {
     expect(sent.effect).toEqual({ kind: "send", text: "/design consent", consumeDraft: false });
   });
 
-  it("runs vigie2's own commands in the app", () => {
+  it("runs vigie's own commands in the app", () => {
     if (CLEAR === undefined || MODEL === undefined) throw new Error("own commands missing");
     expect(run(closedPanel, { type: "open_tab" }, { type: "use", card: CLEAR }).effect).toEqual({
       kind: "own",

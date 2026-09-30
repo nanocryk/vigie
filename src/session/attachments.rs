@@ -1,7 +1,7 @@
-//! Files attached to a message. vigie2 records a message's text and its
+//! Files attached to a message. vigie records a message's text and its
 //! attachments apart; Claude gets them together, as `compose` writes them.
 
-/// A message as vigie2 records it: its text and the paths of its attached files.
+/// A message as vigie records it: its text and the paths of its attached files.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Message {
     pub text: String,

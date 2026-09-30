@@ -299,7 +299,7 @@ mod tests {
     }
 
     fn cwd() -> PathBuf {
-        std::env::temp_dir().join("vigie2-danger").join("project")
+        std::env::temp_dir().join("vigie-danger").join("project")
     }
 
     fn bash(command: &str) -> Danger {

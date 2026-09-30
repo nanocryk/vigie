@@ -15,8 +15,8 @@ use uuid::Uuid;
 use crate::claude::protocol::PermissionMode;
 use crate::session::mcp;
 
-/// Set on every child so hooks can tell which vigie2 session runs them.
-pub const SESSION_ENV: &str = "VIGIE2_SESSION_ID";
+/// Set on every child so hooks can tell which vigie session runs them.
+pub const SESSION_ENV: &str = "VIGIE_SESSION_ID";
 
 /// Billing switches and parent-session markers that must not reach the child.
 const STRIPPED_ENV: [&str; 5] = [
@@ -26,9 +26,9 @@ const STRIPPED_ENV: [&str; 5] = [
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CODE_SSE_PORT",
 ];
-/// Vigie's hook variables; without them its hook does nothing.
+/// Variables of a parent vigie session or of the `serve.sh` shim.
 const STRIPPED_ENV_PREFIX: &str = "VIGIE_";
-/// Variables `cargo run` injects, describing vigie2's own crate. Build scripts
+/// Variables `cargo run` injects, describing vigie's own crate. Build scripts
 /// tracking them (ring, among others) would see other values than in a plain
 /// terminal and rebuild every crate above them on each switch.
 const CARGO_RUN_ENV: [&str; 5] = [
@@ -226,7 +226,7 @@ pub struct Child {
 
 impl Child {
     /// Runs `program` with `cli_args` (see `args`) in `cwd`, `host_session`
-    /// exported as `VIGIE2_SESSION_ID`.
+    /// exported as `VIGIE_SESSION_ID`.
     pub fn spawn(
         program: &Program,
         cli_args: Vec<OsString>,
@@ -350,14 +350,15 @@ mod tests {
             var("CLAUDE_CODE_SSE_PORT", "1234"),
             var("VIGIE_HOOK_URL", "https://x"),
             var("vigie_hook_secret", "s"),
-            var("VIGIE2_SESSION_ID", "parent-session"),
+            var("VIGIE_SESSION_ID", "parent-session"),
+            var("VIGIE_SUPERVISED", "1"),
             var("enable_claudeai_mcp_servers", "true"),
             var("CLAUDE_CONFIG_DIR", "/c"),
             var("ANTHROPIC_MODEL", "m"),
             var("CARGO", "cargo.exe"),
-            var("CARGO_MANIFEST_DIR", "/vigie2"),
-            var("CARGO_PKG_NAME", "vigie2"),
-            var("CARGO_BIN_NAME", "vigie2"),
+            var("CARGO_MANIFEST_DIR", "/vigie"),
+            var("CARGO_PKG_NAME", "vigie"),
+            var("CARGO_BIN_NAME", "vigie"),
             var("CARGO_HOME", "/cargo"),
             var("CARGO_TARGET_DIR", "/target"),
         ];
