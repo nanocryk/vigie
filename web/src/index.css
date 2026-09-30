@@ -635,6 +635,28 @@
   }
 }
 
+/* A glow around a bubble jumped to, fading out once; a steady ring under reduced motion, removed with the class. */
+@utility message-glow {
+  box-shadow: 0 0 0 1.5px var(--ring);
+  @media (prefers-reduced-motion: no-preference) {
+    animation: message-glow 1.6s ease-out forwards;
+  }
+}
+
+@keyframes message-glow {
+  0%,
+  30% {
+    box-shadow:
+      0 0 0 1.5px var(--ring),
+      0 0 14px 4px color-mix(in oklch, var(--ring) 60%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1.5px transparent,
+      0 0 0 0 transparent;
+  }
+}
+
 @keyframes working-dot {
   0%,
   70%,

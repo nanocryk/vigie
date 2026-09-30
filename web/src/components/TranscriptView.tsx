@@ -37,6 +37,10 @@ import {
   wakeStops,
 } from "@/transcript";
 
+/** Class and duration of the glow on a bubble jumped to; matches `message-glow` in index.css. */
+const GLOW = "message-glow";
+const GLOW_MS = 1600;
+
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const BOTTOM_SLACK = 24;
 /** Earlier history is asked for once the view is within this many screen heights of the top. */
@@ -522,7 +526,7 @@ const ItemView = memo(function ItemView({
       const label = last ? DELIVERY_LABEL[item.delivery] : null;
       // The room above opens each exchange; the first one sits at the top.
       return (
-        <div className="space-y-1 pt-8 first:pt-0">
+        <div className="space-y-1 pt-8 first:pt-0" data-item={item.key}>
           <UserBubble attachments={item.attachments}>
             <BubbleBody
               text={item.text}
@@ -778,13 +782,48 @@ export function TranscriptView({
   const fromBottom = useRef(0);
   const shownFirstSeq = useRef(firstSeq);
   const nearTop = useRef(onNearTop);
-  const [showJump, setShowJump] = useState(false);
+  const [jumpButton, setJumpButton] = useState<"latest" | "last_message" | null>(null);
   const now = useNow();
   const items = useMemo(() => allItems.filter((item) => item.hidden !== true), [allItems]);
+  const lastMessageKey = useMemo(() => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item?.kind === "user" && wakeStops(item.text) === null) return item.key;
+    }
+    return null;
+  }, [items]);
+  const lastMessage = useRef(lastMessageKey);
 
   useLayoutEffect(() => {
     nearTop.current = onNearTop;
   }, [onNearTop]);
+
+  /** The bubble of the user's last message, when rendered. */
+  const lastMessageElement = useCallback((): HTMLElement | null => {
+    const key = lastMessage.current;
+    if (key === null || content.current === null) return null;
+    return content.current.querySelector<HTMLElement>(`[data-item="${CSS.escape(key)}"]`);
+  }, []);
+
+  /** Scrolled up: back to the bottom. At the bottom: to the last message when it is off screen. */
+  const updateJump = useCallback(() => {
+    const element = scroller.current;
+    if (element === null) return;
+    if (!atBottom.current) {
+      setJumpButton("latest");
+      return;
+    }
+    const message = lastMessageElement();
+    const offScreen =
+      message !== null &&
+      message.getBoundingClientRect().bottom < element.getBoundingClientRect().top;
+    setJumpButton(offScreen ? "last_message" : null);
+  }, [lastMessageElement]);
+
+  useLayoutEffect(() => {
+    lastMessage.current = lastMessageKey;
+    updateJump();
+  }, [lastMessageKey, updateJump]);
 
   const stick = useCallback(() => {
     const element = scroller.current;
@@ -807,9 +846,9 @@ export function TranscriptView({
       element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_SLACK;
     atBottom.current = bottom;
     fromBottom.current = element.scrollHeight - element.scrollTop;
-    setShowJump(!bottom);
+    updateJump();
     checkTop();
-  }, [checkTop]);
+  }, [checkTop, updateJump]);
 
   // Opening or closing a panel never moves the view, even at the bottom: the
   // following content is pushed down instead. Position is re-read once it settles.
@@ -884,9 +923,25 @@ export function TranscriptView({
 
   const jump = useCallback(() => {
     atBottom.current = true;
-    setShowJump(false);
     stick();
-  }, [stick]);
+    updateJump();
+  }, [stick, updateJump]);
+
+  const jumpToLastMessage = useCallback(() => {
+    const element = scroller.current;
+    const message = lastMessageElement();
+    if (element === null || message === null) return;
+    atBottom.current = false;
+    element.scrollTop +=
+      message.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    const bubble = message.firstElementChild;
+    if (bubble === null) return;
+    // Removing then re-adding restarts the animation on a second jump.
+    bubble.classList.remove(GLOW);
+    void bubble.getBoundingClientRect();
+    bubble.classList.add(GLOW);
+    setTimeout(() => bubble.classList.remove(GLOW), GLOW_MS);
+  }, [lastMessageElement]);
 
   const lastBottomRequest = useRef(bottomRequest);
   useEffect(() => {
@@ -957,13 +1012,13 @@ export function TranscriptView({
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-3">
         <div className="mx-auto flex max-w-5xl flex-col items-end gap-2 px-3">
-          {showJump && (
+          {jumpButton !== null && (
             <button
               type="button"
-              onClick={jump}
+              onClick={jumpButton === "latest" ? jump : jumpToLastMessage}
               className="bg-primary text-primary-foreground voice-ui pointer-events-auto rounded-[5px] px-3 py-1.5 text-xs shadow-md"
             >
-              latest &darr;
+              {jumpButton === "latest" ? <>latest &darr;</> : <>&uarr; Last message</>}
             </button>
           )}
           {overlay}
