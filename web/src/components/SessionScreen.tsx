@@ -1103,6 +1103,18 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const [bottomRequest, setBottomRequest] = useState(0);
   const stopAgent = (taskId: string) =>
     client.command({ type: "stop_task", session: id, task_id: taskId, client_id: client.newClientId() });
+  // The call fails and the turn goes on, so nothing to wake.
+  const stopTool = useCallback(
+    async (taskId: string) => {
+      await client.command({
+        type: "stop_task",
+        session: id,
+        task_id: taskId,
+        client_id: client.newClientId(),
+      });
+    },
+    [client, id],
+  );
 
   // A stopped background task does not wake Claude. Stops made while it waits for
   // them are gathered for a while, then one message wakes it, on a warm cache only.
@@ -1393,6 +1405,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         glowTurnEnd={viewing === null}
         background={viewing === null ? (view?.background ?? []) : []}
         onStopTask={stopBackground}
+        toolTasks={transcript.toolTasks}
+        onStopTool={stopTool}
         bottomRequest={bottomRequest}
         end={viewing === null && !transcript.turnOpen && <RestartBanner session={view} />}
         panel={

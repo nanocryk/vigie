@@ -371,6 +371,8 @@ export interface TranscriptState {
   terminalCommands: readonly string[];
   /** Agents seen in the lines, by Agent call id, in the order they appeared. */
   agents: ReadonlyMap<string, AgentInfo>;
+  /** Task id of each tool call run as a task (a Bash call), by tool use id, subagents' included. */
+  toolTasks: ReadonlyMap<string, string>;
   /**
    * Each agent's own discussion, by Agent call id: the lines carrying it as
    * `parent_tool_use_id`, its brief, relays and end. The main discussion is
@@ -416,6 +418,7 @@ export const emptyTranscript: TranscriptState = {
   catalog: null,
   terminalCommands: [],
   agents: new Map(),
+  toolTasks: new Map(),
   scopes: new Map(),
 };
 
@@ -623,6 +626,7 @@ class Draft {
   catalog: Catalog | null;
   terminalCommands: readonly string[];
   agents: Map<string, AgentInfo>;
+  toolTasks: Map<string, string>;
   /** Scopes not touched by the events being applied. */
   private scopeStates: Map<string, TranscriptState>;
   /** Scopes the events being applied touched. */
@@ -655,6 +659,7 @@ class Draft {
     this.catalog = state.catalog;
     this.terminalCommands = state.terminalCommands;
     this.agents = new Map(state.agents);
+    this.toolTasks = new Map(state.toolTasks);
     this.scopeStates = new Map(state.scopes);
   }
 
@@ -684,6 +689,7 @@ class Draft {
       catalog: this.catalog,
       terminalCommands: this.terminalCommands,
       agents: this.agents,
+      toolTasks: this.toolTasks,
       scopes,
     };
   }
@@ -754,7 +760,11 @@ class Draft {
     const task = line.task;
     if (task === null) return;
     if (line.subtype === "task_started") {
-      if (task.taskType !== LOCAL_AGENT || task.toolUseId === null) return;
+      if (task.toolUseId === null) return;
+      if (task.taskType !== LOCAL_AGENT) {
+        this.toolTasks.set(task.toolUseId, task.taskId);
+        return;
+      }
       const known = this.agents.get(task.toolUseId);
       this.agents.set(task.toolUseId, {
         toolUseId: task.toolUseId,

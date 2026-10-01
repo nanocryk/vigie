@@ -1120,6 +1120,29 @@ describe("subagents", () => {
     ]);
   }
 
+  it("records the task of a Bash call, a subagent's included, but not an agent's", () => {
+    const bash = (seq: number, taskId: string, toolUseId: string, owned: boolean): WireEvent =>
+      line(seq, {
+        type: "system",
+        subtype: "task_started",
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        task_type: "local_bash",
+        description: "Sleep",
+        is_backgrounded: false,
+        owned_by_subagent: owned,
+      });
+    const state = applyEvents(emptyTranscript, [
+      started(1),
+      bash(2, "b1", "u1", false),
+      bash(3, "b2", "u2", true),
+    ]);
+    expect([...state.toolTasks]).toEqual([
+      ["u1", "b1"],
+      ["u2", "b2"],
+    ]);
+  });
+
   it("a faithful relay is hidden from the main discussion and shows in the agent's view", () => {
     const state = relayed("a1", RELAY_ACK, { kind: "faithful", send_message: "s1" });
     expect(state.items.filter((item) => item.hidden !== true)).toEqual([]);

@@ -95,6 +95,10 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - End: `background_tasks_changed` with the new list, `task_updated` (`patch: {status: "completed", end_time}`), `task_notification` (`status`, `output_file`, `summary`).
 - On `task_notification` the CLI starts a new turn by itself, with no user message: `system/init`, the model's reaction, `result`.
 - A foreground `sleep 60` is blocked; the model reruns it in the background.
+- A foreground Bash call is a task too: `task_started` with `is_backgrounded: false`, `task_type: "local_bash"`, a few seconds after the permission answer.
+- `stop_task {task_id}` on a foreground Bash (spike `stoptool`) answers `{}`, emits `task_updated {status: "killed"}` and `task_notification`, and the tool returns `{is_error: true, content: "Exit code 137"}`. The turn goes on: the model reads the result and the notification, then ends with a `success` result.
+- A subagent's foreground Bash is a task with `owned_by_subagent: true`; `stop_task` on it kills only that command the same way, and the agent goes on to its final reply.
+- `stop_task` on a background Bash emits `background_tasks_changed`, `task_updated {status: "killed"}` and `task_notification`. No new turn started within 30 seconds.
 
 ### Subagents
 

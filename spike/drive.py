@@ -410,6 +410,41 @@ def agents(s, cwd):
     s.drain(20, allow)
 
 
+def is_task_started(msg):
+    return msg.get("type") == "system" and msg.get("subtype") == "task_started"
+
+
+def stoptool(s, cwd):
+    s.control("initialize")
+    s.user("Use the Bash tool to run exactly: python -c \"import time; time.sleep(60)\". "
+           "Run it in the foreground. Then reply with the single word AFTER and what the "
+           "tool returned.")
+    started = s.pump(is_task_started, allow)
+    s.drain(3, allow)
+    s.note("stop_task on the foreground Bash", task_id=started["task_id"])
+    s.control("stop_task", allow, task_id=started["task_id"])
+    s.pump(lambda m: m.get("type") == "result", allow, 90)
+    s.drain(5, allow)
+    s.user("Use the Bash tool with run_in_background set to true to run exactly: "
+           "python -c \"import time; time.sleep(60)\". Reply started, without waiting for it.")
+    started = s.pump(is_task_started, allow)
+    s.pump(lambda m: m.get("type") == "result", allow, 60)
+    s.note("stop_task on the background Bash", task_id=started["task_id"])
+    s.control("stop_task", allow, task_id=started["task_id"])
+    s.drain(30, allow)
+    s.user("Use the Agent tool once, in the foreground (run_in_background false), subagent_type "
+           "general-purpose, description 'sleeper', and this prompt: 'Use the Bash tool to run "
+           "exactly: python -c \"import time; time.sleep(60)\" in the foreground. Then reply "
+           "with the single word AFTER and what the tool returned.' Then reply with what the "
+           "agent returned.")
+    started = s.pump(lambda m: is_task_started(m) and m.get("task_type") == "local_bash", allow)
+    s.drain(3, allow)
+    s.note("stop_task on the agent's foreground Bash", task_id=started["task_id"],
+           owned_by_subagent=started.get("owned_by_subagent"))
+    s.control("stop_task", allow, task_id=started["task_id"])
+    s.pump(lambda m: m.get("type") == "result", allow, 120)
+
+
 def posix_rule_path(path):
     """`C:\\a\\b` as `//c/a/b`, the form the CLI's own rule suggestions use."""
     drive, rest = str(path).split(":", 1)
@@ -470,8 +505,9 @@ def filerules(s, cwd):
 
 
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context, grants, agents, filerules, midturn)}
-FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",)}
+                                     context, grants, agents, filerules, midturn, stoptool)}
+FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",),
+                     "stoptool": ("--forward-subagent-text",)}
 
 
 def main():

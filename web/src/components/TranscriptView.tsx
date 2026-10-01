@@ -71,18 +71,8 @@ export interface PendingSend {
 
 const BUBBLE = "min-w-0 rounded-[5px] px-3 py-2 text-sm";
 
-/** One row per background task: "In background" during a turn, "Waiting for" once it ended. */
-function BackgroundRows({
-  tasks,
-  waiting,
-  onStop,
-}: {
-  tasks: readonly BackgroundView[];
-  /** The turn ended and Claude waits for these to continue. */
-  waiting: boolean;
-  onStop: (taskId: string) => Promise<void>;
-}) {
-  const now = useClock(1000);
+/** Stops a task: the ids being stopped and the latest failure. */
+function useStopTask(onStop: (taskId: string) => Promise<void>) {
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const stop = (taskId: string) => {
@@ -97,6 +87,28 @@ function BackgroundRows({
       });
     });
   };
+  return { stopping, error, stop };
+}
+
+const STOP_BUTTON =
+  "border-destructive/50 text-destructive hover:bg-destructive/10 voice-ui shrink-0 rounded-[5px] border text-xs disabled:opacity-50";
+
+/** Stops one tool call run as a task; no button without a provider. */
+const StopToolTask = createContext<((taskId: string) => Promise<void>) | null>(null);
+
+/** One row per background task: "In background" during a turn, "Waiting for" once it ended. */
+function BackgroundRows({
+  tasks,
+  waiting,
+  onStop,
+}: {
+  tasks: readonly BackgroundView[];
+  /** The turn ended and Claude waits for these to continue. */
+  waiting: boolean;
+  onStop: (taskId: string) => Promise<void>;
+}) {
+  const now = useClock(1000);
+  const { stopping, error, stop } = useStopTask(onStop);
   // Full-width bars, like the restart divider.
   return (
     <div className="-mx-3 space-y-px pt-2">
@@ -125,7 +137,7 @@ function BackgroundRows({
               type="button"
               disabled={stopping.has(task.task_id)}
               onClick={() => stop(task.task_id)}
-              className="border-destructive/50 text-destructive hover:bg-destructive/10 shrink-0 rounded-[5px] border px-2 py-0.5 disabled:opacity-50"
+              className={`${STOP_BUTTON} px-2 py-0.5`}
             >
               {stopping.has(task.task_id) ? "Stopping..." : "Stop"}
             </button>
@@ -230,15 +242,43 @@ function ToolInput({ item }: { item: ToolItem }) {
   );
 }
 
+/** Stop button of a running tool call; the turn goes on with the call failed. */
+function ToolStop({ taskId, alone }: { taskId: string; alone: boolean }) {
+  const onStop = useContext(StopToolTask);
+  const { stopping, error, stop } = useStopTask(onStop ?? (() => Promise.resolve()));
+  if (onStop === null) return null;
+  return (
+    <span className={`flex shrink-0 items-center gap-1.5 self-center ${alone ? "ml-auto pl-2" : ""}`}>
+      {error !== null && <span className="text-destructive voice-ui text-xs">{error}</span>}
+      <button
+        type="button"
+        disabled={stopping.has(taskId)}
+        onClick={(event) => {
+          // Inside the summary: a click would toggle the details too.
+          event.preventDefault();
+          event.stopPropagation();
+          stop(taskId);
+        }}
+        className={`${STOP_BUTTON} px-1.5 leading-4`}
+      >
+        {stopping.has(taskId) ? "Stopping..." : "Stop"}
+      </button>
+    </span>
+  );
+}
+
 function ToolRow({
   item,
   stamp,
   awaiting,
+  taskId,
 }: {
   item: ToolItem;
   /** Shown at the row's end; null hides it. */
   stamp: string | null;
   awaiting: boolean;
+  /** The task running the call, while it runs; null when it is not one. */
+  taskId: string | null;
 }) {
   const plan = DIFF_TOOLS.has(item.name) ? planFileName(item.input) : null;
   const diff = useMemo(
@@ -280,6 +320,7 @@ function ToolRow({
             {plan ?? item.summary}
           </span>
           {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
+          {taskId !== null && <ToolStop taskId={taskId} alone={stamp === null} />}
         </summary>
         <div className="mt-1 mr-2 ml-9 space-y-2">
           {timing !== null && <div className={STAMP}>{timing}</div>}
@@ -553,11 +594,14 @@ const ItemView = memo(function ItemView({
   now,
   toolTime,
   awaiting,
+  taskId,
   thinkingNow,
   glow,
   onOpen,
 }: {
   item: Item;
+  /** A running tool row's task, stoppable from the row. */
+  taskId: string | null;
   /** A user or Claude bubble drawing the eye. */
   glow: Glow | null;
   /** Switches to an agent's discussion, or to the main one with null. */
@@ -652,6 +696,7 @@ const ItemView = memo(function ItemView({
           item={item}
           stamp={toolTime && item.time !== null ? formatStamp(item.time, now) : null}
           awaiting={awaiting}
+          taskId={taskId}
         />
       );
     case "notice": {
@@ -906,6 +951,8 @@ export function TranscriptView({
   glowTurnEnd,
   background,
   onStopTask,
+  toolTasks,
+  onStopTool,
   bottomRequest,
   held,
   heldActions,
@@ -940,6 +987,10 @@ export function TranscriptView({
   /** Background tasks, listed at the end with a Stop button each. */
   background: readonly BackgroundView[];
   onStopTask: (taskId: string) => Promise<void>;
+  /** Task id of each tool call run as a task, by tool use id: running ones get a Stop button. */
+  toolTasks: ReadonlyMap<string, string>;
+  /** Stops a running tool call's task; kept stable. */
+  onStopTool: (taskId: string) => Promise<void>;
   /** Each change scrolls the view to its bottom. */
   bottomRequest: number;
   /** Messages kept until sent, pinned under everything else but `end`. */
@@ -1059,7 +1110,12 @@ export function TranscriptView({
   // Opening or closing a panel never moves the view, even at the bottom: the
   // following content is pushed down instead. Position is re-read once it settles.
   const onSummaryClick = (event: ReactMouseEvent) => {
-    if (event.target instanceof Element && event.target.closest("summary") !== null) {
+    // A button inside a summary does not toggle it.
+    if (
+      event.target instanceof Element &&
+      event.target.closest("summary") !== null &&
+      event.target.closest("button") === null
+    ) {
       atBottom.current = false;
     }
   };
@@ -1161,7 +1217,8 @@ export function TranscriptView({
         <div
           ref={content}
           onClickCapture={onSummaryClick}
-          className="mx-auto max-w-5xl space-y-2 px-3 pt-4 pb-4 select-text"
+          // Room under the last row for the jump button floating over it.
+          className={`mx-auto max-w-5xl space-y-2 px-3 pt-4 select-text ${jumpButton === null ? "pb-4" : "pb-12"}`}
         >
           {items.length === 0 && pending.length === 0 && held.length === 0 && (
             <p className="text-muted-foreground voice-ui text-center text-sm">
@@ -1181,6 +1238,7 @@ export function TranscriptView({
           <OpenAttachment.Provider value={onOpenAttachment}>
           <LatestHashes.Provider value={attachedHashes}>
           <OpenDiff.Provider value={onOpenDiff}>
+          <StopToolTask.Provider value={onStopTool}>
             {items.map((item, index) => (
               <ItemView
                 key={item.key}
@@ -1190,6 +1248,11 @@ export function TranscriptView({
                 now={now}
                 toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
                 awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
+                taskId={
+                  item.kind === "tool" && item.status === "running"
+                    ? (toolTasks.get(item.toolUseId) ?? null)
+                    : null
+                }
                 thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
                 glow={glow?.key === item.key ? glow.phase : null}
               />
@@ -1197,6 +1260,7 @@ export function TranscriptView({
             {pending.map((send) => (
               <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
             ))}
+          </StopToolTask.Provider>
           </OpenDiff.Provider>
           </LatestHashes.Provider>
           </OpenAttachment.Provider>
