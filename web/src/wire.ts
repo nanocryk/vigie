@@ -447,7 +447,12 @@ export type HostEvent =
       note: string | null;
     }
   /** The files Claude attached to its reply; follows the `result` line ending the turn. */
-  | { event: "claude_attached"; attachments: string[] }
+  | {
+      event: "claude_attached";
+      attachments: string[];
+      /** Content hash of each path at the turn's end; a file that could not be read has none. */
+      hashes: Record<string, string>;
+    }
   | { event: "permission_mode"; mode: string }
   | { event: "auth_gate_failed"; reason: GateFailure }
   /** A stop for `reason` began; a CLI interrupt that follows comes from it. */
@@ -830,6 +835,14 @@ function stringList(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
 }
 
+/** The string-valued entries of `raw`; empty when it is not an object. */
+function stringMap(raw: unknown): Record<string, string> {
+  if (!isRecord(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
 /** An offer of unexpected shape is dropped: the ask stays answerable without it. */
 export function parseFolderOffer(raw: unknown): FolderOffer | null {
   if (!isRecord(raw)) return null;
@@ -885,7 +898,11 @@ export function parseHostEvent(raw: unknown): HostEvent {
           };
     }
     case "claude_attached":
-      return { event: "claude_attached", attachments: stringList(raw["attachments"]) };
+      return {
+        event: "claude_attached",
+        attachments: stringList(raw["attachments"]),
+        hashes: stringMap(raw["hashes"]),
+      };
     case "permission_mode": {
       const mode = text("mode");
       return mode === null ? { event: "unknown", raw } : { event: "permission_mode", mode };

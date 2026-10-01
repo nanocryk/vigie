@@ -18,7 +18,7 @@ import { Markdown } from "@/components/Markdown";
 import { useClock, useNow } from "@/components/useNow";
 import { DIFF_TOOLS, type FileDiff, changeSummary, toolDiff } from "@/diff";
 import { formatDuration, formatExact, formatStamp } from "@/format";
-import { AttachmentChip } from "@/components/Attachments";
+import { AttachmentChip, LatestHashes } from "@/components/Attachments";
 import { changeExplorer, openFileInLastFree } from "@/files";
 import { formatSpan } from "@/gauges";
 import { navigate } from "@/route";
@@ -29,6 +29,7 @@ import {
   type Item,
   type TaskEndStatus,
   type ToolStatus,
+  latestHashes,
   planFileName,
   quietWork,
   relayFailureText,
@@ -411,6 +412,7 @@ function BubbleBody({
   now,
   tools = "shown",
   attachments = [],
+  hashes,
   side,
 }: {
   text: string;
@@ -420,6 +422,7 @@ function BubbleBody({
   /** The raw toggle and copy button. */
   tools?: "shown" | "hidden";
   attachments?: readonly string[];
+  hashes?: Readonly<Record<string, string>>;
   /** The edge the attachments line up on. */
   side: "user" | "claude";
 }) {
@@ -468,7 +471,7 @@ function BubbleBody({
         )}
         {time !== null && <span className="ml-auto">{formatStamp(time, now)}</span>}
       </div>
-      <BubbleFiles paths={attachments} side={side} />
+      <BubbleFiles paths={attachments} hashes={hashes} side={side} />
     </>
   );
 }
@@ -506,7 +509,16 @@ function ChangesRow({ item }: { item: Extract<Item, { kind: "changes" }> }) {
  * A bubble's files, as a row of chips hanging over its bottom edge. The bubble
  * leaves `BUBBLE_FILES_ROOM` below it for the overhang.
  */
-function BubbleFiles({ paths, side }: { paths: readonly string[]; side: "user" | "claude" }) {
+function BubbleFiles({
+  paths,
+  hashes,
+  side,
+}: {
+  paths: readonly string[];
+  /** Content hash of each path when attached; absent for uploads. */
+  hashes?: Readonly<Record<string, string>>;
+  side: "user" | "claude";
+}) {
   const openAttachment = useContext(OpenAttachment);
   if (paths.length === 0) return null;
   return (
@@ -514,7 +526,12 @@ function BubbleFiles({ paths, side }: { paths: readonly string[]; side: "user" |
       className={`mt-1.5 -mb-[1.875rem] flex flex-wrap gap-2 ${side === "user" ? "justify-end" : "justify-start"}`}
     >
       {paths.map((path, index) => (
-        <AttachmentChip key={`${index}:${path}`} path={path} onOpen={openAttachment} />
+        <AttachmentChip
+          key={`${index}:${path}`}
+          path={path}
+          hash={hashes?.[path]}
+          onOpen={openAttachment}
+        />
       ))}
     </div>
   );
@@ -600,6 +617,7 @@ const ItemView = memo(function ItemView({
             time={item.time}
             now={now}
             attachments={item.attachments}
+            hashes={item.attachmentHashes}
             side="claude"
           />
         </div>
@@ -944,6 +962,7 @@ export function TranscriptView({
   const [jumpButton, setJumpButton] = useState<"latest" | "last_message" | null>(null);
   const now = useNow();
   const items = useMemo(() => allItems.filter((item) => item.hidden !== true), [allItems]);
+  const attachedHashes = useMemo(() => latestHashes(allItems), [allItems]);
   const lastMessageKey = useMemo(() => {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const item = items[index];
@@ -1160,6 +1179,7 @@ export function TranscriptView({
             </div>
           )}
           <OpenAttachment.Provider value={onOpenAttachment}>
+          <LatestHashes.Provider value={attachedHashes}>
           <OpenDiff.Provider value={onOpenDiff}>
             {items.map((item, index) => (
               <ItemView
@@ -1178,6 +1198,7 @@ export function TranscriptView({
               <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
             ))}
           </OpenDiff.Provider>
+          </LatestHashes.Provider>
           </OpenAttachment.Provider>
           {pending.length === 0 && quietWork(items, turnOpen) && (
             <div

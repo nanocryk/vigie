@@ -125,9 +125,12 @@ pub enum HostEvent {
         resolution: Resolution,
     },
     /// The files Claude attached to its reply with `set_attachments`, as absolute
-    /// paths; follows the `result` line ending the main agent's turn.
+    /// paths; follows the `result` line ending the main agent's turn. `hashes`
+    /// holds each readable file's content hash at that moment.
     ClaudeAttached {
         attachments: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        hashes: BTreeMap<String, String>,
     },
     /// The CLI's permission mode changed, as reported by `initialize`, `system/init`,
     /// `system/status` or a successful `set_permission_mode`.

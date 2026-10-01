@@ -194,8 +194,18 @@ export async function fetchFile(path: string): Promise<FileView> {
   return parseFileView(await response.json(), "file");
 }
 
-export function rawUrl(path: string): string {
-  return `api/fs/raw${query(path)}`;
+/** With `version`, a content hash: a URL naming that content for good. */
+export function rawUrl(path: string, version?: string): string {
+  const pinned = version === undefined ? "" : `&v=${encodeURIComponent(version)}`;
+  return `api/fs/raw${query(path)}${pinned}`;
+}
+
+/** The file's current content hash, or null when it is gone. */
+export async function fetchHash(path: string): Promise<string | null> {
+  const response = await fetch(`api/fs/hash${query(path)}`);
+  if (response.status === 404) return null;
+  await check(response);
+  return str(record(await response.json(), "hash"), "hash", "hash");
 }
 
 /** Creates folder `name` in `parent` and returns its path. */

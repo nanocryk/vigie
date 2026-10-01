@@ -110,6 +110,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/fs/places", get(files::places_route))
         .route("/api/fs/file", get(files::file_route))
         .route("/api/fs/raw", get(files::raw_route))
+        .route("/api/fs/hash", get(files::hash_route))
         .route("/api/fs/mkdir", post(files::mkdir_route))
         .route("/api/git/root", get(git::root_route))
         .route("/api/git/diff", get(git::diff_route))
@@ -201,6 +202,7 @@ mod auth_gate_tests {
             (Method::GET, "/api/fs/places"),
             (Method::GET, "/api/fs/file"),
             (Method::GET, "/api/fs/raw"),
+            (Method::GET, "/api/fs/hash"),
             (Method::POST, "/api/fs/mkdir"),
             (Method::GET, "/api/git/root"),
             (Method::GET, "/api/git/diff"),

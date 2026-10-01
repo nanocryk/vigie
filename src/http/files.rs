@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::http::api::ApiError;
+use crate::session::attachments::{digest_hex, file_hash};
 
 /// Text past this is cut and flagged truncated.
 pub const TEXT_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -357,23 +358,66 @@ pub async fn file_route(Query(query): Query<PathQuery>) -> Result<Json<FileView>
     blocking(move || read_file(&query.path)).await.map(Json)
 }
 
-pub async fn raw_route(Query(query): Query<PathQuery>) -> Result<Response, FsError> {
-    let (mime, bytes) = blocking(move || {
-        let (path, meta) = guarded_file(&query.path)?;
-        let mime = image_mime(&path).ok_or(FsError::NotAnImage)?;
-        if meta.len() > IMAGE_MAX_BYTES {
-            return Err(FsError::TooLarge);
-        }
-        Ok((mime, std::fs::read(&path)?))
-    })
-    .await?;
+#[derive(Deserialize)]
+pub struct RawQuery {
+    pub path: String,
+    /// The content hash the caller expects; the bytes are then cacheable.
+    pub v: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caching {
+    /// The bytes have the hash the URL names, so they can be kept for good.
+    Pinned,
+    /// The file can change under the viewer.
+    None,
+}
+
+/// The image's bytes, pinned when `version` is their hash.
+pub fn read_image(
+    raw: &str,
+    version: Option<&str>,
+) -> Result<(&'static str, Vec<u8>, Caching), FsError> {
+    let (path, meta) = guarded_file(raw)?;
+    let mime = image_mime(&path).ok_or(FsError::NotAnImage)?;
+    if meta.len() > IMAGE_MAX_BYTES {
+        return Err(FsError::TooLarge);
+    }
+    let bytes = std::fs::read(&path)?;
+    let caching = if version.is_some_and(|version| version == digest_hex(&bytes)) {
+        Caching::Pinned
+    } else {
+        Caching::None
+    };
+    Ok((mime, bytes, caching))
+}
+
+pub async fn raw_route(Query(query): Query<RawQuery>) -> Result<Response, FsError> {
+    let (mime, bytes, caching) =
+        blocking(move || read_image(&query.path, query.v.as_deref())).await?;
+    let cache = match caching {
+        Caching::Pinned => "private, max-age=31536000, immutable",
+        Caching::None => "no-store",
+    };
     Ok((
         [
             (header::CONTENT_TYPE, HeaderValue::from_static(mime)),
-            // The file can change under the viewer.
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::CACHE_CONTROL, HeaderValue::from_static(cache)),
         ],
         bytes,
+    )
+        .into_response())
+}
+
+pub async fn hash_route(Query(query): Query<PathQuery>) -> Result<Response, FsError> {
+    let hash = blocking(move || {
+        let (path, _) = guarded_file(&query.path)?;
+        Ok::<_, FsError>(file_hash(&path)?)
+    })
+    .await?;
+    Ok((
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(json!({ "hash": hash })),
     )
         .into_response())
 }
@@ -455,6 +499,25 @@ mod tests {
                 .content,
             Content::Binary
         );
+    }
+
+    #[test]
+    fn read_image_pins_only_the_version_the_file_has() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let image = tmp.path().join("main.png");
+        let raw = image.to_str().expect("utf-8 path");
+        std::fs::write(&image, b"first").expect("write");
+        let first = digest_hex(b"first");
+        let read = |version: Option<&str>| {
+            let (_, bytes, caching) = read_image(raw, version).expect("read");
+            (bytes, caching)
+        };
+        assert_eq!(read(Some(&first)), (b"first".to_vec(), Caching::Pinned));
+        std::fs::write(&image, b"second").expect("write");
+        assert_eq!(read(Some(&first)), (b"second".to_vec(), Caching::None));
+        let second = digest_hex(b"second");
+        assert_eq!(read(Some(&second)), (b"second".to_vec(), Caching::Pinned));
+        assert_eq!(read(None), (b"second".to_vec(), Caching::None));
     }
 
     #[test]

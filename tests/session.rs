@@ -1246,6 +1246,7 @@ async fn reads_in_the_uploads_folder_are_allowed_by_the_host() {
 #[tokio::test]
 async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
     use serde_json::json;
+    use vigie::session::attachments::digest_hex;
 
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.png");
@@ -1341,7 +1342,8 @@ async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
     assert_eq!(
         attached,
         HostEvent::ClaudeAttached {
-            attachments: vec![second]
+            hashes: [(second.clone(), digest_hex(b"txt"))].into(),
+            attachments: vec![second],
         }
     );
     harness.until_result().await;
@@ -1359,4 +1361,90 @@ async fn set_attachments_announces_the_last_list_when_the_turn_ends() {
         })
         .await;
     assert!(rest, "a turn without a call announced attachments");
+}
+
+/// The same path attached in two turns, rewritten in between: each
+/// `claude_attached` carries the hash of the content at its own turn's end.
+#[tokio::test]
+async fn reattaching_a_rewritten_path_records_each_content_hash() {
+    use serde_json::json;
+    use vigie::session::attachments::digest_hex;
+
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("main.png");
+    std::fs::write(&image, b"first").unwrap();
+    let image = image.display().to_string();
+
+    let record = |dir: &str, msg: Value| json!({"t": 0, "dir": dir, "msg": msg}).to_string();
+    let call = |request_id: &str, id: u64| {
+        record(
+            "out",
+            json!({"type": "control_request", "request_id": request_id, "request": {
+                "subtype": "mcp_message", "server_name": "vigie", "message": {
+                    "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {"name": "set_attachments", "arguments": {"paths": [&image]}}}}}),
+        )
+    };
+    let reply = |request_id: &str, id: u64| {
+        let text = format!("These files will be attached to this turn's reply:\n- {image}");
+        record(
+            "in",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": request_id, "response": {"mcp_response": {
+                    "jsonrpc": "2.0", "id": id, "result": {
+                        "content": [{"type": "text", "text": text}], "isError": false}}}}}),
+        )
+    };
+    let result = |uuid: &str| {
+        record(
+            "out",
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn",
+                "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": uuid}),
+        )
+    };
+    let script = [
+        record(
+            "in",
+            json!({"type": "control_request", "request_id": "init", "request": {
+                "subtype": "initialize", "sdkMcpServers": ["vigie"]}}),
+        ),
+        record(
+            "out",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}),
+        ),
+        call("mcp-1", 1),
+        reply("mcp-1", 1),
+        result("r1"),
+        record(
+            "in",
+            json!({"type": "user", "message": {"role": "user", "content": "again"},
+                "parent_tool_use_id": null, "session_id": "s"}),
+        ),
+        call("mcp-2", 2),
+        reply("mcp-2", 2),
+        result("r2"),
+    ];
+    let path = dir.path().join("reattach.ndjson");
+    std::fs::write(&path, script.join("\n")).unwrap();
+
+    async fn attached(harness: &mut Harness) -> BTreeMap<String, String> {
+        let HostEvent::ClaudeAttached { hashes, .. } = harness
+            .until_host(|host| matches!(host, HostEvent::ClaudeAttached { .. }))
+            .await
+        else {
+            unreachable!()
+        };
+        hashes
+    }
+
+    let mut harness = Harness::start(&path);
+    let first = attached(&mut harness).await;
+    std::fs::write(&image, b"second").unwrap();
+    harness.session.send("again", None).await.unwrap();
+    let second = attached(&mut harness).await;
+    assert_eq!(first.get(&image), Some(&digest_hex(b"first")));
+    assert_eq!(second.get(&image), Some(&digest_hex(b"second")));
+    harness.finish().await;
 }

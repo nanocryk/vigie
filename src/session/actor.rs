@@ -345,7 +345,15 @@ impl Actor {
             Inbound::Result(_) => {
                 let attachments = std::mem::take(&mut self.turn_attachments);
                 if !attachments.is_empty() {
-                    self.emit_host(HostEvent::ClaudeAttached { attachments });
+                    let paths = attachments.clone();
+                    let hashes =
+                        tokio::task::spawn_blocking(move || attachments::file_hashes(&paths))
+                            .await
+                            .unwrap_or_default();
+                    self.emit_host(HostEvent::ClaudeAttached {
+                        attachments,
+                        hashes,
+                    });
                 }
             }
             Inbound::ControlRequest(request) => self.on_cli_request(request).await,

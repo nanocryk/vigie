@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 
 import { attachmentName, isImagePath } from "@/attachments";
 import { CloseIcon, FileIcon } from "@/components/Explorer";
-import { rawUrl } from "@/files";
+import { fetchHash, rawUrl } from "@/files";
 
 /** A file of the composer: uploading, stored at `path`, or failed. */
 export interface ComposerFile {
@@ -14,12 +14,23 @@ export interface ComposerFile {
 }
 
 /** Square for an image, as wide as the name for another file. */
-function ChipFace({ name, path, size }: { name: string; path: string | null; size: string }) {
+function ChipFace({
+  name,
+  path,
+  hash,
+  size,
+}: {
+  name: string;
+  path: string | null;
+  /** The content to show, by hash; the current one when absent. */
+  hash?: string | undefined;
+  size: string;
+}) {
   const [broken, setBroken] = useState(false);
   if (path !== null && isImagePath(path) && !broken) {
     return (
       <img
-        src={rawUrl(path)}
+        src={rawUrl(path, hash)}
         alt={name}
         draggable={false}
         onError={() => setBroken(true)}
@@ -35,17 +46,66 @@ function ChipFace({ name, path, size }: { name: string; path: string | null; siz
   );
 }
 
-/** A sent file, hanging over its bubble's edge; a tap opens it. */
-export function AttachmentChip({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+/** The hash of each path's latest attachment in the discussion. */
+export const LatestHashes = createContext<ReadonlyMap<string, string>>(new Map());
+
+type Drift = "same" | "modified" | "deleted";
+
+/**
+ * Whether the file still has content `hash`: modified at once when a later
+ * attachment of the path has another hash, else as the server reports on mount.
+ */
+function useDrift(path: string, hash: string | undefined): Drift {
+  const latest = useContext(LatestHashes).get(path);
+  const [drift, setDrift] = useState<Drift>("same");
+  useEffect(() => {
+    if (hash === undefined) return;
+    let live = true;
+    fetchHash(path).then(
+      (current) => {
+        if (live) setDrift(current === null ? "deleted" : current === hash ? "same" : "modified");
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [path, hash]);
+  if (drift === "same" && hash !== undefined && latest !== undefined && latest !== hash) {
+    return "modified";
+  }
+  return drift;
+}
+
+/**
+ * A sent file, hanging over its bubble's edge; a tap opens it. With `hash`, it
+ * shows that content and flags a file modified or deleted since.
+ */
+export function AttachmentChip({
+  path,
+  hash,
+  onOpen,
+}: {
+  path: string;
+  hash?: string | undefined;
+  onOpen: (path: string) => void;
+}) {
   const name = attachmentName(path);
+  const drift = useDrift(path, hash);
+  const note = drift === "modified" ? "modified since" : drift === "deleted" ? "deleted since" : null;
   return (
     <button
       type="button"
-      title={name}
+      title={note === null ? name : `${name} (${note})`}
       onClick={() => onOpen(path)}
-      className="bg-card ring-background hover:ring-ring flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md shadow-md ring-2 transition-shadow"
+      className="bg-card ring-background hover:ring-ring relative flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md shadow-md ring-2 transition-shadow"
     >
-      <ChipFace name={name} path={path} size="size-11" />
+      <ChipFace name={name} path={path} hash={hash} size="size-11" />
+      {note !== null && (
+        <span className="voice-ui absolute inset-x-0 bottom-0 bg-black/70 text-center text-[9px] leading-3 text-white">
+          {drift === "modified" ? "modified" : "deleted"}
+        </span>
+      )}
     </button>
   );
 }

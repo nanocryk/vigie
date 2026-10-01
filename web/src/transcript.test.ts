@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { toolDiff } from "@/diff";
+import { rawUrl } from "@/files";
 import {
   type Loaded,
   appendEvents,
@@ -23,6 +24,7 @@ import {
   askContext,
   denyCountdown,
   emptyTranscript,
+  latestHashes,
   parseTaskNotification,
   planFileName,
   quietWork,
@@ -290,6 +292,38 @@ describe("transcript from recordings", () => {
     ]);
     expect(next.items.filter((item) => item.kind === "claude")).toEqual(replies);
     expect(next.items.at(-1)).toMatchObject({ kind: "user", text: "again" });
+  });
+
+  it("claude_attached pins each path to its hash, one image URL per content", () => {
+    const events = recordingEvents("cd");
+    const file = "C:\\p\\main.png";
+    const attach = (hash: string) =>
+      applyEvents(emptyTranscript, [
+        ...events,
+        {
+          session: SESSION,
+          seq: events.length + 1,
+          time: "t",
+          kind: "host",
+          payload: parseHostEvent({
+            event: "claude_attached",
+            attachments: [file],
+            hashes: { [file]: hash },
+          }),
+        },
+      ]);
+    const first = attach("aa");
+    const second = attach("bb");
+    expect(first.items.at(-1)).toMatchObject({ kind: "claude", attachmentHashes: { [file]: "aa" } });
+    expect(second.items.at(-1)).toMatchObject({
+      kind: "claude",
+      attachmentHashes: { [file]: "bb" },
+    });
+    expect(latestHashes(first.items).get(file)).toBe("aa");
+    expect(latestHashes([...first.items, ...second.items]).get(file)).toBe("bb");
+    expect(latestHashes(emptyTranscript.items).size).toBe(0);
+    expect(rawUrl(file, "aa")).not.toBe(rawUrl(file, "bb"));
+    expect(rawUrl(file, "aa")).toBe(`${rawUrl(file)}&v=aa`);
   });
 
   it("a set_attachments call is hidden", () => {

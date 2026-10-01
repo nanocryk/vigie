@@ -21,6 +21,16 @@ import {
 import { composeText } from "@/attachments";
 import { toolDiff } from "@/diff";
 
+/** The hash of each path's latest attachment by Claude. */
+export function latestHashes(items: readonly Item[]): ReadonlyMap<string, string> {
+  const latest = new Map<string, string>();
+  for (const item of items) {
+    if (item.kind !== "claude" || item.attachmentHashes === undefined) continue;
+    for (const [path, hash] of Object.entries(item.attachmentHashes)) latest.set(path, hash);
+  }
+  return latest;
+}
+
 /** The `attachments` field of an item: absent when there are none. */
 function attached(paths: readonly string[]): { attachments?: readonly string[] } {
   return paths.length === 0 ? {} : { attachments: paths };
@@ -112,6 +122,8 @@ type ItemBody =
       streaming: boolean;
       /** Paths of the attached files; absent when none. */
       attachments?: readonly string[];
+      /** Content hash of each attached path when attached; absent when none. */
+      attachmentHashes?: Readonly<Record<string, string>>;
     }
   | { kind: "thinking"; key: string; text: string }
   | {
@@ -1025,7 +1037,7 @@ class Draft {
         return;
       }
       case "claude_attached":
-        this.attachToReply(event.attachments);
+        this.attachToReply(event.attachments, event.hashes);
         return;
       case "permission_mode":
         this.permissionMode = event.mode;
@@ -1306,12 +1318,16 @@ class Draft {
   }
 
   /** Puts `paths` on the last Claude text since the last user message; dropped when there is none. */
-  private attachToReply(paths: readonly string[]): void {
+  private attachToReply(
+    paths: readonly string[],
+    hashes: Readonly<Record<string, string>>,
+  ): void {
     for (let index = this.items.length - 1; index >= 0; index -= 1) {
       const item = this.items[index];
       if (item?.kind === "user") return;
       if (item?.kind !== "claude") continue;
-      this.items[index] = { ...item, ...attached(paths) };
+      const pinned = Object.keys(hashes).length === 0 ? {} : { attachmentHashes: hashes };
+      this.items[index] = { ...item, ...attached(paths), ...pinned };
       return;
     }
   }
