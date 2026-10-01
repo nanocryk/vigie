@@ -46,7 +46,14 @@ import { afterDismissal, complete, drawerFor } from "@/completion";
 import { AgentsPanel } from "@/components/AgentsPanel";
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
 import { type ComposerFile, ComposerFiles } from "@/components/Attachments";
-import { AgentColdPanel, ColdPanel, useCacheGauge } from "@/components/ColdPanel";
+import {
+  AgentColdPanel,
+  type CacheDeadline,
+  CacheLowBanner,
+  ColdPanel,
+  cacheDeadline,
+  useCacheGauge,
+} from "@/components/ColdPanel";
 import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
 import { DesktopSend, TouchSend } from "@/components/SendControls";
@@ -199,6 +206,7 @@ function Composer({
   onMenu,
   onMenuToggle,
   takeFocus,
+  deadline,
 }: {
   /** The draft slot of the discussion on screen. */
   session: string;
@@ -223,6 +231,8 @@ function Composer({
   onMenuToggle: () => void;
   /** True when the input takes the focus on mount. */
   takeFocus: () => boolean;
+  /** Null outside the main discussion or without a warm cache: no low-cache warning. */
+  deadline: CacheDeadline | null;
 }) {
   const [text, setText] = useState(() => drafts.get(session) ?? "");
   const [files, setFiles] = useState<ComposerFile[]>(() => draftFiles.get(session) ?? []);
@@ -407,7 +417,7 @@ function Composer({
   };
 
   // The buttons keep a one-line input's height and sit at the bottom as the input grows.
-  return (
+  const row = (
     <div
       onDragOver={onDragOver}
       onDrop={onDrop}
@@ -484,6 +494,14 @@ function Composer({
         />
       )}
     </div>
+  );
+  return (
+    <>
+      {deadline !== null && (text.trim() !== "" || files.length > 0) && (
+        <CacheLowBanner deadline={deadline} subject="draft" />
+      )}
+      {row}
+    </>
   );
 }
 
@@ -595,6 +613,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const settingsChangedAt = view?.settings_changed_at ?? null;
   const settingsAt = settingsChangedAt === null ? null : parseTime(settingsChangedAt);
   const spell = coldSpell(gauge, refusedAt, settingsAt);
+  const mainDeadline = viewing === null ? cacheDeadline(gauge) : null;
   const rewarm = rewarmField(spell, chosen);
 
   const noteRefusal = (err: unknown) => {
@@ -1538,6 +1557,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               queued={asks.length - 1}
               cwd={view?.cwd ?? null}
               context={askContext(transcript, ask.toolUseId)}
+              deadline={mainDeadline}
               goTo={
                 askGoTo === null
                   ? null
@@ -1590,6 +1610,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                 focusComposer.current = false;
                 return client.takeCreated(id) || focus;
               }}
+              deadline={mainDeadline}
               placeholder={
                 viewing === null
                   ? "Message Claude"

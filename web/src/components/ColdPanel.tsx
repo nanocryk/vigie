@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { type ColdChoice, contextSummary } from "@/cold";
-import { useNow } from "@/components/useNow";
-import { type CacheGauge, cacheGauge, formatTokens } from "@/gauges";
+import { useClock, useNow } from "@/components/useNow";
+import { type CacheGauge, cacheGauge, cacheLowMs, formatSpan, formatTokens } from "@/gauges";
 import type { CacheView, ContextView } from "@/wire";
 
 /** The cache gauge, recomputed on return to the foreground and at the moment it goes cold. */
@@ -17,6 +17,39 @@ export function useCacheGauge(cache: CacheView | null, lastActivity: string | nu
     return () => clearTimeout(timer);
   }, [coldAt]);
   return gauge;
+}
+
+/** When the main discussion's warm cache goes cold. */
+export interface CacheDeadline {
+  coldAt: number;
+  ttlMs: number;
+}
+
+export function cacheDeadline(gauge: CacheGauge): CacheDeadline | null {
+  return gauge.kind === "warm" ? { coldAt: gauge.coldAt, ttlMs: gauge.ttlMs } : null;
+}
+
+const LOW_SUBJECT = {
+  draft: "send soon or the draft waits",
+  ask: "answer soon or the ask waits",
+} as const;
+
+/** Mounted while there is input to lose; shows once the cache runs low. */
+export function CacheLowBanner({
+  deadline,
+  subject,
+}: {
+  deadline: CacheDeadline;
+  subject: keyof typeof LOW_SUBJECT;
+}) {
+  const now = useClock(1000);
+  const remainingMs = deadline.coldAt - now;
+  if (remainingMs <= 0 || remainingMs > cacheLowMs(deadline.ttlMs)) return null;
+  return (
+    <p className="border-gauge-glow bg-gauge-glow/15 text-gauge-glow voice-ui mx-auto mb-1 max-w-5xl rounded-[5px] border px-3 py-1.5 text-xs">
+      Cache cold in {formatSpan(remainingMs)}: {LOW_SUBJECT[subject]} behind the cold-cache choice.
+    </p>
+  );
 }
 
 const CHOICES: readonly { choice: ColdChoice; label: string; explain: string; tone: string }[] = [

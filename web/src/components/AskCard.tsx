@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 
+import { type CacheDeadline, CacheLowBanner } from "@/components/ColdPanel";
 import { DiffBlock } from "@/components/Diff";
 import { Markdown } from "@/components/Markdown";
 import { PlanView } from "@/components/PlanView";
@@ -283,6 +284,7 @@ function CardFrame({
   title,
   queued,
   scroll = "frame",
+  holdsInput,
   children,
 }: {
   /** Null when the children draw their own header. */
@@ -290,15 +292,19 @@ function CardFrame({
   queued: number;
   /** `content`: the frame never scrolls; a `min-h-0` child down its flex columns shrinks and scrolls instead. */
   scroll?: "frame" | "content";
+  /** Something was picked or typed: a cold cache would put it behind the cold-cache choice. */
+  holdsInput: boolean;
   children: ReactNode;
 }) {
   const goTo = useContext(GoToAgent);
   const denyAt = useContext(DenyAt);
+  const deadline = useContext(MainDeadline);
   return (
     <section
       className={`bg-card border-primary/40 flex max-h-[50%] shrink-0 flex-col border-t-2 px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
     >
       <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col gap-3">
+        {deadline !== null && holdsInput && <CacheLowBanner deadline={deadline} subject="ask" />}
         {goTo !== null && (
           <button
             type="button"
@@ -323,6 +329,25 @@ function CardFrame({
   );
 }
 
+/** Input given to an ask still unanswered, per request id: the cold-cache panel unmounts its card. */
+const keptApprovals = new Map<string, ApprovalInput>();
+const keptDecisions = new Map<string, DecisionInput>();
+
+/** State that outlives the card's unmounting, until the ask is answered. */
+function useKept<T>(
+  store: Map<string, T>,
+  requestId: string,
+  initial: T,
+): [T, (change: (current: T) => T) => void] {
+  const [value, setValue] = useState(() => store.get(requestId) ?? initial);
+  const update = (change: (current: T) => T) => {
+    const next = change(value);
+    store.set(requestId, next);
+    setValue(next);
+  };
+  return [value, update];
+}
+
 function useAnswer(submit: SubmitAnswer, requestId: string) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -331,6 +356,8 @@ function useAnswer(submit: SubmitAnswer, requestId: string) {
     setError(null);
     try {
       await submit(requestId, value);
+      keptApprovals.delete(requestId);
+      keptDecisions.delete(requestId);
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -437,6 +464,28 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+interface ApprovalInput {
+  noteOpen: boolean;
+  note: string;
+  acceptEdits: boolean;
+  alwaysForFile: boolean;
+  pickedPath: string | null;
+}
+
+const NO_APPROVAL_INPUT: ApprovalInput = {
+  noteOpen: false,
+  note: "",
+  acceptEdits: false,
+  alwaysForFile: false,
+  pickedPath: null,
+};
+
+function approvalHoldsInput(input: ApprovalInput): boolean {
+  return (
+    input.note.trim() !== "" || input.acceptEdits || input.alwaysForFile || input.pickedPath !== null
+  );
+}
+
 /** An allow or deny ask (tool use or plan approval), answered by swipe. */
 function ApprovalCard({
   submit,
@@ -452,11 +501,9 @@ function ApprovalCard({
   context: string | null;
 }) {
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [note, setNote] = useState("");
-  const [acceptEdits, setAcceptEdits] = useState(false);
-  const [alwaysForFile, setAlwaysForFile] = useState(false);
-  const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const [input, update] = useKept(keptApprovals, ask.requestId, NO_APPROVAL_INPUT);
+  const { noteOpen, note, acceptEdits, alwaysForFile, pickedPath } = input;
+  const set = (patch: Partial<ApprovalInput>) => update((current) => ({ ...current, ...patch }));
   // A failed answer remounts the swipe so it can be done again.
   const [attempt, setAttempt] = useState(0);
   const isPlan = ask.toolName === "ExitPlanMode";
@@ -490,7 +537,12 @@ function ApprovalCard({
 
   // The whole panel is the swipe surface; its own controls keep their taps.
   return (
-    <CardFrame title={null} queued={0} scroll={isPlan ? "content" : "frame"}>
+    <CardFrame
+      title={null}
+      queued={0}
+      scroll={isPlan ? "content" : "frame"}
+      holdsInput={approvalHoldsInput(input)}
+    >
       {/* Keyed by the ask and the choices: another ask or another grant means a fresh gesture. */}
       <Swipe
         key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}:${alwaysForFile}`}
@@ -503,7 +555,7 @@ function ApprovalCard({
               type="button"
               disabled={sending}
               aria-pressed={acceptEdits}
-              onClick={() => setAcceptEdits((on) => !on)}
+              onClick={() => set({ acceptEdits: !acceptEdits })}
               className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${acceptEdits ? "bg-mode-accept text-mode-accept-foreground border-mode-accept" : "text-muted-foreground bg-card/60"}`}
             >
               {acceptEdits ? "✓ " : ""}Accept edits
@@ -549,7 +601,7 @@ function ApprovalCard({
               kind={ask.folder.kind}
               segments={segments}
               picked={picked}
-              onPick={setPickedPath}
+              onPick={(path) => set({ pickedPath: path })}
               disabled={sending}
             />
           )}
@@ -559,7 +611,7 @@ function ApprovalCard({
                 type="button"
                 disabled={sending}
                 aria-pressed={alwaysForFile}
-                onClick={() => setAlwaysForFile((on) => !on)}
+                onClick={() => set({ alwaysForFile: !alwaysForFile })}
                 className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${alwaysForFile ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground bg-card/60"}`}
               >
                 {alwaysForFile ? "✓ " : ""}Always for this file
@@ -574,7 +626,7 @@ function ApprovalCard({
           {noteOpen ? (
             <textarea
               value={note}
-              onChange={(event) => setNote(event.target.value)}
+              onChange={(event) => set({ note: event.target.value })}
               disabled={sending}
               rows={2}
               placeholder="Note sent with the answer: the deny reason, or a follow-up after allowing"
@@ -584,7 +636,7 @@ function ApprovalCard({
             <button
               type="button"
               disabled={sending}
-              onClick={() => setNoteOpen(true)}
+              onClick={() => set({ noteOpen: true })}
               className="text-primary voice-ui bg-card/60 self-start rounded-[5px] px-2 py-1 text-sm disabled:opacity-50"
             >
               + Note
@@ -607,6 +659,8 @@ export interface GoTo {
 const GoToAgent = createContext<GoTo | null>(null);
 /** When the server denies the ask on screen; null for the main agent's asks. */
 const DenyAt = createContext<number | null>(null);
+/** When the main discussion's cache goes cold; null outside it or without a warm cache. */
+const MainDeadline = createContext<CacheDeadline | null>(null);
 
 function DenyCountdown({ denyAt }: { denyAt: number }) {
   const [now, setNow] = useState(Date.now);
@@ -631,6 +685,7 @@ export function AskCard({
   cwd,
   context,
   goTo,
+  deadline,
 }: {
   submit: SubmitAnswer;
   ask: PendingAsk;
@@ -642,17 +697,38 @@ export function AskCard({
   context: string | null;
   /** Null when the ask belongs to the discussion on screen. */
   goTo: GoTo | null;
+  deadline: CacheDeadline | null;
 }) {
   return (
     <GoToAgent.Provider value={goTo}>
       <DenyAt.Provider value={ask.denyAt}>
-        {ask.toolName !== "AskUserQuestion" ? (
-          <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
-        ) : (
-          <DecisionCard submit={submit} ask={ask} queued={queued} />
-        )}
+        <MainDeadline.Provider value={deadline}>
+          {ask.toolName !== "AskUserQuestion" ? (
+            <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
+          ) : (
+            <DecisionCard submit={submit} ask={ask} queued={queued} />
+          )}
+        </MainDeadline.Provider>
       </DenyAt.Provider>
     </GoToAgent.Provider>
+  );
+}
+
+interface DecisionInput {
+  denyMessage: string;
+  /** Per question text. */
+  choices: Record<string, Choice>;
+}
+
+const NO_DECISION_INPUT: DecisionInput = { denyMessage: "", choices: {} };
+
+function decisionHoldsInput(input: DecisionInput): boolean {
+  return (
+    input.denyMessage.trim() !== "" ||
+    Object.values(input.choices).some(
+      (choice) =>
+        choice.labels.length > 0 || choice.custom.length > 0 || choice.draft.trim() !== "",
+    )
   );
 }
 
@@ -667,8 +743,8 @@ function DecisionCard({
   queued: number;
 }) {
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
-  const [denyMessage, setDenyMessage] = useState("");
-  const [choices, setChoices] = useState<Record<string, Choice>>({});
+  const [input, update] = useKept(keptDecisions, ask.requestId, NO_DECISION_INPUT);
+  const { denyMessage, choices } = input;
 
   const questions = ask.toolName === "AskUserQuestion" ? parseQuestions(ask.input) : null;
 
@@ -699,7 +775,7 @@ function DecisionCard({
   const title = questions !== null ? "Question" : `Allow ${toolDisplayName(ask.toolName)}?`;
 
   return (
-    <CardFrame title={title} queued={queued}>
+    <CardFrame title={title} queued={queued} holdsInput={decisionHoldsInput(input)}>
       {questions !== null ? (
         questions.map((question) => (
           <QuestionView
@@ -708,7 +784,10 @@ function DecisionCard({
             disabled={sending}
             choice={choices[question.question] ?? NO_CHOICE}
             onChange={(choice) =>
-              setChoices((current) => ({ ...current, [question.question]: choice }))
+              update((current) => ({
+                ...current,
+                choices: { ...current.choices, [question.question]: choice },
+              }))
             }
           />
         ))
@@ -718,7 +797,10 @@ function DecisionCard({
 
       <input
         value={denyMessage}
-        onChange={(event) => setDenyMessage(event.target.value)}
+        onChange={(event) => {
+          const message = event.target.value;
+          update((current) => ({ ...current, denyMessage: message }));
+        }}
         disabled={sending}
         placeholder="Deny message for Claude (optional)"
         className="bg-background focus:ring-ring w-full rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"

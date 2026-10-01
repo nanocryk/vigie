@@ -80,6 +80,11 @@ export type CacheGauge =
     }
   | { kind: "cold"; coldAt: number; ttlMs: number };
 
+/** How long before going cold a cache of this TTL counts as low. */
+export function cacheLowMs(ttlMs: number): number {
+  return Math.min(CACHE_LOW_MS, ttlMs / 6);
+}
+
 /** The longest TTL a cache write uses. */
 const MAX_TTL_MS = 60 * 60_000;
 
@@ -109,7 +114,7 @@ export function cacheGauge(
     remainingMs,
     coldAt,
     ttlMs,
-    low: remainingMs < Math.min(CACHE_LOW_MS, ttlMs / 6),
+    low: remainingMs < cacheLowMs(ttlMs),
   };
 }
 

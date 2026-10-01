@@ -75,6 +75,8 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - The choice shows the context usage % and, when available, the estimated cost of rewarming in the 5h and 7d usage windows. At low %, rewarming costs about what a new session plus recovering the context costs; at high %, it costs too much.
 - vigie never picks for the user; it only prevents interacting with a cold cache by accident.
 - The server enforces it too: while the cache is cold (by the same rule as the client), a message or an ask answer is refused unless it carries the rewarm choice; restarting (continue, blank) and interrupting are always accepted. A client bug cannot bypass the choice.
+- In the main discussion, during the last 10 minutes of its cache (a sixth of a shorter TTL), a warning banner with a countdown sits above the composer while it holds a draft, and above the ask card while it holds input (picked options, typed text, toggles). It has no button.
+- An ask card keeps its input while off screen, in memory, so a rewarm shows the ask as it was left.
 - The choice is one panel replacing the composer, shared with archived sessions. Rewarm is red, continue green, blank blue. Rewarm asks for confirmation behind a large warning that it re-sends the whole context at full price.
 
 ## Discussion view
