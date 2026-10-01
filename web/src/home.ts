@@ -43,33 +43,46 @@ export type RowHighlight = "ask" | "stopped" | "cooling" | "finished" | "working
 
 const ONE_HOUR_TTL_MS = 60 * 60_000;
 
-/** An unarchived discussion whose 1 hour cache runs low, as the push warning has it. */
-export function cooling(session: SessionView, now: number): boolean {
-  if (session.archived_at !== null) return false;
+/**
+ * The spell of an unarchived discussion whose 1 hour cache runs low, as the
+ * push warning has it: its last request time. Null when not cooling.
+ */
+export function coolingSpell(session: SessionView, now: number): string | null {
+  if (session.archived_at !== null || session.cache === null) return null;
   const gauge = cacheGauge(session.cache, now);
-  return gauge.kind === "warm" && gauge.ttlMs === ONE_HOUR_TTL_MS && gauge.low;
+  const low = gauge.kind === "warm" && gauge.ttlMs === ONE_HOUR_TTL_MS && gauge.low;
+  return low ? session.cache.last_request_at : null;
 }
 
-export function rowHighlight(session: SessionView, now: number): RowHighlight | null {
+function highlightOf(session: SessionView, cooling: boolean): RowHighlight | null {
   if (session.asks > 0) return "ask";
   if (session.unread === "stopped") return "stopped";
-  if (cooling(session, now)) return "cooling";
+  if (cooling) return "cooling";
   if (session.unread === "finished") return "finished";
   return session.busy ? "working" : null;
 }
 
+export function rowHighlight(session: SessionView, now: number): RowHighlight | null {
+  return highlightOf(session, coolingSpell(session, now) !== null);
+}
+
 const HIGHLIGHT_RANK: readonly RowHighlight[] = ["ask", "stopped", "cooling", "finished", "working"];
 
-/** The strongest highlight among `sessions`, leaving out the one on screen. */
+/**
+ * The strongest highlight among `sessions`, leaving out the one on screen and
+ * the cooling spells in `seen` (per session, its seen spell).
+ */
 export function strongestHighlight(
   sessions: readonly SessionView[],
   now: number,
+  seen: Readonly<Record<string, string>>,
   onScreen: string | null = null,
 ): RowHighlight | null {
   let best: number | null = null;
   for (const session of sessions) {
     if (session.id === onScreen) continue;
-    const highlight = rowHighlight(session, now);
+    const spell = coolingSpell(session, now);
+    const highlight = highlightOf(session, spell !== null && seen[session.id] !== spell);
     if (highlight === null) continue;
     const rank = HIGHLIGHT_RANK.indexOf(highlight);
     if (best === null || rank < best) best = rank;

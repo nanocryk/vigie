@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useClock } from "@/components/useNow";
+import { useCoolingSeen } from "@/coolingSeen";
 import {
   type CacheGauge,
   cacheGauge,
@@ -47,7 +48,8 @@ export function pulseStyle(color: string): Record<string, string> {
 
 /**
  * The top bar's left slot on every screen but Home: back to Home. It pulses
- * like a Home row, in the strongest state among the sessions not on screen, work aside.
+ * like a Home row, in the strongest state among the sessions not on screen, work
+ * aside. A cooling cache lights it until seen on Home or in its discussion.
  */
 export function HomeButton({
   sessions,
@@ -60,7 +62,8 @@ export function HomeButton({
   onClick?: () => void;
 }) {
   const now = useClock(HOME_CLOCK_MS);
-  const strongest = sessions === null ? null : strongestHighlight(sessions, now, onScreen);
+  const seen = useCoolingSeen();
+  const strongest = sessions === null ? null : strongestHighlight(sessions, now, seen, onScreen);
   // Work in progress wants nothing from the user, so only the other states light it.
   const highlight = strongest === "working" ? null : strongest;
   return (

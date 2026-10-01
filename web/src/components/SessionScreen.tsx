@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -70,6 +71,7 @@ import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type HeldActions, type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
+import { useSeeCooling } from "@/coolingSeen";
 import {
   DiffIcon,
   FileIcon,
@@ -548,6 +550,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const history = snapshot.histories.get(id);
   const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
+  useSeeCooling(useMemo(() => (view === null ? [] : [view]), [view]));
   const repo = useRepoRoot(view?.cwd ?? null);
   const openDiff =
     view === null || repo === null

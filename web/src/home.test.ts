@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  cooling,
+  coolingSpell,
   homeSections,
   keepOrder,
   rowAction,
@@ -61,15 +61,14 @@ describe("rowHighlight", () => {
   });
 });
 
-describe("cooling", () => {
-  it("holds for an unarchived 1 hour cache in its last 10 minutes", () => {
-    expect(cooling(session("s", lowCache), NOW)).toBe(true);
-    expect(cooling(session("s", cache("2026-09-27T10:15:00Z")), NOW)).toBe(false);
-    expect(cooling(session("s", cache("2026-09-27T09:55:00Z")), NOW)).toBe(false);
-    expect(cooling(session("s", cache("2026-09-27T10:59:00Z", 300)), NOW)).toBe(false);
-    expect(cooling(session("s", { ...lowCache, archived_at: "2026-09-27T10:30:00Z" }), NOW)).toBe(
-      false,
-    );
+describe("coolingSpell", () => {
+  it("is the last request time of an unarchived 1 hour cache in its last 10 minutes", () => {
+    expect(coolingSpell(session("s", lowCache), NOW)).toBe("2026-09-27T10:05:00Z");
+    expect(coolingSpell(session("s", cache("2026-09-27T10:15:00Z")), NOW)).toBeNull();
+    expect(coolingSpell(session("s", cache("2026-09-27T09:55:00Z")), NOW)).toBeNull();
+    expect(coolingSpell(session("s", cache("2026-09-27T10:59:00Z", 300)), NOW)).toBeNull();
+    const archived = session("s", { ...lowCache, archived_at: "2026-09-27T10:30:00Z" });
+    expect(coolingSpell(archived, NOW)).toBeNull();
   });
 });
 
@@ -80,10 +79,18 @@ describe("strongestHighlight", () => {
       session("b", { unread: "finished" }),
       session("c", { asks: 2 }),
     ];
-    expect(strongestHighlight(sessions, NOW)).toBe("ask");
-    expect(strongestHighlight(sessions, NOW, "c")).toBe("finished");
-    expect(strongestHighlight([...sessions, session("d", lowCache)], NOW, "c")).toBe("cooling");
-    expect(strongestHighlight([session("d")], NOW)).toBeNull();
+    expect(strongestHighlight(sessions, NOW, {})).toBe("ask");
+    expect(strongestHighlight(sessions, NOW, {}, "c")).toBe("finished");
+    expect(strongestHighlight([session("d")], NOW, {})).toBeNull();
+  });
+
+  it("leaves out cooling spells already seen, not later ones", () => {
+    const sessions = [session("b", { unread: "finished" }), session("d", lowCache)];
+    expect(strongestHighlight(sessions, NOW, {})).toBe("cooling");
+    expect(strongestHighlight(sessions, NOW, { d: "2026-09-27T10:05:00Z" })).toBe("finished");
+    expect(strongestHighlight(sessions, NOW, { d: "2026-09-27T09:00:00Z" })).toBe("cooling");
+    const seenFinished = [session("d", { ...lowCache, unread: "finished" })];
+    expect(strongestHighlight(seenFinished, NOW, { d: "2026-09-27T10:05:00Z" })).toBe("finished");
   });
 });
 

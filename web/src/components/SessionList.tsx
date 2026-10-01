@@ -9,6 +9,7 @@ import {
 
 import type { Client, ConnectionStatus } from "@/client";
 import { useSwipe } from "@/components/Swipe";
+import { useSeeCooling } from "@/coolingSeen";
 import { changeExplorer, selectLastFree } from "@/files";
 import { Header, NeedsYouColumn, PULSE, pulseStyle } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -360,6 +361,7 @@ function Sessions({
   now: number;
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  useSeeCooling(sessions);
   const sections = homeSections(sessions);
   // Rows keep their order while Home is visible, so none moves under a tap.
   const activeOrder = useRef<string[]>([]);
