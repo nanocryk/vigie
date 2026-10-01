@@ -265,7 +265,7 @@ function InputView({
           <div className="text-muted-foreground voice-ui text-xs">
             &#x2514; {changeSummary(diff.added, diff.removed)}
           </div>
-          <DiffBlock diff={diff} maxHeight="max-h-[40dvh]" />
+          <DiffBlock diff={diff} maxHeight="max-h-[40dvh]" wrap />
         </div>
       )}
       <details className="mt-1">
