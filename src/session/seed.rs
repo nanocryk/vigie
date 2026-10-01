@@ -112,6 +112,7 @@ impl History {
                         let Some(text) = history.user_line(user.message.content) else {
                             continue;
                         };
+                        let text = typed_command(&text).unwrap_or(text);
                         if is_meta || text.starts_with(INTERRUPT_PREFIX) {
                             continue;
                         }
@@ -318,6 +319,26 @@ pub fn first_message(seed: &str, text: &str) -> String {
         text
     };
     format!("{seed}\n\n{next}")
+}
+
+/// The CLI echoes a typed slash command as tags: `<command-name>/x</command-name>`
+/// and, when given, `<command-args>`. Returns the command as typed.
+fn typed_command(text: &str) -> Option<String> {
+    if !text.starts_with("<command-") {
+        return None;
+    }
+    let name = tag(text, "command-name")?;
+    match tag(text, "command-args").map(str::trim) {
+        Some(args) if !args.is_empty() => Some(format!("{name} {args}")),
+        _ => Some(name.to_string()),
+    }
+}
+
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let start = text.find(&open)? + open.len();
+    let end = start + text[start..].find(&format!("</{name}>"))?;
+    Some(&text[start..end])
 }
 
 fn file_path(input: &Value) -> Option<&str> {
@@ -631,6 +652,34 @@ mod tests {
             "## Exchange 3\nUser: {CLOSING}\n\nClaude:\n(no text or tool output)"
         )));
         assert_eq!(seed.text.matches("This is a new session.").count(), 1);
+    }
+
+    #[test]
+    fn a_slash_command_echo_reads_as_typed() {
+        let events = [
+            user(
+                1,
+                Value::String(
+                    "<command-message>canif-suggest</command-message>\n\
+                     <command-name>/canif-suggest</command-name>"
+                        .into(),
+                ),
+            ),
+            user(
+                2,
+                Value::String(
+                    "<command-message>review</command-message>\n\
+                     <command-name>/review</command-name>\n\
+                     <command-args>high</command-args>"
+                        .into(),
+                ),
+            ),
+        ];
+        let seed = History::from_events(&events).seed(Path::new("/p"), date());
+        assert!(seed.text.contains("User: /canif-suggest\n"));
+        assert!(seed.text.contains("User: /review high\n"));
+        assert!(!seed.text.contains("<command-"));
+        assert_eq!(typed_command("plain <command-name>/x</command-name>"), None);
     }
 
     #[test]

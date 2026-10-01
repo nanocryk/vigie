@@ -400,6 +400,18 @@ export const emptyTranscript: TranscriptState = {
 };
 
 const INTERRUPT_PREFIX = "[Request interrupted by user";
+
+/**
+ * The CLI echoes a typed slash command as tags: `<command-name>/x</command-name>`
+ * and, when given, `<command-args>`. Returns the command as typed.
+ */
+export function typedCommand(text: string): string | null {
+  if (!text.startsWith("<command-")) return null;
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(text)?.[1];
+  if (name === undefined) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim() ?? "";
+  return args === "" ? name : `${name} ${args}`;
+}
 const SKILL_TOOL = "Skill";
 /**
  * vigie's attach tool: its effect shows as chips on the reply, so its row is hidden.
@@ -1144,7 +1156,8 @@ class Draft {
       }
     }
     if (texts.length === 0 || isMeta) return;
-    const text = texts.join("\n");
+    const joined = texts.join("\n");
+    const text = typedCommand(joined) ?? joined;
     if (origin === TASK_NOTIFICATION) {
       this.taskEnd(text, key);
       return;

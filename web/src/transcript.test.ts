@@ -32,6 +32,7 @@ import {
   toolSummary,
   toolTimeVisible,
   turnEndBubble,
+  typedCommand,
   wakeStops,
   wakeText,
 } from "@/transcript";
@@ -221,6 +222,47 @@ describe("transcript from recordings", () => {
       attachments: files,
       delivery: "received",
     });
+  });
+
+  it("a slash command's tagged echo delivers its bubble", () => {
+    const echo = (seq: number, content: string): WireEvent => ({
+      session: SESSION,
+      seq,
+      time: "t",
+      kind: "line",
+      payload: {
+        type: "user",
+        message: { role: "user", content },
+        parent_tool_use_id: null,
+        session_id: "s",
+        isReplay: true,
+      },
+    });
+    const sent = (seq: number, text: string): WireEvent => ({
+      session: SESSION,
+      seq,
+      time: "t",
+      kind: "host",
+      payload: parseHostEvent({ event: "user_sent", text, client_id: `c${seq}` }),
+    });
+    const state = applyEvents(emptyTranscript, [
+      sent(1, "/canif-suggest"),
+      echo(
+        2,
+        "<command-message>canif-suggest</command-message>\n<command-name>/canif-suggest</command-name>",
+      ),
+      sent(3, "/review high"),
+      echo(
+        4,
+        "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>high</command-args>",
+      ),
+    ]);
+    expect(state.items.map(shape)).toEqual([
+      ["user", "/canif-suggest"],
+      ["user", "/review high"],
+    ]);
+    expect(deliveries(state.items)).toEqual(["received", "received"]);
+    expect(typedCommand("plain <command-name>/x</command-name>")).toBeNull();
   });
 
   it("claude_attached puts the files on the turn's last Claude text only", () => {
