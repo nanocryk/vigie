@@ -433,9 +433,8 @@
     background: var(--code-block);
     border-radius: 5px;
     padding: 0.5rem 0.75rem;
-    overflow-x: auto;
-    white-space: pre;
-    overflow-wrap: normal;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     line-height: 1.45;
   }
   .markdown .md-table {
