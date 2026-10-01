@@ -1239,6 +1239,44 @@ describe("plan asks", () => {
     expect(hosted.asks.map((ask) => ask.plan)).toEqual([plan]);
   });
 
+  it("show an approval note on the call's row and remember the approved plan", () => {
+    const events = recordingEvents("plan", true);
+    const queued = events.findIndex(
+      (event) => event.kind === "host" && event.payload.event === "ask_queued",
+    );
+    const asked = applyEvents(emptyTranscript, events.slice(0, queued + 1));
+    const ask = asked.asks[0];
+    if (ask === undefined) throw new Error("no plan ask");
+    const seq = asked.lastSeq;
+    const host = (at: number, payload: unknown): WireEvent => ({
+      session: SESSION,
+      seq: at,
+      time: "t",
+      kind: "host",
+      payload: parseHostEvent(payload),
+    });
+    const state = applyEvents(asked, [
+      host(seq + 1, {
+        event: "ask_resolved",
+        request_id: ask.requestId,
+        resolution: { kind: "answered", answer: { kind: "allow", note: " then test\n" } },
+      }),
+      host(seq + 2, {
+        event: "user_sent",
+        text: "(Note attached to my approval of your plan) then test",
+      }),
+    ]);
+    const call = state.items.find((item) => item.kind === "tool" && item.toolUseId === ask.toolUseId);
+    expect(call?.kind === "tool" ? call.note : null).toBe("then test");
+    expect(state.items.at(-1)?.hidden).toBe(true);
+    // A plan's note rides in the approved plan: a later message is the user's own.
+    const later = applyEvents(state, [host(seq + 3, { event: "user_sent", text: "then test" })]);
+    expect(later.items.at(-1)?.hidden).toBeUndefined();
+    expect(state.approvedPlan).toBe(
+      "C:\\Users\\user\\.claude\\plans\\plan-creating-hello-txt-containing-tidy-aurora.md",
+    );
+  });
+
   it("name the plan file an edit targets", () => {
     expect(planFileName({ file_path: "C:\\Users\\u\\.claude\\plans\\tidy-aurora.md" })).toBe(
       "tidy-aurora.md",

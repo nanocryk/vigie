@@ -435,8 +435,17 @@ export type HostEvent =
       agent_tool_use_id: string;
       outcome: RelayOutcome;
     }
-  /** `timed_out`: denied by the server at its `deny_at`, not answered. */
-  | { event: "ask_resolved"; request_id: string; timed_out: boolean }
+  /**
+   * `timed_out`: denied by the server at its `deny_at`, not answered. `note`: the
+   * trimmed note of an allow, sent next as a user message; null when none.
+   */
+  | {
+      event: "ask_resolved";
+      request_id: string;
+      timed_out: boolean;
+      allowed: boolean;
+      note: string | null;
+    }
   /** The files Claude attached to its reply; follows the `result` line ending the turn. */
   | { event: "claude_attached"; attachments: string[] }
   | { event: "permission_mode"; mode: string }
@@ -986,9 +995,18 @@ export function parseHostEvent(raw: unknown): HostEvent {
       const requestId = text("request_id");
       const resolution = raw["resolution"];
       const timedOut = isRecord(resolution) && resolution["kind"] === "timed_out";
+      const answer = isRecord(resolution) ? resolution["answer"] : undefined;
+      const allowed = isRecord(answer) && answer["kind"] === "allow";
+      const note = allowed && typeof answer["note"] === "string" ? answer["note"].trim() : "";
       return requestId === null
         ? { event: "unknown", raw }
-        : { event: "ask_resolved", request_id: requestId, timed_out: timedOut };
+        : {
+            event: "ask_resolved",
+            request_id: requestId,
+            timed_out: timedOut,
+            allowed,
+            note: note === "" ? null : note,
+          };
     }
     case "auth_gate_failed":
       return { event: "auth_gate_failed", reason: parseGateFailure(raw["reason"]) };

@@ -63,7 +63,13 @@ import { RestartBanner } from "@/components/RestartBanner";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type HeldActions, type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
-import { DiffIcon, FolderIcon, PaperclipIcon, navigateBackLeaves } from "@/components/Explorer";
+import {
+  DiffIcon,
+  FileIcon,
+  FolderIcon,
+  PaperclipIcon,
+  navigateBackLeaves,
+} from "@/components/Explorer";
 import {
   changeExplorer,
   openFileInLastFree,
@@ -707,6 +713,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   // Asks die with their process; a session known to have none shows no card.
   const asks = view?.live === false ? [] : transcript.asks;
   const ask = asks[0];
+  const approvedPlan = transcript.approvedPlan;
 
   const [choosing, setChoosing] = useState(false);
   const [coldError, setColdError] = useState<string | null>(null);
@@ -1291,6 +1298,22 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         end={
           view !== null && (
             <>
+              {approvedPlan !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    changeExplorer((state) =>
+                      openSessionFile(state, view.id, view.cwd, approvedPlan),
+                    );
+                    navigateBackLeaves();
+                  }}
+                  title={approvedPlan}
+                  className={THIN_BUTTON}
+                >
+                  <FileIcon className="text-mode-plan size-3.5" />
+                  <span className="max-sm:hidden">Plan</span>
+                </button>
+              )}
               {repo !== null && openDiff !== null && (
                 <button
                   type="button"

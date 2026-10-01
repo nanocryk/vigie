@@ -264,32 +264,49 @@ function ToolRow({
   }
   if (diff !== null) return <DiffRow item={item} diff={diff} stamp={stamp} />;
   const timing = toolTiming(item);
+  const planApproval = item.name === "ExitPlanMode";
   return (
-    <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
-      <summary className={TOOL_SUMMARY}>
-        <StatusMark status={item.status} />
-        <span className="voice-ui shrink-0">
-          {plan === null ? toolDisplayName(item.name) : item.name === "Write" ? "Plan written" : "Plan edited"}
-        </span>
-        <span className="voice-code text-muted-foreground min-w-0 truncate">
-          {plan ?? item.summary}
-        </span>
-        {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
-      </summary>
-      <div className="mt-1 mr-2 ml-9 space-y-2">
-        {timing !== null && <div className={STAMP}>{timing}</div>}
-        <ToolOutput item={item} />
-        {item.attached !== null && (
-          <details>
-            <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
-              skill content
-            </summary>
-            <pre className={`${PANEL} mt-1`}>{item.attached}</pre>
-          </details>
-        )}
-        <ToolInput item={item} />
-      </div>
-    </details>
+    <div
+      className={`rounded-r-[5px] border-l-2 text-sm ${planApproval ? "border-mode-plan bg-mode-plan/15" : "border-ring"}`}
+    >
+      <details className="group open:bg-muted rounded-r-[5px] open:pb-2">
+        <summary className={TOOL_SUMMARY}>
+          <StatusMark status={item.status} />
+          <span className="voice-ui shrink-0">
+            {plan === null ? toolDisplayName(item.name) : item.name === "Write" ? "Plan written" : "Plan edited"}
+          </span>
+          <span className="voice-code text-muted-foreground min-w-0 truncate">
+            {plan ?? item.summary}
+          </span>
+          {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
+        </summary>
+        <div className="mt-1 mr-2 ml-9 space-y-2">
+          {timing !== null && <div className={STAMP}>{timing}</div>}
+          <ToolOutput item={item} />
+          {item.attached !== null && (
+            <details>
+              <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
+                skill content
+              </summary>
+              <pre className={`${PANEL} mt-1`}>{item.attached}</pre>
+            </details>
+          )}
+          <ToolInput item={item} />
+        </div>
+      </details>
+      <ApprovalNote item={item} />
+    </div>
+  );
+}
+
+/** The note sent with a tool call's approval, under its row. */
+function ApprovalNote({ item }: { item: ToolItem }) {
+  if (item.note === undefined) return null;
+  return (
+    <div className="voice-prose mr-2 ml-9 pb-1 text-sm">
+      <span className="text-muted-foreground voice-ui text-xs">Note</span>
+      <Markdown text={item.note} />
+    </div>
   );
 }
 
@@ -349,35 +366,34 @@ function DiffRow({ item, diff, stamp }: { item: ToolItem; diff: FileDiff; stamp:
   const [open, setOpen] = useState(true);
   const timing = toolTiming(item);
   return (
-    <details
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      className="border-ring rounded-r-[5px] border-l-2 text-sm"
-    >
-      <summary className={TOOL_SUMMARY}>
-        <StatusMark status={item.status} />
-        <span className="voice-code min-w-0 truncate">
-          <span className="voice-ui">{diff.verb}</span>({diff.path})
-        </span>
-        {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
-      </summary>
-      <div className="mt-0.5 mr-2 ml-2 space-y-1 pb-1">
-        <div className="flex items-baseline gap-2 pl-7">
-          <span className="text-muted-foreground voice-ui text-xs">
-            &#x2514; {changeSummary(diff.added, diff.removed)}
+    <div className="border-ring rounded-r-[5px] border-l-2 text-sm">
+      <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+        <summary className={TOOL_SUMMARY}>
+          <StatusMark status={item.status} />
+          <span className="voice-code min-w-0 truncate">
+            <span className="voice-ui">{diff.verb}</span>({diff.path})
           </span>
-          {timing !== null && <span className={`${STAMP} ml-auto`}>{timing}</span>}
-        </div>
-        <DiffBlock diff={diff} />
-        <details className="space-y-2">
-          <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">raw</summary>
-          <div className="mt-1 space-y-2">
-            <ToolOutput item={item} />
-            <ToolInput item={item} />
+          {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
+        </summary>
+        <div className="mt-0.5 mr-2 ml-2 space-y-1 pb-1">
+          <div className="flex items-baseline gap-2 pl-7">
+            <span className="text-muted-foreground voice-ui text-xs">
+              &#x2514; {changeSummary(diff.added, diff.removed)}
+            </span>
+            {timing !== null && <span className={`${STAMP} ml-auto`}>{timing}</span>}
           </div>
-        </details>
-      </div>
-    </details>
+          <DiffBlock diff={diff} />
+          <details className="space-y-2">
+            <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">raw</summary>
+            <div className="mt-1 space-y-2">
+              <ToolOutput item={item} />
+              <ToolInput item={item} />
+            </div>
+          </details>
+        </div>
+      </details>
+      <ApprovalNote item={item} />
+    </div>
   );
 }
 

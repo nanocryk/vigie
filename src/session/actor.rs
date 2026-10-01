@@ -96,6 +96,8 @@ struct PendingAsk {
     request: CanUseTool,
     /// The plan file an `ExitPlanMode` ask submits, when known.
     plan_path: Option<String>,
+    /// The plan text an `ExitPlanMode` ask showed, when one was found.
+    plan_text: Option<String>,
     /// A subagent's ask: when it is denied if still unanswered.
     timeout: Option<AskTimeout>,
 }
@@ -396,6 +398,7 @@ impl Actor {
                     request_id: request.request_id.clone(),
                     request: (**ask).clone(),
                     plan_path: plan.as_ref().and_then(|plan| plan.path.clone()),
+                    plan_text: plan.as_ref().map(|plan| plan.text.clone()),
                     timeout,
                 });
                 self.emit_host(HostEvent::AskQueued {
@@ -653,7 +656,10 @@ impl Actor {
         let index = self
             .ask_index(&request_id)
             .ok_or_else(|| anyhow!("no pending ask {request_id}"))?;
-        let result = permission_result(&self.asks[index].request, &answer, &self.cwd)?;
+        let pending = &self.asks[index];
+        let noted_plan = plan_with_note(&pending.request, pending.plan_text.as_deref(), &answer);
+        let result =
+            permission_result(&pending.request, &answer, noted_plan.as_deref(), &self.cwd)?;
         let response = ControlResponse::permission(request_id.clone(), &result);
         self.write(Outbound::ControlResponse(response)).await?;
         let ask = self.asks.remove(index);
@@ -673,10 +679,13 @@ impl Actor {
         {
             history.forget_plan(path);
         }
+        // A plan's note rides in the approved plan itself.
         let note = match &answer {
             Answer::Allow {
                 note: Some(note), ..
-            } if !note.trim().is_empty() => Some(allow_note(&ask.request.tool_name, note)),
+            } if !note.trim().is_empty() && noted_plan.is_none() => {
+                Some(allow_note(&ask.request.tool_name, note))
+            }
             _ => None,
         };
         let bash_answer = match &answer {
@@ -950,8 +959,37 @@ fn allow_note(tool_name: &str, note: &str) -> String {
     )
 }
 
-/// `cwd` is the session folder, which relative tool paths resolve against.
-fn permission_result(ask: &CanUseTool, answer: &Answer, cwd: &Path) -> Result<PermissionResult> {
+/// The plan with the allow's note appended, for an `ExitPlanMode` allow carrying one.
+/// The CLI writes an allow's `plan` to the plan file and gives it to the model as the approved plan.
+fn plan_with_note(ask: &CanUseTool, plan_text: Option<&str>, answer: &Answer) -> Option<String> {
+    let Answer::Allow {
+        note: Some(note),
+        updated_input: None,
+        ..
+    } = answer
+    else {
+        return None;
+    };
+    if ask.tool_name != EXIT_PLAN_MODE || note.trim().is_empty() {
+        return None;
+    }
+    plan_text.map(|text| {
+        format!(
+            "{}\n\n## Approval note\n\n{}\n",
+            text.trim_end(),
+            note.trim()
+        )
+    })
+}
+
+/// `cwd` is the session folder, which relative tool paths resolve against. `noted_plan`
+/// from `plan_with_note` replaces the input's plan.
+fn permission_result(
+    ask: &CanUseTool,
+    answer: &Answer,
+    noted_plan: Option<&str>,
+    cwd: &Path,
+) -> Result<PermissionResult> {
     Ok(match answer {
         Answer::Allow {
             updated_input,
@@ -968,8 +1006,19 @@ fn permission_result(ask: &CanUseTool, answer: &Answer, cwd: &Path) -> Result<Pe
             } else {
                 None
             };
+            let input = match noted_plan {
+                Some(plan) => {
+                    let mut input = match &ask.input {
+                        Value::Object(input) => input.clone(),
+                        _ => serde_json::Map::new(),
+                    };
+                    input.insert("plan".into(), Value::String(plan.to_owned()));
+                    Value::Object(input)
+                }
+                None => updated_input.clone().unwrap_or_else(|| ask.input.clone()),
+            };
             PermissionResult::allow_with(
-                updated_input.clone().unwrap_or_else(|| ask.input.clone()),
+                input,
                 grant::updates(ask, *accept_edits, folder.as_deref(), file.as_ref())?,
             )
         }
@@ -1016,6 +1065,7 @@ mod tests {
                     folder: None,
                     always_for_file: false,
                 },
+                None,
                 &cwd(),
             )
             .unwrap(),
@@ -1029,7 +1079,7 @@ mod tests {
             always_for_file: false,
         };
         assert!(
-            permission_result(&bash, &grant, &cwd()).is_err(),
+            permission_result(&bash, &grant, None, &cwd()).is_err(),
             "no folder was suggested"
         );
         let always = Answer::Allow {
@@ -1040,14 +1090,14 @@ mod tests {
             always_for_file: true,
         };
         assert!(
-            permission_result(&bash, &always, &cwd()).is_err(),
+            permission_result(&bash, &always, None, &cwd()).is_err(),
             "Bash offers no file"
         );
         let edit = ask("Edit", serde_json::json!({"file_path": "notes.md"}));
         let PermissionResult::Allow {
             updated_permissions: Some(updates),
             ..
-        } = permission_result(&edit, &always, &cwd()).unwrap()
+        } = permission_result(&edit, &always, None, &cwd()).unwrap()
         else {
             panic!("an always-for-file allow carries the file rule");
         };
@@ -1062,13 +1112,44 @@ mod tests {
         let questions = Answer::Questions {
             answers: BTreeMap::from([("Pick?".to_string(), "blue".to_string())]),
         };
-        assert!(permission_result(&bash, &questions, &cwd()).is_err());
+        assert!(permission_result(&bash, &questions, None, &cwd()).is_err());
         let question = ask(ASK_USER_QUESTION, serde_json::json!({"questions": []}));
         assert_eq!(
-            permission_result(&question, &questions, &cwd()).unwrap(),
+            permission_result(&question, &questions, None, &cwd()).unwrap(),
             PermissionResult::allow(
                 serde_json::json!({"questions": [], "answers": {"Pick?": "blue"}})
             ),
+        );
+    }
+
+    #[test]
+    fn a_plan_note_rides_in_the_approved_plan() {
+        let exit = ask(EXIT_PLAN_MODE, serde_json::json!({}));
+        let allow = |note: Option<&str>| Answer::Allow {
+            updated_input: None,
+            note: note.map(str::to_owned),
+            accept_edits: false,
+            folder: None,
+            always_for_file: false,
+        };
+        let noted = plan_with_note(&exit, Some("# Plan\n"), &allow(Some(" check it \n")));
+        assert_eq!(
+            noted.as_deref(),
+            Some("# Plan\n\n## Approval note\n\ncheck it\n")
+        );
+        assert_eq!(
+            permission_result(&exit, &allow(Some("check it")), noted.as_deref(), &cwd()).unwrap(),
+            PermissionResult::allow(serde_json::json!({"plan": noted})),
+        );
+        assert_eq!(
+            plan_with_note(&exit, Some("# Plan"), &allow(Some("  "))),
+            None
+        );
+        assert_eq!(plan_with_note(&exit, None, &allow(Some("check it"))), None);
+        let bash = ask("Bash", serde_json::json!({"command": "ls"}));
+        assert_eq!(
+            plan_with_note(&bash, Some("# Plan"), &allow(Some("check it"))),
+            None
         );
     }
 }

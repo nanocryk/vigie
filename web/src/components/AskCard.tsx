@@ -578,7 +578,7 @@ function ApprovalCard({
               disabled={sending}
               rows={2}
               placeholder="Note sent with the answer: the deny reason, or a follow-up after allowing"
-              className="bg-background focus:ring-ring voice-prose w-full resize-y rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
+              className="bg-background focus:ring-ring voice-prose w-full shrink-0 resize-y rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
             />
           ) : (
             <button

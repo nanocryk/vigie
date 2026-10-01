@@ -131,6 +131,8 @@ type ItemBody =
       endTime: number | null;
       /** Text the CLI injected after the call: a loaded skill's content. */
       attached: string | null;
+      /** The note sent with its approval; absent when none. */
+      note?: string;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
   | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null }
@@ -347,6 +349,10 @@ export interface TranscriptState {
   permissionMode: string | null;
   /** Seed of the latest continue, until the echo of the message starting with it. */
   pendingSeed: string | null;
+  /** The note of the answer just applied, shown on its tool row; the next event may carry it. */
+  pendingNote: string | null;
+  /** File of the latest plan approved; null when none was or its file was not found. */
+  approvedPlan: string | null;
   /** Models and commands from the latest `catalog`; null until one arrived. */
   catalog: Catalog | null;
   /** Commands the latest `system/init` reported as working only in the TUI. */
@@ -393,6 +399,8 @@ export const emptyTranscript: TranscriptState = {
   cwd: null,
   permissionMode: null,
   pendingSeed: null,
+  pendingNote: null,
+  approvedPlan: null,
   catalog: null,
   terminalCommands: [],
   agents: new Map(),
@@ -598,6 +606,8 @@ class Draft {
   cwd: string | null;
   permissionMode: string | null;
   pendingSeed: string | null;
+  pendingNote: string | null;
+  approvedPlan: string | null;
   catalog: Catalog | null;
   terminalCommands: readonly string[];
   agents: Map<string, AgentInfo>;
@@ -628,6 +638,8 @@ class Draft {
     this.cwd = state.cwd;
     this.permissionMode = state.permissionMode;
     this.pendingSeed = state.pendingSeed;
+    this.pendingNote = state.pendingNote;
+    this.approvedPlan = state.approvedPlan;
     this.catalog = state.catalog;
     this.terminalCommands = state.terminalCommands;
     this.agents = new Map(state.agents);
@@ -655,6 +667,8 @@ class Draft {
       cwd: this.cwd,
       permissionMode: this.permissionMode,
       pendingSeed: this.pendingSeed,
+      pendingNote: this.pendingNote,
+      approvedPlan: this.approvedPlan,
       catalog: this.catalog,
       terminalCommands: this.terminalCommands,
       agents: this.agents,
@@ -785,6 +799,15 @@ class Draft {
     });
   }
 
+  /** Shows `note` on tool call `toolUseId`'s row. */
+  noteTool(toolUseId: string, note: string): void {
+    const index = this.items.findIndex(
+      (item) => item.kind === "tool" && item.toolUseId === toolUseId,
+    );
+    const item = this.items[index];
+    if (item?.kind === "tool") this.items[index] = { ...item, note };
+  }
+
   /** A relay typed in this agent's view. */
   private relayed(
     text: string,
@@ -893,11 +916,14 @@ class Draft {
     this.time = parseTime(event.time);
     this.prelude = event.seq < this.firstSeq;
     const key = String(event.seq);
-    if (event.kind === "host") this.host(event.payload, key);
+    // Only the event right after an answer can be the message carrying its note.
+    const note = this.pendingNote;
+    this.pendingNote = null;
+    if (event.kind === "host") this.host(event.payload, key, note);
     else this.line(parseCliLine(event.payload), key);
   }
 
-  private host(event: HostEvent, key: string): void {
+  private host(event: HostEvent, key: string, pendingNote: string | null): void {
     switch (event.event) {
       case "started":
         this.cwd = event.cwd;
@@ -906,7 +932,9 @@ class Draft {
         this.turnOpen = false;
         this.endStreaming();
         return;
-      case "user_sent":
+      case "user_sent": {
+        // An approval note shows on its tool row instead.
+        const note = pendingNote !== null && event.text.endsWith(pendingNote);
         this.outbox.push({ index: this.items.length, armed: !this.turnOpen, settled: false });
         this.add({
           kind: "user",
@@ -916,7 +944,9 @@ class Draft {
           clientId: event.client_id,
           ...attached(event.attachments),
         });
+        if (note) this.hideLast();
         return;
+      }
       case "ask_queued": {
         const request = this.requests.get(event.request_id);
         this.asks.push({
@@ -977,6 +1007,13 @@ class Draft {
         const ask = this.asks.find((pending) => pending.requestId === event.request_id);
         this.asks = this.asks.filter((pending) => pending.requestId !== event.request_id);
         this.requests.delete(event.request_id);
+        this.pendingNote = event.note;
+        if (event.note !== null && ask !== undefined) {
+          const agent = this.agentOfTask(ask.agentId);
+          (agent === null ? this : this.scoped(agent)).noteTool(ask.toolUseId, event.note);
+        }
+        const planPath = ask?.plan?.path ?? null;
+        if (event.allowed && planPath !== null) this.approvedPlan = planPath;
         if (event.timed_out && ask !== undefined) {
           this.agentNotice(
             ask.agentId,
