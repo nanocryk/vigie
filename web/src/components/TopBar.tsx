@@ -32,9 +32,13 @@ import type {
 export const PULSE: Record<RowHighlight, string> = {
   ask: "var(--gauge-glow)",
   stopped: "var(--destructive)",
+  cooling: "var(--gauge-ice)",
   finished: "var(--gauge-ok)",
   working: "color-mix(in oklch, var(--gauge-cold) 35%, transparent)",
 };
+
+/** How often the Home button rechecks for caches running low. */
+const HOME_CLOCK_MS = 30_000;
 
 /** A custom property, which React's style type does not list. */
 export function pulseStyle(color: string): Record<string, string> {
@@ -55,7 +59,8 @@ export function HomeButton({
   onScreen?: string | null;
   onClick?: () => void;
 }) {
-  const strongest = sessions === null ? null : strongestHighlight(sessions, onScreen);
+  const now = useClock(HOME_CLOCK_MS);
+  const strongest = sessions === null ? null : strongestHighlight(sessions, now, onScreen);
   // Work in progress wants nothing from the user, so only the other states light it.
   const highlight = strongest === "working" ? null : strongest;
   return (

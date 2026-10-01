@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cooling,
   homeSections,
   keepOrder,
   rowAction,
@@ -41,14 +42,34 @@ const session = (id: string, patch: Partial<SessionView> = {}): SessionView => (
   ...patch,
 });
 
+const NOW = Date.parse("2026-09-27T11:00:00Z");
+const cache = (lastRequest: string, ttlSecs = 3600) => ({
+  cache: { last_request_at: lastRequest, ttl_secs: ttlSecs },
+});
+/** A 1 hour cache with 5 minutes left at `NOW`. */
+const lowCache = cache("2026-09-27T10:05:00Z");
+
 describe("rowHighlight", () => {
-  it("shows the strongest state: ask, stop, finished turn, then work", () => {
-    const all = { asks: 1, unread: "stopped", busy: true } as const;
-    expect(rowHighlight(session("s", all))).toBe("ask");
-    expect(rowHighlight(session("s", { ...all, asks: 0 }))).toBe("stopped");
-    expect(rowHighlight(session("s", { unread: "finished", busy: true }))).toBe("finished");
-    expect(rowHighlight(session("s", { busy: true }))).toBe("working");
-    expect(rowHighlight(session("s"))).toBeNull();
+  it("shows the strongest state: ask, stop, cooling cache, finished turn, then work", () => {
+    const all = { asks: 1, unread: "stopped", busy: true, ...lowCache } as const;
+    expect(rowHighlight(session("s", all), NOW)).toBe("ask");
+    expect(rowHighlight(session("s", { ...all, asks: 0 }), NOW)).toBe("stopped");
+    expect(rowHighlight(session("s", { ...all, asks: 0, unread: "finished" }), NOW)).toBe("cooling");
+    expect(rowHighlight(session("s", { unread: "finished", busy: true }), NOW)).toBe("finished");
+    expect(rowHighlight(session("s", { busy: true }), NOW)).toBe("working");
+    expect(rowHighlight(session("s"), NOW)).toBeNull();
+  });
+});
+
+describe("cooling", () => {
+  it("holds for an unarchived 1 hour cache in its last 10 minutes", () => {
+    expect(cooling(session("s", lowCache), NOW)).toBe(true);
+    expect(cooling(session("s", cache("2026-09-27T10:15:00Z")), NOW)).toBe(false);
+    expect(cooling(session("s", cache("2026-09-27T09:55:00Z")), NOW)).toBe(false);
+    expect(cooling(session("s", cache("2026-09-27T10:59:00Z", 300)), NOW)).toBe(false);
+    expect(cooling(session("s", { ...lowCache, archived_at: "2026-09-27T10:30:00Z" }), NOW)).toBe(
+      false,
+    );
   });
 });
 
@@ -59,9 +80,10 @@ describe("strongestHighlight", () => {
       session("b", { unread: "finished" }),
       session("c", { asks: 2 }),
     ];
-    expect(strongestHighlight(sessions)).toBe("ask");
-    expect(strongestHighlight(sessions, "c")).toBe("finished");
-    expect(strongestHighlight([session("d")])).toBeNull();
+    expect(strongestHighlight(sessions, NOW)).toBe("ask");
+    expect(strongestHighlight(sessions, NOW, "c")).toBe("finished");
+    expect(strongestHighlight([...sessions, session("d", lowCache)], NOW, "c")).toBe("cooling");
+    expect(strongestHighlight([session("d")], NOW)).toBeNull();
   });
 });
 

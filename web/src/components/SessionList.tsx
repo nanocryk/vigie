@@ -227,7 +227,7 @@ function ActionRow({
   const armed = view.armed !== null;
   const slidOut = action !== "kill" && view.fired !== null;
   const tap = useOpenOnTap(session.id, armed, view.fired !== null);
-  const highlight = armed ? null : rowHighlight(session);
+  const highlight = armed ? null : rowHighlight(session, now);
   const busyLabel = !pending
     ? null
     : action === "restore"

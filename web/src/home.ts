@@ -1,3 +1,4 @@
+import { cacheGauge } from "@/gauges";
 import type { Side, SwipeRules } from "@/swipe";
 import type { SessionView } from "@/wire";
 
@@ -34,27 +35,41 @@ export function keepOrder(previous: readonly string[], sessions: readonly Sessio
   return [...fresh, ...known];
 }
 
-/** What a row's border shows, strongest first: an ask, an unseen stop, an unseen finished turn, work. */
-export type RowHighlight = "ask" | "stopped" | "finished" | "working";
+/**
+ * What a row's border shows, strongest first: an ask, an unseen stop, a cache
+ * about to go cold, an unseen finished turn, work.
+ */
+export type RowHighlight = "ask" | "stopped" | "cooling" | "finished" | "working";
 
-export function rowHighlight(session: SessionView): RowHighlight | null {
+const ONE_HOUR_TTL_MS = 60 * 60_000;
+
+/** An unarchived discussion whose 1 hour cache runs low, as the push warning has it. */
+export function cooling(session: SessionView, now: number): boolean {
+  if (session.archived_at !== null) return false;
+  const gauge = cacheGauge(session.cache, now);
+  return gauge.kind === "warm" && gauge.ttlMs === ONE_HOUR_TTL_MS && gauge.low;
+}
+
+export function rowHighlight(session: SessionView, now: number): RowHighlight | null {
   if (session.asks > 0) return "ask";
   if (session.unread === "stopped") return "stopped";
+  if (cooling(session, now)) return "cooling";
   if (session.unread === "finished") return "finished";
   return session.busy ? "working" : null;
 }
 
-const HIGHLIGHT_RANK: readonly RowHighlight[] = ["ask", "stopped", "finished", "working"];
+const HIGHLIGHT_RANK: readonly RowHighlight[] = ["ask", "stopped", "cooling", "finished", "working"];
 
 /** The strongest highlight among `sessions`, leaving out the one on screen. */
 export function strongestHighlight(
   sessions: readonly SessionView[],
+  now: number,
   onScreen: string | null = null,
 ): RowHighlight | null {
   let best: number | null = null;
   for (const session of sessions) {
     if (session.id === onScreen) continue;
-    const highlight = rowHighlight(session);
+    const highlight = rowHighlight(session, now);
     if (highlight === null) continue;
     const rank = HIGHLIGHT_RANK.indexOf(highlight);
     if (best === null || rank < best) best = rank;
