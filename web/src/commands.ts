@@ -79,40 +79,25 @@ export function filterCards(cards: readonly CommandCard[], filter: string): Comm
   );
 }
 
-/** Typing `/` as the composer's first character opens the panel. */
-export function slashOpens(previous: string, next: string): boolean {
-  return !previous.startsWith("/") && next.startsWith("/");
-}
-
-/**
- * `tab`: opened from the commands tab, the composer draft stays untouched.
- * `slash`: opened by typing `/` in the composer, whose text is the filter and is
- * consumed by the command.
- */
-export type PanelSource = "tab" | "slash";
-
+/** Opened from the commands tab; the composer draft stays untouched. */
 export type PanelState =
   | { kind: "closed" }
-  | { kind: "browsing"; source: PanelSource; filter: string }
+  | { kind: "browsing"; filter: string }
   /** The bottom field holds the command and its arguments. */
-  | { kind: "argument"; source: PanelSource; text: string };
+  | { kind: "argument"; text: string };
 
 export type PanelEvent =
   | { type: "open_tab" }
-  | { type: "open_slash"; text: string }
   | { type: "filter"; text: string }
   | { type: "use"; card: CommandCard }
   | { type: "argument"; text: string }
   | { type: "send" }
   | { type: "close" };
 
-/** `consumeDraft`: the composer text was the command and goes away with it. */
 export type PanelEffect =
   | { kind: "none" }
-  | { kind: "send"; text: string; consumeDraft: boolean }
-  | { kind: "own"; command: OwnCommand; consumeDraft: boolean }
-  /** The filter of a `/` typed in the composer is the composer text. */
-  | { kind: "draft"; text: string };
+  | { kind: "send"; text: string }
+  | { kind: "own"; command: OwnCommand };
 
 export const closedPanel: PanelState = { kind: "closed" };
 
@@ -125,44 +110,28 @@ export function panelStep(
   const stay = { state, effect: NONE };
   switch (event.type) {
     case "open_tab":
-      return { state: { kind: "browsing", source: "tab", filter: "" }, effect: NONE };
-    case "open_slash":
-      return { state: { kind: "browsing", source: "slash", filter: event.text }, effect: NONE };
+      return { state: { kind: "browsing", filter: "" }, effect: NONE };
     case "close":
       return { state: closedPanel, effect: NONE };
-    case "filter": {
+    case "filter":
       if (state.kind !== "browsing") return stay;
-      if (state.source === "tab") return { state: { ...state, filter: event.text }, effect: NONE };
-      const effect: PanelEffect = { kind: "draft", text: event.text };
-      if (!event.text.startsWith("/")) return { state: closedPanel, effect };
-      return { state: { ...state, filter: event.text }, effect };
-    }
+      return { state: { ...state, filter: event.text }, effect: NONE };
     case "use": {
       if (state.kind !== "browsing") return stay;
-      const consumeDraft = state.source === "slash";
       const { card } = event;
       if (card.own !== null) {
-        return { state: closedPanel, effect: { kind: "own", command: card.own, consumeDraft } };
+        return { state: closedPanel, effect: { kind: "own", command: card.own } };
       }
       if (card.argumentHint.trim() === "") {
-        return {
-          state: closedPanel,
-          effect: { kind: "send", text: `/${card.name}`, consumeDraft },
-        };
+        return { state: closedPanel, effect: { kind: "send", text: `/${card.name}` } };
       }
-      return {
-        state: { kind: "argument", source: state.source, text: `/${card.name} ` },
-        effect: NONE,
-      };
+      return { state: { kind: "argument", text: `/${card.name} ` }, effect: NONE };
     }
     case "argument":
       if (state.kind !== "argument") return stay;
       return { state: { ...state, text: event.text }, effect: NONE };
     case "send":
       if (state.kind !== "argument" || state.text.trim() === "") return stay;
-      return {
-        state: closedPanel,
-        effect: { kind: "send", text: state.text, consumeDraft: state.source === "slash" },
-      };
+      return { state: closedPanel, effect: { kind: "send", text: state.text } };
   }
 }

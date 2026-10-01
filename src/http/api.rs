@@ -111,6 +111,19 @@ pub async fn catalog(State(state): State<AppState>) -> Result<Response, ApiError
     Ok(Json(catalog).into_response())
 }
 
+/// How many command names `api/commands/recent` returns at most.
+const RECENT_COMMANDS: usize = 20;
+
+pub async fn recent_commands(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let names = state
+        .manager
+        .store()
+        .recent_commands(RECENT_COMMANDS)
+        .await
+        .map_err(|err| ApiError::internal("recent commands", err))?;
+    Ok(Json(names).into_response())
+}
+
 /// Differs from process to process, so a server restart counts as a new build.
 static PROCESS_STAMP: LazyLock<u128> = LazyLock::new(|| {
     SystemTime::now()

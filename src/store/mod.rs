@@ -7,6 +7,7 @@
 
 mod bash_asks;
 mod catalog;
+mod commands;
 mod events;
 mod held;
 mod plans;

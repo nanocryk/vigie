@@ -782,6 +782,15 @@ export function parseSharedCatalog(raw: unknown, label: string): SharedCatalog {
   };
 }
 
+/** `GET api/commands/recent`: command names, newest first. */
+export function parseRecentCommands(raw: unknown, label: string): string[] {
+  if (!Array.isArray(raw)) fail(label, "expected an array", raw);
+  return raw.map((entry: unknown, index) => {
+    if (typeof entry !== "string") fail(`${label}[${index}]`, "expected a string", entry);
+    return entry;
+  });
+}
+
 export function parseSessionList(raw: unknown, label: string): SessionView[] {
   const sessions = record(raw, label)["sessions"];
   if (!Array.isArray(sessions)) fail(`${label}.sessions`, "expected an array", sessions);

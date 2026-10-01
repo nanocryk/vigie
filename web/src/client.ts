@@ -23,6 +23,7 @@ import {
   type UsageSnapshot,
   type WireEvent,
   parseErrorBody,
+  parseRecentCommands,
   parseServerMessage,
   parseSessionList,
   parseSessionView,
@@ -40,6 +41,8 @@ export interface Snapshot {
   usageError: string | null;
   /** Null until loaded; a failed load keeps the previous one. */
   catalog: SharedCatalog | null;
+  /** Command names the user ran lately, newest first; empty until loaded. */
+  recentCommands: readonly string[];
   transcripts: ReadonlyMap<string, TranscriptState>;
   /** How much of each transcript's history is loaded. */
   histories: ReadonlyMap<string, HistoryStatus>;
@@ -111,6 +114,7 @@ export class Client {
     usage: null,
     usageError: null,
     catalog: null,
+    recentCommands: [],
     transcripts: new Map(),
     histories: new Map(),
     sessionErrors: new Map(),
@@ -266,6 +270,18 @@ export class Client {
       this.update({ catalog: parseSharedCatalog(await response.json(), "catalog") });
     } catch (err) {
       console.error(`Cannot load the catalog: ${errorMessage(err)}`);
+    }
+  });
+
+  readonly refreshRecentCommands = coalesced(async () => {
+    try {
+      const response = await fetch("api/commands/recent");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      this.update({
+        recentCommands: parseRecentCommands(await response.json(), "recent commands"),
+      });
+    } catch (err) {
+      console.error(`Cannot load the recent commands: ${errorMessage(err)}`);
     }
   });
 

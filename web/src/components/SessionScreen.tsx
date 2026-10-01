@@ -41,8 +41,8 @@ import {
   commandQuery,
   filterCards,
   panelStep,
-  slashOpens,
 } from "@/commands";
+import { afterDismissal, complete, drawerFor } from "@/completion";
 import { AgentsPanel } from "@/components/AgentsPanel";
 import { AskCard, type SubmitAnswer } from "@/components/AskCard";
 import { type ComposerFile, ComposerFiles } from "@/components/Attachments";
@@ -51,6 +51,7 @@ import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
 import { DesktopSend, TouchSend } from "@/components/SendControls";
 import { BusyDot, ConnectionDot } from "@/components/SessionList";
+import { SlashDrawer } from "@/components/SlashDrawer";
 import {
   type MenuEntry,
   type MenuState,
@@ -184,8 +185,10 @@ function Composer({
   turnOpen,
   stopping,
   menuOpen,
+  commands,
+  recentCommands,
+  onSuggest,
   onSend,
-  onSlash,
   onStop,
   onMenu,
   onMenuToggle,
@@ -200,9 +203,13 @@ function Composer({
   /** A stop was sent and awaits the server. */
   stopping: boolean;
   menuOpen: boolean;
+  /** What a `/word` completes to. */
+  commands: readonly CommandCard[];
+  /** Command names run lately, newest first: what a bare `/` suggests first. */
+  recentCommands: readonly string[];
+  /** A `/word` opened the suggestions. */
+  onSuggest: () => void;
   onSend: (text: string, attachments: string[]) => void;
-  /** A `/` became the first character: `text` is the whole composer text. */
-  onSlash: (text: string) => void;
   onStop: () => void;
   /** Opens the menu (swipe up on touch). */
   onMenu: () => void;
@@ -277,11 +284,48 @@ function Composer({
   }, [text]);
 
   const change = (value: string) => {
-    const opens = slashOpens(text, value);
     setText(value);
     if (value === "") drafts.delete(session);
     else drafts.set(session, value);
-    if (opens) onSlash(value);
+  };
+
+  // Null while a range is selected or the input is not focused.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [selection, setSelection] = useState({ key: "", index: 0 });
+  const pendingCaret = useRef<number | null>(null);
+  const readCaret = (element: HTMLTextAreaElement) =>
+    setCaret(element.selectionStart === element.selectionEnd ? element.selectionStart : null);
+  useLayoutEffect(() => {
+    const element = area.current;
+    const at = pendingCaret.current;
+    if (element === null || at === null) return;
+    pendingCaret.current = null;
+    element.setSelectionRange(at, at);
+  }, [text]);
+
+  const shown = afterDismissal(drawerFor(text, caret, commands, recentCommands), dismissed);
+  if (shown.dismissed !== dismissed) setDismissed(shown.dismissed);
+  const { drawer } = shown;
+  const suggesting = drawer.kind === "suggest" ? drawer.key : null;
+  useEffect(() => {
+    if (suggesting !== null) onSuggest();
+  }, [suggesting]);
+  const selectionKey = drawer.kind === "suggest" ? `${drawer.key}:${drawer.word.query}` : "";
+  const selected = selection.key === selectionKey ? selection.index : 0;
+  const pick = (card: CommandCard) => {
+    if (drawer.kind !== "suggest") return;
+    const next = complete(text, drawer.word, card.name);
+    setCaret(next.caret);
+    if (next.text === text) {
+      area.current?.setSelectionRange(next.caret, next.caret);
+      return;
+    }
+    pendingCaret.current = next.caret;
+    change(next.text);
+  };
+  const dismiss = () => {
+    if (drawer.kind !== "none") setDismissed(drawer.key);
   };
 
   const uploading = files.some((file) => file.status === "uploading");
@@ -299,7 +343,35 @@ function Composer({
 
   // Desktop: Enter sends, Shift+Enter inserts a newline. Touch: Enter inserts a
   // newline and only the send button sends. An IME composition keeps its own Enter.
+  // With the drawer open: arrows move, Tab or Enter completes (Enter sends a word already
+  // complete), Escape dismisses.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (drawer.kind !== "none" && event.key === "Escape") {
+      event.preventDefault();
+      dismiss();
+      return;
+    }
+    if (drawer.kind === "suggest" && !coarsePointer()) {
+      const count = drawer.suggestions.length;
+      const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+      if (step !== 0) {
+        event.preventDefault();
+        setSelection({ key: selectionKey, index: (selected + step + count) % count });
+        return;
+      }
+      const card = drawer.suggestions[selected]?.card;
+      const completes =
+        (event.key === "Tab" || event.key === "Enter") &&
+        !event.shiftKey &&
+        card !== undefined &&
+        (event.key === "Tab" || card.name !== drawer.word.query);
+      if (completes) {
+        event.preventDefault();
+        pick(card);
+        return;
+      }
+    }
     if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -354,7 +426,10 @@ function Composer({
       >
         <PaperclipIcon />
       </button>
-      <div className="bg-card focus-within:ring-ring flex min-w-0 flex-1 flex-col rounded-[5px] border focus-within:ring-2">
+      <div className="bg-card focus-within:ring-ring relative flex min-w-0 flex-1 flex-col rounded-[5px] border focus-within:ring-2">
+        {drawer.kind !== "none" && (
+          <SlashDrawer drawer={drawer} selected={selected} onPick={pick} onDismiss={dismiss} />
+        )}
         <ComposerFiles files={files} onRemove={remove} />
         <div className="relative flex min-w-0 flex-1">
           <textarea
@@ -370,7 +445,12 @@ function Composer({
             ref={area}
             rows={1}
             value={text}
-            onChange={(event) => change(event.target.value)}
+            onChange={(event) => {
+              change(event.target.value);
+              readCaret(event.target);
+            }}
+            onSelect={(event) => readCaret(event.currentTarget)}
+            onBlur={() => setCaret(null)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             enterKeyHint={coarse ? "enter" : "send"}
@@ -917,16 +997,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     switch (effect.kind) {
       case "none":
         return;
-      case "draft":
-        if (effect.text === "") drafts.delete(draftSlot);
-        else drafts.set(draftSlot, effect.text);
-        return;
       case "send":
-        if (effect.consumeDraft) drafts.delete(draftSlot);
         sendTo(null, effect.text, rewarm);
         return;
       case "own":
-        if (effect.consumeDraft) drafts.delete(draftSlot);
         runOwn(effect.command);
         return;
     }
@@ -939,6 +1013,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   };
 
   const allCards = commandCards(commands, terminalCommands);
+  const claudeCards = allCards.filter((card) => card.own === null);
   const argumentCard: CommandCard | null =
     panel.kind === "argument"
       ? (allCards.find(
@@ -1400,7 +1475,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
           <CommandField
             state={panel}
-            draftKept={panel.source === "tab" && (drafts.get(draftSlot) ?? "").trim() !== ""}
+            draftKept={(drafts.get(draftSlot) ?? "").trim() !== ""}
             onFilter={(text) => panelEvent({ type: "filter", text })}
             onArgument={(text) => panelEvent({ type: "argument", text })}
             onSend={() => panelEvent({ type: "send" })}
@@ -1500,11 +1575,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               turnOpen={transcript.turnOpen}
               stopping={stopping}
               menuOpen={menu.kind === "open"}
+              commands={claudeCards}
+              recentCommands={snapshot.recentCommands}
+              onSuggest={() => void client.refreshRecentCommands()}
               onSend={composerSend}
-              onSlash={(text) => {
-                setMenu(closedMenu);
-                panelEvent({ type: "open_slash", text });
-              }}
               onStop={stop}
               onMenu={() => setMenu({ kind: "open", entry: null })}
               onMenuToggle={() =>
