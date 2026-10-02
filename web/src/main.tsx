@@ -2,8 +2,11 @@ import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/App";
+import { startDisplay } from "@/display";
 import { bootstrap } from "@/pairing";
 import "@/index.css";
+
+startDisplay();
 
 const rootEl = document.getElementById("root");
 if (rootEl === null) throw new Error("missing #root element");

@@ -373,7 +373,7 @@ export function Header({
         <div className="flex items-center self-center whitespace-nowrap">{left}</div>
         <div
           aria-label="Usage, context and cache"
-          className="voice-code grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[11px] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
+          className="voice-code grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[0.6875rem] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
         >
           <AccountColumn usage={usage} now={now} />
           {column}

@@ -102,7 +102,7 @@ export function AttachmentChip({
     >
       <ChipFace name={name} path={path} hash={hash} size="size-11" />
       {note !== null && (
-        <span className="voice-ui absolute inset-x-0 bottom-0 bg-black/70 text-center text-[9px] leading-3 text-white">
+        <span className="voice-ui absolute inset-x-0 bottom-0 bg-black/70 text-center text-[0.625rem] leading-3 text-white">
           {drift === "modified" ? "modified" : "deleted"}
         </span>
       )}
@@ -135,7 +135,7 @@ export function ComposerFiles({
             size="size-14"
           />
           {file.status === "failed" && (
-            <span className="bg-destructive voice-ui absolute bottom-0.5 left-0.5 flex size-4 items-center justify-center rounded-full text-[10px] font-bold text-black">
+            <span className="bg-destructive voice-ui absolute bottom-0.5 left-0.5 flex size-4 items-center justify-center rounded-full text-[0.625rem] font-bold text-black">
               !
             </span>
           )}

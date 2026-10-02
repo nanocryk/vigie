@@ -2,8 +2,8 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/recursive/full.css";
 
-/* Dark mode follows the system setting. */
-@custom-variant dark (@media (prefers-color-scheme: dark));
+/* Dark mode follows `data-theme` on the root, set from the device's Display choice. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* Keyframes and state variants that shadcn components expect (subset of shadcn/tailwind.css). */
 @theme inline {
@@ -238,76 +238,74 @@
 }
 
 /* Dark: deep slate night, warm text, brighter teal and amber. */
-@media (prefers-color-scheme: dark) {
-    :root {
-        color-scheme: dark;
-        --background: oklch(0.19 0.02 255);
-        --foreground: oklch(0.93 0.015 85);
-        --card: oklch(0.23 0.022 255);
-        --card-foreground: oklch(0.93 0.015 85);
-        --popover: oklch(0.23 0.022 255);
-        --popover-foreground: oklch(0.93 0.015 85);
-        --primary: oklch(0.76 0.11 185);
-        --primary-foreground: oklch(0.2 0.03 200);
-        --secondary: oklch(0.28 0.022 255);
-        --secondary-foreground: oklch(0.92 0.015 85);
-        --muted: oklch(0.27 0.02 255);
-        --muted-foreground: oklch(0.7 0.02 255);
-        --accent: oklch(0.4 0.07 70);
-        --accent-foreground: oklch(0.94 0.04 80);
-        --destructive: oklch(0.68 0.18 25);
-        --border: oklch(0.93 0.015 85 / 12%);
-        --input: oklch(0.93 0.015 85 / 16%);
-        --ring: oklch(0.68 0.1 185);
-        --chart-1: oklch(0.76 0.11 185);
-        --chart-2: oklch(0.8 0.13 75);
-        --chart-3: oklch(0.7 0.13 300);
-        --chart-4: oklch(0.75 0.14 145);
-        --chart-5: oklch(0.7 0.16 28);
-        --sidebar: oklch(0.21 0.02 255);
-        --sidebar-foreground: oklch(0.93 0.015 85);
-        --sidebar-primary: oklch(0.76 0.11 185);
-        --sidebar-primary-foreground: oklch(0.2 0.03 200);
-        --sidebar-accent: oklch(0.4 0.07 70);
-        --sidebar-accent-foreground: oklch(0.94 0.04 80);
-        --sidebar-border: oklch(0.93 0.015 85 / 12%);
-        --sidebar-ring: oklch(0.68 0.1 185);
-        --bubble-claude: oklch(0.26 0 0);
-        --bubble-user: oklch(0.36 0 0);
-        --swipe-undecided: oklch(0.38 0.07 95);
-        --swipe-accept: oklch(0.38 0.08 150);
-        --swipe-deny: oklch(0.37 0.09 25);
-        --swipe-accept-strong: oklch(0.78 0.15 150);
-        --swipe-deny-strong: oklch(0.72 0.17 25);
-        --swipe-accept-latched: oklch(0.5 0.15 150);
-        --swipe-deny-latched: oklch(0.49 0.16 25);
-        --mode-manual: oklch(0.8 0.13 90);
-        --mode-manual-foreground: oklch(0.2 0.04 80);
-        --mode-accept: oklch(0.62 0.1 185);
-        --mode-accept-foreground: oklch(0.17 0.03 185);
-        --mode-plan: oklch(0.66 0.14 300);
-        --mode-plan-foreground: oklch(0.17 0.03 300);
-        --gauge-ok: oklch(0.72 0.14 150);
-        --gauge-glow: oklch(0.8 0.14 75);
-        --gauge-cold: oklch(0.72 0.1 245);
-        --gauge-ice: oklch(0.9 0.07 220);
-        --code-block: oklch(0.2 0.015 255);
-        --diff-added: oklch(0.34 0.06 185);
-        --diff-removed: oklch(0.33 0.07 25);
-        --diff-added-sign: oklch(0.78 0.11 185);
-        --diff-removed-sign: oklch(0.75 0.14 25);
-        --git-modified: oklch(0.76 0.15 60);
-        --git-added: oklch(0.74 0.15 145);
-        --git-deleted: oklch(0.7 0.17 25);
-        --hl-comment: oklch(0.64 0.02 255);
-        --hl-keyword: oklch(0.76 0.13 300);
-        --hl-string: oklch(0.8 0.12 145);
-        --hl-number: oklch(0.8 0.12 60);
-        --hl-title: oklch(0.78 0.11 250);
-        --hl-type: oklch(0.8 0.1 190);
-        --hl-attr: oklch(0.82 0.11 85);
-        --hl-meta: oklch(0.76 0.12 345);
-    }
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --background: oklch(0.19 0.02 255);
+    --foreground: oklch(0.93 0.015 85);
+    --card: oklch(0.23 0.022 255);
+    --card-foreground: oklch(0.93 0.015 85);
+    --popover: oklch(0.23 0.022 255);
+    --popover-foreground: oklch(0.93 0.015 85);
+    --primary: oklch(0.76 0.11 185);
+    --primary-foreground: oklch(0.2 0.03 200);
+    --secondary: oklch(0.28 0.022 255);
+    --secondary-foreground: oklch(0.92 0.015 85);
+    --muted: oklch(0.27 0.02 255);
+    --muted-foreground: oklch(0.7 0.02 255);
+    --accent: oklch(0.4 0.07 70);
+    --accent-foreground: oklch(0.94 0.04 80);
+    --destructive: oklch(0.68 0.18 25);
+    --border: oklch(0.93 0.015 85 / 12%);
+    --input: oklch(0.93 0.015 85 / 16%);
+    --ring: oklch(0.68 0.1 185);
+    --chart-1: oklch(0.76 0.11 185);
+    --chart-2: oklch(0.8 0.13 75);
+    --chart-3: oklch(0.7 0.13 300);
+    --chart-4: oklch(0.75 0.14 145);
+    --chart-5: oklch(0.7 0.16 28);
+    --sidebar: oklch(0.21 0.02 255);
+    --sidebar-foreground: oklch(0.93 0.015 85);
+    --sidebar-primary: oklch(0.76 0.11 185);
+    --sidebar-primary-foreground: oklch(0.2 0.03 200);
+    --sidebar-accent: oklch(0.4 0.07 70);
+    --sidebar-accent-foreground: oklch(0.94 0.04 80);
+    --sidebar-border: oklch(0.93 0.015 85 / 12%);
+    --sidebar-ring: oklch(0.68 0.1 185);
+    --bubble-claude: oklch(0.26 0 0);
+    --bubble-user: oklch(0.36 0 0);
+    --swipe-undecided: oklch(0.38 0.07 95);
+    --swipe-accept: oklch(0.38 0.08 150);
+    --swipe-deny: oklch(0.37 0.09 25);
+    --swipe-accept-strong: oklch(0.78 0.15 150);
+    --swipe-deny-strong: oklch(0.72 0.17 25);
+    --swipe-accept-latched: oklch(0.5 0.15 150);
+    --swipe-deny-latched: oklch(0.49 0.16 25);
+    --mode-manual: oklch(0.8 0.13 90);
+    --mode-manual-foreground: oklch(0.2 0.04 80);
+    --mode-accept: oklch(0.62 0.1 185);
+    --mode-accept-foreground: oklch(0.17 0.03 185);
+    --mode-plan: oklch(0.66 0.14 300);
+    --mode-plan-foreground: oklch(0.17 0.03 300);
+    --gauge-ok: oklch(0.72 0.14 150);
+    --gauge-glow: oklch(0.8 0.14 75);
+    --gauge-cold: oklch(0.72 0.1 245);
+    --gauge-ice: oklch(0.9 0.07 220);
+    --code-block: oklch(0.2 0.015 255);
+    --diff-added: oklch(0.34 0.06 185);
+    --diff-removed: oklch(0.33 0.07 25);
+    --diff-added-sign: oklch(0.78 0.11 185);
+    --diff-removed-sign: oklch(0.75 0.14 25);
+    --git-modified: oklch(0.76 0.15 60);
+    --git-added: oklch(0.74 0.15 145);
+    --git-deleted: oklch(0.7 0.17 25);
+    --hl-comment: oklch(0.64 0.02 255);
+    --hl-keyword: oklch(0.76 0.13 300);
+    --hl-string: oklch(0.8 0.12 145);
+    --hl-number: oklch(0.8 0.12 60);
+    --hl-title: oklch(0.78 0.11 250);
+    --hl-type: oklch(0.8 0.1 190);
+    --hl-attr: oklch(0.82 0.11 85);
+    --hl-meta: oklch(0.76 0.12 345);
 }
 
 /* Markdown: compact blocks, headings in em so they scale with the surrounding text. */

@@ -292,7 +292,7 @@ function TabSwitcher({
         />
         <span className="truncate">{tabTitle(active, sessions)}</span>
         {tabs.length > 1 && (
-          <span className="bg-muted text-muted-foreground rounded-full px-1.5 text-[11px]">
+          <span className="bg-muted text-muted-foreground rounded-full px-1.5 text-[0.6875rem]">
             {tabs.length}
           </span>
         )}
@@ -845,7 +845,7 @@ function TextBody({
   }, [target]);
 
   return (
-    <div ref={body} className="voice-code grid grid-cols-[auto_1fr] text-[13px] leading-5">
+    <div ref={body} className="voice-code grid grid-cols-[auto_1fr] text-[0.8125rem] leading-5">
       {Array.from({ length: count }, (_, index) => {
         const number = index + 1;
         const lit = flash === number ? "bg-git-modified/25" : "";

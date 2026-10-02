@@ -7,6 +7,14 @@ import { SettingsSection } from "@/components/SettingsSection";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import {
+  SCALES,
+  THEMES,
+  type Scale,
+  type ThemeChoice,
+  setDisplay,
+  useDisplay,
+} from "@/display";
+import {
   type PushConfig,
   disablePush,
   enablePush,
@@ -38,6 +46,79 @@ function errorMessage(err: unknown): string {
 }
 
 const BUTTON = "voice-ui rounded-[5px] border px-3 py-1.5 text-sm disabled:opacity-50";
+
+const SCALE_LABELS: Record<Scale, string> = {
+  87.5: "Small",
+  100: "Default",
+  112.5: "Large",
+  125: "Larger",
+};
+
+const THEME_LABELS: Record<ThemeChoice, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+};
+
+function Choices<T extends string | number>({
+  label,
+  options,
+  value,
+  name,
+  onPick,
+}: {
+  label: string;
+  options: readonly T[];
+  value: T;
+  name: (option: T) => string;
+  onPick: (option: T) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="voice-ui text-muted-foreground text-xs">{label}</p>
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={option === value}
+            onClick={() => onPick(option)}
+            className={`voice-ui rounded-[5px] border px-3 py-1.5 text-sm ${option === value ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
+          >
+            {name(option)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Display() {
+  const display = useDisplay();
+  return (
+    <SettingsSection
+      id="display"
+      title="Display"
+      summary={`${SCALE_LABELS[display.scale]} scale, ${THEME_LABELS[display.theme].toLowerCase()} theme.`}
+    >
+      <Choices
+        label="Scale"
+        options={SCALES}
+        value={display.scale}
+        name={(scale) => SCALE_LABELS[scale]}
+        onPick={(scale) => setDisplay({ ...display, scale })}
+      />
+      <Choices
+        label="Theme"
+        options={THEMES}
+        value={display.theme}
+        name={(theme) => THEME_LABELS[theme]}
+        onPick={(theme) => setDisplay({ ...display, theme })}
+      />
+    </SettingsSection>
+  );
+}
 
 function Notifications() {
   const [config, setConfig] = useState<PushConfig | null>(null);
@@ -405,6 +486,7 @@ export function DeviceSettings({ client }: { client: Client }) {
       />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-2 p-4">
+          <Display />
           <Notifications />
           <Devices />
           <Update onBuilt={setUpdated} />

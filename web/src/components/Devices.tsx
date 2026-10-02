@@ -146,7 +146,7 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
         <div className="flex items-center gap-2">
           <span className="voice-heading min-w-0 truncate">{device.label}</span>
           {device.isYou && (
-            <span className="voice-ui bg-primary/15 text-primary shrink-0 rounded-full px-2 py-0.5 text-[11px]">
+            <span className="voice-ui bg-primary/15 text-primary shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem]">
               this device
             </span>
           )}

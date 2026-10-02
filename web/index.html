@@ -7,8 +7,24 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
-    <meta name="theme-color" content="#f9f6ee" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#121821" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f9f6ee" />
+    <script>
+      // Scale and theme before first paint; src/display.ts owns them afterwards.
+      (function () {
+        var display = {};
+        try {
+          display = JSON.parse(localStorage.getItem("vigie.display")) || {};
+        } catch (e) {}
+        var scales = [87.5, 100, 112.5, 125];
+        var root = document.documentElement;
+        if (scales.indexOf(display.scale) >= 0) root.style.fontSize = display.scale + "%";
+        var dark =
+          display.theme === "dark" ||
+          (display.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        root.dataset.theme = dark ? "dark" : "light";
+        if (dark) document.querySelector('meta[name="theme-color"]').content = "#121821";
+      })();
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="vigie" />

@@ -330,7 +330,7 @@ export function DiffView({
               <nav className="bg-card overflow-hidden rounded-[5px] border">
                 {groupByFolder(files).map((group) => (
                   <div key={group.folder} className="border-t first:border-t-0">
-                    <p className="text-muted-foreground voice-code bg-muted/40 px-3 py-1 text-[11px]">
+                    <p className="text-muted-foreground voice-code bg-muted/40 px-3 py-1 text-[0.6875rem]">
                       {group.folder === "" ? "./" : `${group.folder}/`}
                     </p>
                     <ul>
