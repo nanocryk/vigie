@@ -67,6 +67,8 @@ enum AuthCmd {
 enum PruneCmd {
     /// Delete the stream lines of messages their assistant lines fully carry.
     Streams(PruneArgs),
+    /// Replace tool outputs over 1 KB older than a day by a marker.
+    ToolOutputs(PruneArgs),
 }
 
 #[derive(Args, Debug)]
@@ -232,15 +234,14 @@ async fn main() -> Result<ExitCode> {
         Command::Auth {
             cmd: AuthCmd::RevokeAll,
         } => run_revoke_all(),
-        Command::Prune {
-            what: PruneCmd::Streams(args),
-        } => run_prune_streams(args),
+        Command::Prune { what } => run_prune(what),
     }
 }
 
-fn run_prune_streams(args: PruneArgs) -> Result<ExitCode> {
+fn run_prune(what: PruneCmd) -> Result<ExitCode> {
     use vigie::store::prune::{self, Mode};
 
+    let (PruneCmd::Streams(args) | PruneCmd::ToolOutputs(args)) = &what;
     let live = Store::default_path()?;
     if live.exists() && std::fs::canonicalize(&args.db)? == std::fs::canonicalize(&live)? {
         bail!("{} is the live history; prune a copy", args.db.display());
@@ -259,27 +260,53 @@ fn run_prune_streams(args: PruneArgs) -> Result<ExitCode> {
     let size_before = file_mb(&args.db)?;
     let connection = rusqlite::Connection::open(&args.db)?;
     let before = prune::event_counts(&connection)?;
-    let report = prune::prune_all_streams(&connection, mode)?;
-    let verb = match mode {
-        Mode::DryRun => "Would delete",
-        Mode::Delete => "Deleted",
-    };
-    println!(
-        "{verb} the stream lines of {} messages: {} rows, {:.1} MB of payload.",
-        report.messages,
-        report.rows,
-        report.bytes as f64 / 1_048_576.0
-    );
-    println!(
-        "Kept whole: {} messages; {} stray rows.",
-        report.kept.values().sum::<usize>(),
-        report.stray_rows
-    );
-    let mut reasons: Vec<_> = report.kept.iter().collect();
-    reasons.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
-    for (reason, count) in reasons {
-        let (session, message) = &report.examples[reason];
-        println!("  {count:>5}  {reason}  [e.g. {session} {message}]");
+    let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
+    match &what {
+        PruneCmd::Streams(_) => {
+            let report = prune::prune_all_streams(&connection, mode)?;
+            let verb = match mode {
+                Mode::DryRun => "Would delete",
+                Mode::Delete => "Deleted",
+            };
+            println!(
+                "{verb} the stream lines of {} messages: {} rows, {:.1} MB of payload.",
+                report.messages,
+                report.rows,
+                mb(report.bytes)
+            );
+            println!(
+                "Kept whole: {} messages; {} stray rows.",
+                report.kept.values().sum::<usize>(),
+                report.stray_rows
+            );
+            let mut reasons: Vec<_> = report.kept.iter().collect();
+            reasons.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+            for (reason, count) in reasons {
+                let (session, message) = &report.examples[reason];
+                println!("  {count:>5}  {reason}  [e.g. {session} {message}]");
+            }
+        }
+        PruneCmd::ToolOutputs(_) => {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(1);
+            let transaction = connection.unchecked_transaction()?;
+            let report = prune::prune_tool_results(&transaction, cutoff)?;
+            let verb = match mode {
+                Mode::DryRun => "Would replace",
+                Mode::Delete => "Replaced",
+            };
+            println!(
+                "{verb} {} tool output copies in {} lines before {cutoff}: \
+                 {:.1} MB -> {:.1} MB of payload.",
+                report.results,
+                report.lines,
+                mb(report.bytes_before),
+                mb(report.bytes_after)
+            );
+            match mode {
+                Mode::DryRun => transaction.rollback()?,
+                Mode::Delete => transaction.commit()?,
+            }
+        }
     }
     if mode == Mode::Delete {
         let after = prune::event_counts(&connection)?;

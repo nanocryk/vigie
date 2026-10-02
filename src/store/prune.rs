@@ -1,20 +1,37 @@
-//! Pruning of stored lines that only duplicate other stored lines.
+//! Pruning of stored lines nobody reads anymore.
 //!
-//! While a message streams, its `stream_event` lines build its blocks; once done,
-//! its `assistant` lines carry every block again, and the transcript shows those.
-//! The block lines (`content_block_start`, `_delta`, `_stop`) of a finished
-//! message are deleted when its `assistant` lines carry the same blocks: same
-//! count and types, and the same text for text blocks. Tool inputs and thinking
-//! are not compared: the CLI fills in tool input defaults, and past tool calls
-//! are not read closely. Always kept: the message lines (`message_start` carries
-//! `ttft_ms`, `message_delta` the final usage), and every line of a message
-//! without `assistant` lines (an interrupted reply: its deltas are its only copy).
+//! Streams: while a message streams, its `stream_event` lines build its blocks;
+//! once done, its `assistant` lines carry every block again, and the transcript
+//! shows those. The block lines (`content_block_start`, `_delta`, `_stop`) of a
+//! finished message are deleted when its `assistant` lines carry the same blocks:
+//! same count and types, and the same text for text blocks. Tool inputs and
+//! thinking are not compared: the CLI fills in tool input defaults, and past tool
+//! calls are not read closely. Always kept: the message lines (`message_start`
+//! carries `ttft_ms`, `message_delta` the final usage), and every line of a
+//! message without `assistant` lines (an interrupted reply: its deltas are its
+//! only copy).
+//!
+//! Tool outputs: in `user` lines older than a cutoff, a tool result over
+//! `RESULT_LIMIT` bytes is replaced by a marker giving its size, in both copies
+//! the CLI stores (`message.content[].content` and `tool_use_result`). A file
+//! edit keeps the `type`, `filePath` and `structuredPatch` of its
+//! `tool_use_result`, which the diff view draws. Edits go through SQLite's
+//! `json_set`, so the rest of each line keeps its text and key order.
 
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
 use serde_json::Value;
+
+use super::format_time;
+
+/// Tool results up to this size, serialized, are kept: errors, test totals,
+/// short command outputs.
+pub const RESULT_LIMIT: usize = 1024;
+/// What a file edit's `tool_use_result` keeps: what the diff view reads.
+const PATCH_FIELDS: [&str; 3] = ["type", "filePath", "structuredPatch"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -296,6 +313,117 @@ pub fn prune_streams(connection: &Connection, session: &str, mode: Mode) -> Resu
     Ok(report)
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResultPrune {
+    /// `user` lines changed.
+    pub lines: usize,
+    /// Tool result copies replaced or cut.
+    pub results: usize,
+    /// Payload size of the changed lines, before and after.
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+}
+
+/// The marker replacing a tool result of `bytes` serialized bytes.
+pub fn pruned_marker(bytes: usize) -> String {
+    format!("[output pruned, {} KB]", bytes.div_ceil(1024))
+}
+
+/// What replaces a tool result copy, or `None` to keep it.
+fn pruned(result: &Value) -> Option<Value> {
+    let bytes = result.to_string().len();
+    if bytes <= RESULT_LIMIT {
+        return None;
+    }
+    let patch = result
+        .as_object()
+        .filter(|fields| fields.contains_key("structuredPatch"));
+    let replacement = match patch {
+        Some(fields) => Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| PATCH_FIELDS.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        ),
+        None => Value::String(pruned_marker(bytes)),
+    };
+    (replacement != *result).then_some(replacement)
+}
+
+/// The tool result copies to replace in one line: `json_set` paths and values.
+struct LineEdit {
+    session: String,
+    seq: u64,
+    changes: Vec<(String, Value)>,
+}
+
+/// Replaces the tool results over `RESULT_LIMIT` in `user` lines stored before
+/// `before`. The caller owns the transaction: a dry run rolls it back.
+pub fn prune_tool_results(connection: &Connection, before: DateTime<Utc>) -> Result<ResultPrune> {
+    let mut edits = Vec::new();
+    {
+        let mut statement = connection.prepare(
+            "SELECT session_id, seq, payload FROM events
+             WHERE kind = 'line' AND time < ?1 AND json_extract(payload, '$.type') = 'user'",
+        )?;
+        let mut rows = statement.query([format_time(before)])?;
+        while let Some(row) = rows.next()? {
+            let payload: String = row.get(2)?;
+            let Ok(line) = serde_json::from_str::<Value>(&payload) else {
+                continue;
+            };
+            let mut changes = Vec::new();
+            let blocks = line
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate();
+            for (index, block) in blocks {
+                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                if let Some(replacement) = block.get("content").and_then(pruned) {
+                    changes.push((format!("$.message.content[{index}].content"), replacement));
+                }
+            }
+            if let Some(replacement) = line.get("tool_use_result").and_then(pruned) {
+                changes.push(("$.tool_use_result".to_string(), replacement));
+            }
+            if !changes.is_empty() {
+                edits.push(LineEdit {
+                    session: row.get(0)?,
+                    seq: row.get(1)?,
+                    changes,
+                });
+            }
+        }
+    }
+    let mut report = ResultPrune::default();
+    let mut size = connection
+        .prepare("SELECT length(payload) FROM events WHERE session_id = ?1 AND seq = ?2")?;
+    let mut update = connection.prepare(
+        "UPDATE events SET payload = json_set(payload, ?3, json(?4))
+         WHERE session_id = ?1 AND seq = ?2",
+    )?;
+    for LineEdit {
+        session,
+        seq,
+        changes,
+    } in edits
+    {
+        report.lines += 1;
+        report.bytes_before += size.query_row(params![session, seq], |row| row.get::<_, u64>(0))?;
+        for (path, replacement) in changes {
+            update.execute(params![session, seq, path, replacement.to_string()])?;
+            report.results += 1;
+        }
+        report.bytes_after += size.query_row(params![session, seq], |row| row.get::<_, u64>(0))?;
+    }
+    Ok(report)
+}
+
 /// Rows per event type: `line` rows by CLI line type, stream lines also by
 /// event and block or delta type, `host` rows by event name.
 pub fn event_counts(connection: &Connection) -> Result<BTreeMap<String, u64>> {
@@ -514,6 +642,89 @@ mod tests {
             (SESSION.into(), "m2".into())
         );
         assert_eq!(seqs(&connection).len(), 23);
+    }
+
+    #[test]
+    fn old_big_tool_outputs_become_markers_and_edits_keep_their_patch() {
+        let big = "x".repeat(3000);
+        let patch = json!([{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1,
+            "lines": ["-a", "+b"]}]);
+        let result_line = |id: &str, content: Value, tool_use_result: Value| {
+            // Built by hand to keep the CLI's key order, "type" first.
+            format!(
+                r#"{{"type":"user","message":{{"role":"user","content":[{{"tool_use_id":"{id}","type":"tool_result","content":{content}}}]}},"parent_tool_use_id":null,"session_id":"x","uuid":"u","tool_use_result":{tool_use_result}}}"#
+            )
+        };
+        let lines = [
+            (
+                "2026-09-01T00:00:00.000000Z",
+                result_line("t1", json!(big), json!({"stdout": big})),
+            ),
+            (
+                "2026-09-01T00:00:01.000000Z",
+                result_line(
+                    "t2",
+                    json!("The file was updated."),
+                    json!({"filePath": "a.rs", "oldString": "a", "originalFile": big,
+                        "structuredPatch": patch}),
+                ),
+            ),
+            (
+                "2026-09-01T00:00:02.000000Z",
+                result_line("t3", json!("ok"), json!({"stdout": "ok"})),
+            ),
+            (
+                "2026-10-02T00:00:00.000000Z",
+                result_line("t4", json!(big), json!({"stdout": big})),
+            ),
+        ];
+        let connection = connection(&[]);
+        for (seq, (time, payload)) in lines.iter().enumerate() {
+            connection
+                .execute(
+                    "INSERT INTO events (session_id, seq, time, kind, payload)
+                     VALUES (?1, ?2, ?3, 'line', ?4)",
+                    params![SESSION, seq + 1, time, payload],
+                )
+                .unwrap();
+        }
+        let cutoff = "2026-10-01T00:00:00Z".parse().unwrap();
+        let report = prune_tool_results(&connection, cutoff).unwrap();
+        assert_eq!((report.lines, report.results), (2, 3));
+        assert!(report.bytes_after < report.bytes_before / 4, "{report:?}");
+
+        let payload = |seq: u64| -> String {
+            connection
+                .query_row("SELECT payload FROM events WHERE seq = ?1", [seq], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        let parsed = |seq: u64| serde_json::from_str::<Value>(&payload(seq)).unwrap();
+        assert!(
+            payload(1).starts_with(r#"{"type":"user","message":"#),
+            "{}",
+            payload(1)
+        );
+        assert_eq!(
+            parsed(1)["message"]["content"][0]["content"],
+            "[output pruned, 3 KB]"
+        );
+        assert_eq!(parsed(1)["message"]["content"][0]["tool_use_id"], "t1");
+        assert_eq!(parsed(1)["tool_use_result"], "[output pruned, 3 KB]");
+        assert_eq!(
+            parsed(2)["tool_use_result"],
+            json!({"filePath": "a.rs", "structuredPatch": patch})
+        );
+        assert_eq!(
+            parsed(2)["message"]["content"][0]["content"],
+            "The file was updated."
+        );
+        assert_eq!(payload(3), lines[2].1);
+        assert_eq!(payload(4), lines[3].1);
+
+        let again = prune_tool_results(&connection, cutoff).unwrap();
+        assert_eq!(again, ResultPrune::default());
     }
 
     #[test]
