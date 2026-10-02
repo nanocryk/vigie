@@ -208,6 +208,42 @@ export async function fetchHash(path: string): Promise<string | null> {
   return str(record(await response.json(), "hash"), "hash", "hash");
 }
 
+export interface PathKind {
+  kind: "dir" | "file";
+  path: string;
+}
+
+/** Most paths one `fetchPathKinds` request may carry. */
+export const KINDS_MAX_PATHS = 256;
+
+export function parsePathKinds(raw: unknown, label: string): (PathKind | null)[] {
+  return array(record(raw, label), "entries", label).map((item, index) => {
+    if (item === null) return null;
+    const at = `${label}.entries[${index}]`;
+    const entry = record(item, at);
+    const kind = str(entry, "kind", at);
+    if (kind !== "dir" && kind !== "file") {
+      throw new Error(`${at}.kind: expected dir or file: ${JSON.stringify(kind)}`);
+    }
+    return { kind, path: str(entry, "path", at) };
+  });
+}
+
+/** What each absolute path is, in order; null when it does not exist. */
+export async function fetchPathKinds(paths: readonly string[]): Promise<(PathKind | null)[]> {
+  const response = await fetch("api/fs/kinds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  await check(response);
+  const entries = parsePathKinds(await response.json(), "kinds");
+  if (entries.length !== paths.length) {
+    throw new Error(`kinds: expected ${paths.length} entries, got ${entries.length}`);
+  }
+  return entries;
+}
+
 /** Creates folder `name` in `parent` and returns its path. */
 export async function makeFolder(parent: string, name: string): Promise<string> {
   const response = await fetch("api/fs/mkdir", {
@@ -221,7 +257,7 @@ export async function makeFolder(parent: string, name: string): Promise<string> 
 
 // ---- Paths ----
 
-function isWindowsPath(path: string): boolean {
+export function isWindowsPath(path: string): boolean {
   return /^[A-Za-z]:/.test(path) || path.startsWith("\\\\");
 }
 
@@ -412,9 +448,19 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
 }
 
 /** Activates the free tab used last on `file`, with its folder behind it for the back button. */
-export function openFileInLastFree(state: ExplorerState, file: string): ExplorerState {
+export function openFileInLastFree(
+  state: ExplorerState,
+  file: string,
+  line: number | null = null,
+): ExplorerState {
   const next = selectLastFree(state);
-  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line: null, scroll: 0 });
+  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line, scroll: 0 });
+}
+
+/** Activates the free tab used last on `folder`. */
+export function openFolderInLastFree(state: ExplorerState, folder: string): ExplorerState {
+  const next = selectLastFree(state);
+  return updateTab(next, next.active, { folder, diff: null, file: null, line: null, scroll: 0 });
 }
 
 function parentFolder(file: string): string | null {
@@ -428,9 +474,21 @@ export function openSessionFile(
   session: string,
   root: string,
   file: string,
+  line: number | null = null,
 ): ExplorerState {
   const next = openSessionTab(state, session, root);
-  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line: null, scroll: 0 });
+  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line, scroll: 0 });
+}
+
+/** Activates the session's tab on `folder`. */
+export function openSessionFolderAt(
+  state: ExplorerState,
+  session: string,
+  root: string,
+  folder: string,
+): ExplorerState {
+  const next = openSessionTab(state, session, root);
+  return updateTab(next, next.active, { folder, diff: null, file: null, line: null, scroll: 0 });
 }
 
 /** Activates the session's tab on its folder view, the diff and any file closed. */

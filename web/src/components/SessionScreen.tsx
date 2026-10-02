@@ -57,6 +57,7 @@ import {
 } from "@/components/ColdPanel";
 import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
+import { type FileLinks, FileLinksContext } from "@/components/Markdown";
 import { DesktopSend, TouchSend } from "@/components/SendControls";
 import { BusyDot, ConnectionDot } from "@/components/SessionList";
 import { SlashDrawer } from "@/components/SlashDrawer";
@@ -82,9 +83,11 @@ import {
 import {
   changeExplorer,
   openFileInLastFree,
+  openFolderInLastFree,
   openSessionDiff,
   openSessionFile,
   openSessionFolder,
+  openSessionFolderAt,
 } from "@/files";
 import { repoRoot } from "@/git";
 import { folderName, sessionTitle, stateLabel } from "@/format";
@@ -1268,8 +1271,30 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     }
   };
 
+  const viewId = view?.id ?? null;
+  const cwd = view?.cwd ?? null;
+  const fileLinks = useMemo<FileLinks>(
+    () => ({
+      cwd,
+      open: (target, line) => {
+        changeExplorer((state) => {
+          if (viewId === null || cwd === null) {
+            return target.kind === "file"
+              ? openFileInLastFree(state, target.path, line)
+              : openFolderInLastFree(state, target.path);
+          }
+          return target.kind === "file"
+            ? openSessionFile(state, viewId, cwd, target.path, line)
+            : openSessionFolderAt(state, viewId, cwd, target.path);
+        });
+        navigateBackLeaves();
+      },
+    }),
+    [viewId, cwd],
+  );
+
   return (
-    <>
+    <FileLinksContext.Provider value={fileLinks}>
       <Header
         left={<HomeButton sessions={snapshot.sessions} onScreen={id} />}
         right={
@@ -1652,6 +1677,6 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           )}
         </>
       )}
-    </>
+    </FileLinksContext.Provider>
   );
 }

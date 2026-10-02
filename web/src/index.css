@@ -431,6 +431,14 @@
     border-radius: 3px;
     padding: 0 0.25rem;
   }
+  /* A path to an existing file or folder, opening it in the explorer. */
+  .markdown .file-link {
+    text-decoration-line: underline;
+    text-decoration-color: color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+  .markdown .file-link:hover {
+    text-decoration-color: var(--primary);
+  }
   .markdown pre {
     background: var(--code-block);
     border-radius: 5px;

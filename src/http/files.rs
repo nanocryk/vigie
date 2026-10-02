@@ -34,6 +34,7 @@ pub enum FsError {
     AlreadyExists,
     NotAnImage,
     TooLarge,
+    TooManyPaths,
     Io(io::Error),
 }
 
@@ -57,6 +58,7 @@ impl From<FsError> for ApiError {
             FsError::AlreadyExists => Self::new(StatusCode::CONFLICT, "already_exists"),
             FsError::NotAnImage => Self::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "not_an_image"),
             FsError::TooLarge => Self::new(StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+            FsError::TooManyPaths => Self::new(StatusCode::BAD_REQUEST, "too_many_paths"),
             FsError::Io(err) if err.kind() == io::ErrorKind::PermissionDenied => {
                 Self::new(StatusCode::FORBIDDEN, "permission_denied")
             }
@@ -422,6 +424,56 @@ pub async fn hash_route(Query(query): Query<PathQuery>) -> Result<Response, FsEr
         .into_response())
 }
 
+/// Most paths one `kinds` request may ask about.
+pub const KINDS_MAX_PATHS: usize = 256;
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct PathKind {
+    pub kind: EntryKind,
+    pub path: String,
+}
+
+/// What `raw` is, resolved; `None` when it is missing, relative or unreadable.
+pub fn path_kind(raw: &str) -> Option<PathKind> {
+    let path = canonical(raw).ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let kind = if meta.is_dir() {
+        EntryKind::Dir
+    } else {
+        EntryKind::File
+    };
+    Some(PathKind {
+        kind,
+        path: display_path(&path),
+    })
+}
+
+#[derive(Deserialize)]
+pub struct KindsRequest {
+    pub paths: Vec<String>,
+}
+
+pub async fn kinds_route(Json(request): Json<KindsRequest>) -> Result<Response, FsError> {
+    if request.paths.len() > KINDS_MAX_PATHS {
+        return Err(FsError::TooManyPaths);
+    }
+    let entries = blocking(move || {
+        Ok::<_, FsError>(
+            request
+                .paths
+                .iter()
+                .map(|raw| path_kind(raw))
+                .collect::<Vec<_>>(),
+        )
+    })
+    .await?;
+    Ok((
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(json!({ "entries": entries })),
+    )
+        .into_response())
+}
+
 #[derive(Deserialize)]
 pub struct MakeDir {
     pub parent: String,
@@ -473,6 +525,24 @@ mod tests {
             list(file.to_str().expect("utf-8 path")),
             Err(FsError::NotADirectory)
         ));
+    }
+
+    #[test]
+    fn path_kind_tells_files_folders_and_missing_apart() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("a.txt");
+        std::fs::write(&file, "x").expect("write");
+        let utf8 = |path: &Path| path.to_str().expect("utf-8 path").to_string();
+
+        let found = path_kind(&utf8(&file)).expect("file");
+        assert_eq!(found.kind, EntryKind::File);
+        assert!(!found.path.starts_with(r"\\?\"), "verbatim prefix leaked");
+        assert_eq!(
+            path_kind(&utf8(tmp.path())).map(|found| found.kind),
+            Some(EntryKind::Dir)
+        );
+        assert_eq!(path_kind(&utf8(&tmp.path().join("gone.txt"))), None);
+        assert_eq!(path_kind("a.txt"), None);
     }
 
     #[test]

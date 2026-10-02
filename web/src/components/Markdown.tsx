@@ -1,7 +1,9 @@
-import { memo, useMemo } from "react";
+import { createContext, memo, type ReactNode, useContext, useMemo } from "react";
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { parseFileRef, resolveRefPath, usePathKind } from "@/fileRefs";
+import type { PathKind } from "@/files";
 import { highlight, languageFromTag } from "@/highlight";
 
 export type PluggableList = NonNullable<Options["remarkPlugins"]>;
@@ -39,8 +41,41 @@ export function CodeBlock({ node }: ExtraProps) {
   );
 }
 
+/** Where file paths in inline code resolve and open; null leaves them plain. */
+export interface FileLinks {
+  cwd: string | null;
+  open: (target: PathKind, line: number | null) => void;
+}
+
+export const FileLinksContext = createContext<FileLinks | null>(null);
+
+/** Inline code; one naming an existing file or folder opens it in the explorer. */
+function InlineCode({ node, children }: { children?: ReactNode } & ExtraProps) {
+  const links = useContext(FileLinksContext);
+  const text = node === undefined ? "" : textOf(node);
+  const ref = useMemo(() => (links === null ? null : parseFileRef(text)), [links, text]);
+  const kind = usePathKind(ref === null || links === null ? null : resolveRefPath(ref.path, links.cwd));
+  if (links === null || ref === null || kind === null) return <code>{children}</code>;
+  const line = kind.kind === "file" ? ref.line : null;
+  // An anchor rather than a button, so a long path wraps like the text around it.
+  return (
+    <a
+      href="#"
+      className="file-link"
+      title={line === null ? kind.path : `${kind.path}:${line}`}
+      onClick={(event) => {
+        event.preventDefault();
+        links.open(kind, line);
+      }}
+    >
+      <code>{children}</code>
+    </a>
+  );
+}
+
 const COMPONENTS: Components = {
   pre: CodeBlock,
+  code: InlineCode,
   a: ({ href, title, children }) => (
     <a href={href} title={title} target="_blank" rel="noopener noreferrer">
       {children}
