@@ -26,6 +26,15 @@ CREATE TABLE history_messages (
 CREATE INDEX history_messages_time ON history_messages (time);
 "#;
 
+/// Drops the synthetic user lines `MIGRATION` indexed before `message_of` skipped them.
+pub const SYNTHETIC_MIGRATION: &str = r#"
+DELETE FROM history_messages WHERE role = 'user' AND EXISTS (
+    SELECT 1 FROM events
+    WHERE events.session_id = history_messages.session_id AND events.seq = history_messages.seq
+        AND json_extract(events.payload, '$.isSynthetic') = 1
+);
+"#;
+
 /// The seed of the session's latest restart, NULL for one without.
 const LATEST_SEED: &str = "SELECT json_extract(payload, '$.seed') FROM events
     WHERE session_id = ?1 AND kind = 'host' AND json_extract(payload, '$.event') = 'restarted'
@@ -80,7 +89,9 @@ pub struct MessageQuery {
 pub fn message_of(line: &Inbound) -> Option<(Role, String)> {
     let (role, text) = match line {
         Inbound::User(user) if user.parent_tool_use_id.is_none() => {
-            if user.extra.get("isMeta") == Some(&Value::Bool(true)) {
+            // Synthetic lines are the CLI's own: a loaded skill's text, an image's size note.
+            let flagged = |key: &str| user.extra.get(key) == Some(&Value::Bool(true));
+            if flagged("isMeta") || flagged("isSynthetic") {
                 return None;
             }
             let text = match &user.message.content {
@@ -251,6 +262,20 @@ impl Store {
         .await
     }
 
+    /// The message of event `seq` of `session`, if the history holds one.
+    pub async fn message(&self, session: Uuid, seq: u64) -> Result<Option<StoredMessage>> {
+        self.call(move |connection| {
+            let mut messages = read_messages(
+                connection,
+                "SELECT session_id, seq, time, role, text FROM history_messages
+                 WHERE session_id = ?1 AND seq = ?2",
+                params![session.to_string(), seq],
+            )?;
+            Ok(messages.pop())
+        })
+        .await
+    }
+
     /// The messages of `before` exchanges before the one holding `seq`, that one,
     /// and `after` exchanges after it, in seq order. An exchange starts at a user message.
     pub async fn messages_around(
@@ -411,6 +436,11 @@ mod tests {
             restarted(seed),
             user(&first_message(seed, "Go on")),
             claude(json!([{"type": "text", "text": "Done."}])),
+            parsed(
+                json!({"type": "user", "isSynthetic": true, "parent_tool_use_id": null,
+                "session_id": "s", "message": {"role": "user",
+                    "content": [{"type": "text", "text": "Base directory for this skill"}]}}),
+            ),
         ];
         for (index, body) in bodies.into_iter().enumerate() {
             store.record_event(id, &event(index as u64 + 1, body));
@@ -431,6 +461,9 @@ mod tests {
             .execute("DELETE FROM history_messages", [])
             .unwrap();
         backfill(&connection).unwrap();
+        // An index built before synthetic lines were skipped holds them until the migration.
+        insert(&connection, &id.to_string(), 14, "t", Role::User, "skill").unwrap();
+        connection.execute_batch(SYNTHETIC_MIGRATION).unwrap();
         drop(connection);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(all(&reopened, id).await, expected);
@@ -536,5 +569,11 @@ mod tests {
         assert_eq!(seqs(5, 0, 0).await, [5, 6]);
         assert_eq!(seqs(2, 5, 0).await, [1, 2]);
         assert_eq!(seqs(9, 1, 5).await, [7, 8, 9, 10]);
+        let found = store.message(id, 4).await.unwrap().unwrap();
+        assert_eq!(
+            (found.role, found.text.as_str()),
+            (Role::Claude, "answer 4")
+        );
+        assert_eq!(store.message(id, 11).await.unwrap(), None);
     }
 }

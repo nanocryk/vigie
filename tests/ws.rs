@@ -1519,6 +1519,49 @@ async fn the_shared_catalog_is_served_and_announced() {
     );
 }
 
+#[tokio::test]
+async fn one_history_message_is_served_with_its_session() {
+    let server = Server::start(CATALOG_SCRIPT).await;
+    let id = server.seed_session(Utc::now(), None).await;
+    let raw = json!({"type": "user", "message": {"role": "user", "content": "Set up prettier"},
+        "parent_tool_use_id": null, "session_id": "s"})
+    .to_string();
+    let store = server.manager.store();
+    store.record_event(
+        id,
+        &Event {
+            seq: 1,
+            time: "2026-09-28T10:00:00Z".parse().unwrap(),
+            body: EventBody::Line(Box::new(Line {
+                parsed: serde_json::from_str(&raw).ok(),
+                raw,
+            })),
+        },
+    );
+    store.flush().await.unwrap();
+    let url = |seq: u64| format!("/vigie/api/history/message?session={id}&seq={seq}");
+
+    let (status, body) = server.request(Method::GET, &url(1), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], Value::Null);
+    assert_eq!(body["cwd"], json!(server.cwd));
+    assert_eq!(
+        body["message"],
+        json!({"role": "user", "time": "2026-09-28T10:00:00Z", "text": "Set up prettier"})
+    );
+    let (status, body) = server.request(Method::GET, &url(2), None).await;
+    assert_eq!((status, &body["message"]), (StatusCode::OK, &Value::Null));
+    let unknown = format!(
+        "/vigie/api/history/message?session={}&seq=1",
+        Uuid::new_v4()
+    );
+    let (status, body) = server.request(Method::GET, &unknown, None).await;
+    assert_eq!(
+        (status, &body["error"]),
+        (StatusCode::NOT_FOUND, &json!("no_session"))
+    );
+}
+
 /// A stopped discussion of six exchanges, with a mode change and a restart in
 /// between; returns its id and the stored events as sent.
 async fn long_discussion(server: &Server) -> (Uuid, Vec<Event>) {

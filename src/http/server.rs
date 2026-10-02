@@ -106,6 +106,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/usage", get(api::usage))
         .route("/api/catalog", get(api::catalog))
         .route("/api/commands/recent", get(api::recent_commands))
+        .route("/api/history/message", get(api::history_message))
         .route("/api/fs/list", get(files::list_route))
         .route("/api/fs/places", get(files::places_route))
         .route("/api/fs/file", get(files::file_route))

@@ -3,10 +3,11 @@
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -14,6 +15,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
@@ -109,6 +111,40 @@ pub async fn catalog(State(state): State<AppState>) -> Result<Response, ApiError
         .await
         .map_err(|err| ApiError::internal("shared catalog", err))?;
     Ok(Json(catalog).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryMessageQuery {
+    session: Uuid,
+    seq: u64,
+}
+
+/// `api/history/message`: one message of vigie's history, for the `history_read` ask.
+/// The session is given without the message when it holds none at that seq.
+pub async fn history_message(
+    State(state): State<AppState>,
+    Query(query): Query<HistoryMessageQuery>,
+) -> Result<Response, ApiError> {
+    let store = state.manager.store();
+    let row = store
+        .session(query.session)
+        .await
+        .map_err(|err| ApiError::internal("history session", err))?
+        .ok_or(ApiError::new(StatusCode::NOT_FOUND, "no_session"))?;
+    let message = store
+        .message(query.session, query.seq)
+        .await
+        .map_err(|err| ApiError::internal("history message", err))?;
+    Ok(Json(json!({
+        "name": row.name,
+        "cwd": row.cwd,
+        "message": message.map(|message| json!({
+            "role": message.role.as_str(),
+            "time": message.time,
+            "text": message.text,
+        })),
+    }))
+    .into_response())
 }
 
 /// How many command names `api/commands/recent` returns at most.

@@ -5,6 +5,7 @@ import { folderName, sessionTitle } from "@/format";
 import { parseRoute, routeHash } from "@/route";
 import {
   parseCliLine,
+  parseHistoryHit,
   parseServerMessage,
   parseSessionList,
   parseSharedCatalog,
@@ -347,6 +348,21 @@ describe("parseSharedCatalog", () => {
     expect(parseServerMessage({ type: "catalog_changed" }, "message")).toEqual({
       type: "catalog_changed",
     });
+  });
+});
+
+describe("parseHistoryHit", () => {
+  it("reads the session, and its message or null", () => {
+    const message = { role: "claude", time: "2026-10-02T13:16:00Z", text: "Here's the plan" };
+    expect(parseHistoryHit({ name: null, cwd: "/p", message }, "hit")).toEqual({
+      name: null,
+      cwd: "/p",
+      message,
+    });
+    expect(parseHistoryHit({ name: "n", cwd: "/p", message: null }, "hit").message).toBe(null);
+    expect(() =>
+      parseHistoryHit({ name: null, cwd: "/p", message: { ...message, role: "bot" } }, "hit"),
+    ).toThrow('hit.message.role: expected user or claude: "bot"');
   });
 });
 

@@ -17,13 +17,17 @@ import { DIFF_TOOLS, changeSummary, toolDiff } from "@/diff";
 import { type Segment, broadReason, offerSegments } from "@/grant";
 import type { Side } from "@/swipe";
 import {
+  HISTORY_READ_TOOL,
+  HISTORY_SEARCH_TOOL,
   type PendingAsk,
   denyCountdown,
+  historyReadSummary,
+  historyScope,
   relativePath,
   toolDisplayName,
   toolSummary,
 } from "@/transcript";
-import { type Answer, type Danger, type GrantKind, isRecord } from "@/wire";
+import { type Answer, type Danger, type GrantKind, isRecord, parseHistoryHit } from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
 export type SubmitAnswer = (requestId: string, answer: Answer) => Promise<void>;
@@ -219,6 +223,42 @@ function QuestionView({
   );
 }
 
+/** The `history_read` ask's line, from the message it reads around once fetched. */
+function HistoryReadLine({ input }: { input: unknown }) {
+  const [line, setLine] = useState("Loading the message it reads around...");
+  useEffect(() => {
+    const session = isRecord(input) ? input["session"] : undefined;
+    const seq = isRecord(input) ? input["seq"] : undefined;
+    if (typeof session !== "string" || typeof seq !== "number") {
+      setLine("Read around a message, without a valid session and seq");
+      return;
+    }
+    let live = true;
+    fetch(`api/history/message?session=${encodeURIComponent(session)}&seq=${seq}`)
+      .then(async (response) => {
+        if (response.status === 404)
+          return "Read around a message of a session that does not exist";
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const hit = parseHistoryHit(await response.json(), "history message");
+        return historyReadSummary(input, hit, Date.now());
+      })
+      .then(
+        (text) => {
+          if (live) setLine(text);
+        },
+        (err: unknown) => {
+          if (live) {
+            setLine(`Cannot load the message: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      );
+    return () => {
+      live = false;
+    };
+  }, [input]);
+  return <>{line}</>;
+}
+
 /** Asks showing the text Claude wrote before the call: the command's explanation. */
 const CONTEXT_TOOLS: ReadonlySet<string> = new Set(["Bash"]);
 
@@ -247,6 +287,8 @@ function InputView({
   if (ask.input === undefined) {
     return <p className="text-sm text-muted-foreground">Input not received.</p>;
   }
+  const scopeWarning =
+    ask.toolName === HISTORY_SEARCH_TOOL ? historyScope(ask.input, cwd).warning : null;
   return (
     <>
       {context !== null && CONTEXT_TOOLS.has(ask.toolName) && (
@@ -256,7 +298,11 @@ function InputView({
       )}
       {diff === null ? (
         <div className="rounded-[5px] border bg-background p-2 text-sm voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
-          {toolSummary(ask.toolName, ask.input, cwd)}
+          {ask.toolName === HISTORY_READ_TOOL ? (
+            <HistoryReadLine input={ask.input} />
+          ) : (
+            toolSummary(ask.toolName, ask.input, cwd)
+          )}
         </div>
       ) : (
         <div className="space-y-1">
@@ -269,6 +315,7 @@ function InputView({
           <DiffBlock diff={diff} maxHeight="max-h-[40dvh]" wrap />
         </div>
       )}
+      {scopeWarning !== null && <p className="text-sm voice-ui text-destructive">{scopeWarning}</p>}
       <details className="mt-1">
         <summary className="cursor-pointer text-xs voice-ui text-muted-foreground">
           full input

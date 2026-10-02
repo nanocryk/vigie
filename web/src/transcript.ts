@@ -8,6 +8,7 @@ import {
   type FileOffer,
   type FolderOffer,
   type GateFailure,
+  type HistoryHit,
   type HostEvent,
   type PlanReview,
   type RelayFailure,
@@ -20,6 +21,7 @@ import {
 } from "@/wire";
 import { composeText } from "@/attachments";
 import { toolDiff } from "@/diff";
+import { formatStamp, sessionTitle } from "@/format";
 
 /** The hash of each path's latest attachment by Claude. */
 export function latestHashes(items: readonly Item[]): ReadonlyMap<string, string> {
@@ -537,8 +539,73 @@ function questionCount(input: unknown): string | null {
   return count === 1 ? "1 question" : `${count} questions`;
 }
 
+export const HISTORY_SEARCH_TOOL = "mcp__vigie__history_search";
+export const HISTORY_READ_TOOL = "mcp__vigie__history_read";
+
+/** Where a `history_search` call looks; `warning` when it leaves the session's folder. */
+export function historyScope(
+  input: unknown,
+  cwd: string | null,
+): { label: string; warning: string | null } {
+  if (isRecord(input) && input["all_projects"] === true) {
+    return { label: "all projects", warning: "Searches all projects" };
+  }
+  const project = field(input, "project");
+  if (project === null) return { label: "this project", warning: null };
+  const absolute = /^([a-zA-Z]:|[\\/])/.test(project);
+  const shown = absolute ? relativePath(project, cwd) : project.replace(/^\.[\\/]+/, "");
+  if (shown === "." || shown === "") return { label: "this project", warning: null };
+  // An absolute path relativePath leaves unchanged is outside the folder, or the folder is unknown.
+  const outside = absolute ? shown === project : /^\.\.([\\/]|$)/.test(shown);
+  return { label: shown, warning: outside ? "Searches outside this project" : null };
+}
+
+function historySearchSummary(input: unknown, cwd: string | null): string | null {
+  const query = field(input, "query");
+  if (query === null) return null;
+  const parts = [`"${query.trim().replace(/\s+/g, " ")}" in ${historyScope(input, cwd).label}`];
+  const since = field(input, "since");
+  if (since !== null) parts.push(`since ${since}`);
+  const before = field(input, "before");
+  if (before !== null) parts.push(`before ${before}`);
+  return parts.join(", ");
+}
+
+/** The exchanges a `history_read` call asks for around its message. */
+export function historyReadRange(input: unknown): string {
+  const count = (key: string) => {
+    const value = isRecord(input) ? input[key] : undefined;
+    return typeof value === "number" ? value : 1;
+  };
+  const before = count("before");
+  const after = count("after");
+  const exchanges = (n: number) => (n === 1 ? "1 exchange" : `${n} exchanges`);
+  if (before === 0 && after === 0) return "its exchange only";
+  if (before === after) return `${exchanges(before)} before and after`;
+  return `${exchanges(before)} before and ${after} after`;
+}
+
+const HIT_SNIPPET = 120;
+
+/** The `history_read` ask, from the message it reads around. */
+export function historyReadSummary(input: unknown, hit: HistoryHit, now: number): string {
+  const where = `in "${sessionTitle(hit)}"`;
+  const message = hit.message;
+  if (message === null) return `Read around a message that does not exist ${where}`;
+  const flat = message.text.replace(/\s+/g, " ").trim();
+  const snippet = flat.length > HIT_SNIPPET ? `${flat.slice(0, HIT_SNIPPET)}...` : flat;
+  const who = message.role === "user" ? "you" : "Claude";
+  const time = Date.parse(message.time);
+  const when = Number.isNaN(time) ? message.time : formatStamp(time, now);
+  return `Read around "${snippet}" (${who}, ${when}) ${where}, ${historyReadRange(input)}`;
+}
+
 function summaryOf(name: string, input: unknown, cwd: string | null): string | null {
   switch (name) {
+    case HISTORY_SEARCH_TOOL:
+      return historySearchSummary(input, cwd);
+    case HISTORY_READ_TOOL:
+      return `${historyReadRange(input)} a message`;
     case "Bash": {
       const command = field(input, "command");
       const background = isRecord(input) && input["run_in_background"] === true;

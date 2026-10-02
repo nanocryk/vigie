@@ -37,7 +37,7 @@ pub use sessions::{SessionRow, SessionState, Unread};
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 22] = [
+const MIGRATIONS: [&str; 23] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -185,6 +185,7 @@ CREATE INDEX held_messages_by_session ON held_messages (session_id, position);
     bash_asks::MIGRATION,
     bash_asks::FILTERS_MIGRATION,
     messages::MIGRATION,
+    messages::SYNTHETIC_MIGRATION,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.

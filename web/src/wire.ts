@@ -790,6 +790,38 @@ export function parseSharedCatalog(raw: unknown, label: string): SharedCatalog {
   };
 }
 
+export interface HistoryMessage {
+  role: "user" | "claude";
+  time: string;
+  text: string;
+}
+
+/** `GET api/history/message`: a session, and its message at the asked seq when it has one. */
+export interface HistoryHit {
+  name: string | null;
+  cwd: string;
+  message: HistoryMessage | null;
+}
+
+export function parseHistoryHit(raw: unknown, label: string): HistoryHit {
+  const hit = record(raw, label);
+  const message = hit["message"];
+  let parsed: HistoryMessage | null = null;
+  if (message !== null && message !== undefined) {
+    const fields = record(message, `${label}.message`);
+    const role = fields["role"];
+    if (role !== "user" && role !== "claude") {
+      fail(`${label}.message.role`, "expected user or claude", role);
+    }
+    parsed = {
+      role,
+      time: str(fields, "time", `${label}.message`),
+      text: str(fields, "text", `${label}.message`),
+    };
+  }
+  return { name: optStr(hit, "name", label), cwd: str(hit, "cwd", label), message: parsed };
+}
+
 /** `GET api/commands/recent`: command names, newest first. */
 export function parseRecentCommands(raw: unknown, label: string): string[] {
   if (!Array.isArray(raw)) fail(label, "expected an array", raw);

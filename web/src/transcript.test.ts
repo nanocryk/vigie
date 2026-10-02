@@ -17,6 +17,8 @@ import {
   wholeHistory,
 } from "@/history";
 import {
+  HISTORY_READ_TOOL,
+  HISTORY_SEARCH_TOOL,
   type Item,
   RELAY_ACK,
   type TranscriptState,
@@ -24,6 +26,9 @@ import {
   askContext,
   denyCountdown,
   emptyTranscript,
+  historyReadRange,
+  historyReadSummary,
+  historyScope,
   latestHashes,
   parseTaskNotification,
   planFileName,
@@ -1361,6 +1366,74 @@ describe("plan asks", () => {
     expect(planFileName({ file_path: "/home/u/.claude/plans/deep/a.md" })).toBeNull();
     expect(planFileName({ file_path: "/work/plans/a.md" })).toBeNull();
     expect(planFileName({})).toBeNull();
+  });
+});
+
+describe("history tool summaries", () => {
+  const cwd = "E:\\work\\vigie";
+
+  it("names the words and where a search looks", () => {
+    const search = (input: Record<string, unknown>) =>
+      toolSummary(HISTORY_SEARCH_TOOL, { query: " prune   banner ", ...input }, cwd);
+    expect(search({})).toBe('"prune banner" in this project');
+    expect(search({ project: ".", since: "2026-09-01", before: "2026-10-01" })).toBe(
+      '"prune banner" in this project, since 2026-09-01, before 2026-10-01',
+    );
+    expect(search({ all_projects: true })).toBe('"prune banner" in all projects');
+    expect(search({ project: "E:\\work\\vigie\\web" })).toBe('"prune banner" in web');
+  });
+
+  it("warns when a search leaves the session's folder", () => {
+    const warning = (input: unknown, folder: string | null = cwd) =>
+      historyScope(input, folder).warning;
+    expect(warning({})).toBe(null);
+    expect(warning({ project: "./web" })).toBe(null);
+    expect(warning({ project: "e:/work/vigie/web" })).toBe(null);
+    expect(warning({ all_projects: true })).toBe("Searches all projects");
+    expect(warning({ project: "E:\\work\\other" })).toBe("Searches outside this project");
+    expect(warning({ project: "..\\other" })).toBe("Searches outside this project");
+    expect(warning({ project: "/work/vigie" }, null)).toBe("Searches outside this project");
+    expect(historyScope({ project: "E:\\work\\other" }, cwd).label).toBe("E:\\work\\other");
+  });
+
+  it("names the exchanges a read asks for", () => {
+    expect(historyReadRange({})).toBe("1 exchange before and after");
+    expect(historyReadRange({ before: 2, after: 2 })).toBe("2 exchanges before and after");
+    expect(historyReadRange({ before: 0, after: 3 })).toBe("0 exchanges before and 3 after");
+    expect(historyReadRange({ before: 0, after: 0 })).toBe("its exchange only");
+    expect(toolSummary(HISTORY_READ_TOOL, { session: "s", seq: 4 })).toBe(
+      "1 exchange before and after a message",
+    );
+  });
+
+  it("reads a fetched hit without its session id or seq", () => {
+    const now = Date.parse("2026-10-02T15:00:00");
+    const hit = {
+      name: null,
+      cwd,
+      message: {
+        role: "claude" as const,
+        time: "2026-10-02T13:16:00",
+        text: `Here's\n the ${"plan ".repeat(40)}`,
+      },
+    };
+    const input = { session: "fce5a5d9", seq: 358946, before: 0 };
+    const line = historyReadSummary(input, hit, now);
+    expect(line).toBe(
+      `Read around "Here's the ${"plan ".repeat(40).slice(0, 109)}..." (Claude, 13:16) in "vigie", 0 exchanges before and 1 after`,
+    );
+    expect(line).not.toContain("fce5a5d9");
+    expect(line).not.toContain("358946");
+    expect(
+      historyReadSummary(
+        input,
+        { ...hit, name: "pruning", message: { ...hit.message, role: "user" } },
+        now,
+      ),
+    ).toContain('(you, 13:16) in "pruning"');
+    expect(historyReadSummary(input, { ...hit, message: null }, now)).toBe(
+      'Read around a message that does not exist in "vigie"',
+    );
   });
 });
 
