@@ -1421,14 +1421,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
-        onOpenAttachment={(path) => {
-          changeExplorer((state) =>
-            view === null
-              ? openFileInLastFree(state, path)
-              : openSessionFile(state, view.id, view.cwd, path),
-          );
-          navigateBackLeaves();
-        }}
+        onOpenAttachment={(path) => fileLinks.open({ kind: "file", path }, null)}
         onOpenDiff={openDiff}
         glowTurnEnd={viewing === null}
         background={viewing === null ? (view?.background ?? []) : []}

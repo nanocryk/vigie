@@ -99,7 +99,9 @@ export function createKindLookup(fetchKinds: FetchKinds, now: () => number = Dat
         inFlight.push(resolve);
         return;
       }
-      waiting.set(path, [...(waiting.get(path) ?? []), resolve]);
+      const queued = waiting.get(path);
+      if (queued === undefined) waiting.set(path, [resolve]);
+      else queued.push(resolve);
       if (!scheduled) {
         scheduled = true;
         setTimeout(() => void flush(), 0);

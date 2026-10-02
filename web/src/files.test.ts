@@ -12,9 +12,11 @@ import {
   joinPath,
   newFreeTab,
   openFileInLastFree,
+  openFolderInLastFree,
   openSessionDiff,
   openSessionFile,
   openSessionFolder,
+  openSessionFolderAt,
   openSessionTab,
   parseFileView,
   parseListing,
@@ -145,6 +147,27 @@ describe("tabs", () => {
       diff: null,
       file: "C:\\t\\shot.png",
     });
+  });
+
+  it("opens a file at a line, in the session's tab or the last free one", () => {
+    const session = openSessionFile(initialState(), "s1", "C:\\p", "C:\\p\\a.ts", 12);
+    expect(activeTab(session)).toMatchObject({ file: "C:\\p\\a.ts", line: 12 });
+    const free = openFileInLastFree(initialState(), "C:\\p\\a.ts", 7);
+    expect(activeTab(free)).toMatchObject({ owner: { kind: "free" }, file: "C:\\p\\a.ts", line: 7 });
+  });
+
+  it("opens a folder, any file and diff closed, in the session's tab or the last free one", () => {
+    let session = openSessionFile(initialState(), "s1", "C:\\p", "C:\\p\\a.ts", 12);
+    session = openSessionFolderAt(session, "s1", "C:\\p", "C:\\p\\src");
+    expect(activeTab(session)).toMatchObject({
+      owner: { kind: "session", session: "s1" },
+      folder: "C:\\p\\src",
+      diff: null,
+      file: null,
+      line: null,
+    });
+    const free = openFolderInLastFree(openSessionTab(initialState(), "s1", "C:\\p"), "C:\\t");
+    expect(activeTab(free)).toMatchObject({ owner: { kind: "free" }, folder: "C:\\t", file: null });
   });
 
   it("drops the tabs of sessions no longer live", () => {
