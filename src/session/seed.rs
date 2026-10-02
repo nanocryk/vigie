@@ -108,7 +108,9 @@ impl History {
                 }
                 EventKind::Line => match serde_json::from_str::<Inbound>(&event.payload) {
                     Ok(Inbound::User(user)) if user.parent_tool_use_id.is_none() => {
-                        let is_meta = user.extra.get("isMeta") == Some(&Value::Bool(true));
+                        let is_meta = ["isMeta", "isSynthetic"]
+                            .iter()
+                            .any(|flag| user.extra.get(*flag) == Some(&Value::Bool(true)));
                         let Some(text) = history.user_line(user.message.content) else {
                             continue;
                         };
@@ -593,6 +595,11 @@ mod tests {
                 serde_json::json!({"type": "user", "isMeta": true, "session_id": "s",
                     "message": {"role": "user", "content": "meta"}}),
             ),
+            line(
+                6,
+                serde_json::json!({"type": "user", "isSynthetic": true, "session_id": "s",
+                    "message": {"role": "user", "content": "synthetic"}}),
+            ),
         ];
         let seed = History::from_events(&events).seed(Path::new("/p"), date());
         assert_eq!(seed.total_exchanges, 1);
@@ -612,6 +619,7 @@ mod tests {
         assert!(lines.contains(&"  • Custom(a=2) → done"));
         assert!(lines.contains(&"  • Empty()"));
         assert!(!seed.text.contains("meta"));
+        assert!(!seed.text.contains("synthetic"));
     }
 
     #[test]
