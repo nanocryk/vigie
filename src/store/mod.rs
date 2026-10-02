@@ -11,6 +11,7 @@ mod commands;
 mod events;
 mod held;
 mod plans;
+pub mod prune;
 mod push;
 mod samples;
 mod sessions;

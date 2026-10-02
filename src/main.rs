@@ -50,12 +50,36 @@ enum Command {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
+    /// Prune stored history nothing reads anymore.
+    Prune {
+        #[command(subcommand)]
+        what: PruneCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum AuthCmd {
     /// Revoke every paired device (panic button).
     RevokeAll,
+}
+
+#[derive(Subcommand, Debug)]
+enum PruneCmd {
+    /// Delete the stream lines of messages their assistant lines fully carry.
+    Streams(PruneArgs),
+}
+
+#[derive(Args, Debug)]
+struct PruneArgs {
+    /// History database to prune; the live one is refused.
+    #[arg(long)]
+    db: PathBuf,
+    /// Count what would be deleted, delete nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Rebuild the file afterwards, giving the freed space back.
+    #[arg(long)]
+    vacuum: bool,
 }
 
 #[derive(Args, Debug)]
@@ -208,7 +232,82 @@ async fn main() -> Result<ExitCode> {
         Command::Auth {
             cmd: AuthCmd::RevokeAll,
         } => run_revoke_all(),
+        Command::Prune {
+            what: PruneCmd::Streams(args),
+        } => run_prune_streams(args),
     }
+}
+
+fn run_prune_streams(args: PruneArgs) -> Result<ExitCode> {
+    use vigie::store::prune::{self, Mode};
+
+    let live = Store::default_path()?;
+    if live.exists() && std::fs::canonicalize(&args.db)? == std::fs::canonicalize(&live)? {
+        bail!("{} is the live history; prune a copy", args.db.display());
+    }
+    if !args.db.is_file() {
+        bail!("{} is not a file", args.db.display());
+    }
+    let mode = if args.dry_run {
+        Mode::DryRun
+    } else {
+        Mode::Delete
+    };
+    let file_mb =
+        |path: &Path| -> Result<f64> { Ok(std::fs::metadata(path)?.len() as f64 / 1_048_576.0) };
+    let started = std::time::Instant::now();
+    let size_before = file_mb(&args.db)?;
+    let connection = rusqlite::Connection::open(&args.db)?;
+    let before = prune::event_counts(&connection)?;
+    let report = prune::prune_all_streams(&connection, mode)?;
+    let verb = match mode {
+        Mode::DryRun => "Would delete",
+        Mode::Delete => "Deleted",
+    };
+    println!(
+        "{verb} the stream lines of {} messages: {} rows, {:.1} MB of payload.",
+        report.messages,
+        report.rows,
+        report.bytes as f64 / 1_048_576.0
+    );
+    println!(
+        "Kept whole: {} messages; {} stray rows.",
+        report.kept.values().sum::<usize>(),
+        report.stray_rows
+    );
+    let mut reasons: Vec<_> = report.kept.iter().collect();
+    reasons.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+    for (reason, count) in reasons {
+        let (session, message) = &report.examples[reason];
+        println!("  {count:>5}  {reason}  [e.g. {session} {message}]");
+    }
+    if mode == Mode::Delete {
+        let after = prune::event_counts(&connection)?;
+        let mut unchanged = true;
+        for name in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+            let (old, new) = (
+                before.get(name).copied().unwrap_or(0),
+                after.get(name).copied().unwrap_or(0),
+            );
+            if old != new {
+                unchanged = false;
+                println!("  {name}: {old} -> {new}");
+            }
+        }
+        if unchanged {
+            println!("  no row count changed");
+        }
+        if args.vacuum {
+            connection.execute_batch("VACUUM")?;
+        }
+    }
+    drop(connection);
+    println!(
+        "File: {size_before:.1} MB -> {:.1} MB, in {:.1}s.",
+        file_mb(&args.db)?,
+        started.elapsed().as_secs_f64()
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_revoke_all() -> Result<ExitCode> {
