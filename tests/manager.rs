@@ -91,10 +91,12 @@ fn host(event: &StoredEvent) -> HostEvent {
     serde_json::from_str(&event.payload).expect("host event")
 }
 
-fn assert_contiguous(events: &[StoredEvent], first: u64) {
+/// Stored seqs start at `first` and increase; the stream block lines of a
+/// finished turn are pruned, leaving gaps.
+fn assert_ordered(events: &[StoredEvent], first: u64) {
     let seqs: Vec<u64> = events.iter().map(|event| event.seq).collect();
-    let expected: Vec<u64> = (first..first + events.len() as u64).collect();
-    assert_eq!(seqs, expected);
+    assert_eq!(seqs.first(), Some(&first), "{seqs:?}");
+    assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
 }
 
 fn assert_clean_exit(event: &StoredEvent) {
@@ -114,9 +116,17 @@ fn is_usage_answer(line: &Value) -> bool {
         && line["response"]["response"]["rate_limits_available"] == true
 }
 
+fn is_stream_block(line: &Value) -> bool {
+    line["type"] == "stream_event"
+        && line["event"]["type"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("content_block_"))
+}
+
 /// Every stdout line of the recording, as the fake writes it for `session`,
-/// must appear byte for byte and in order among `stored`; the only other lines
-/// allowed are answers to unscripted `get_usage` requests.
+/// must appear byte for byte and in order among `stored`, except stream block
+/// lines, which pruning may have removed; the only other lines allowed are
+/// answers to unscripted `get_usage` requests.
 fn assert_lines_match_recording(stored: &[StoredEvent], name: &str, session: Uuid) {
     let recorded: Vec<Value> = Recording::named(name)
         .unwrap()
@@ -133,6 +143,12 @@ fn assert_lines_match_recording(stored: &[StoredEvent], name: &str, session: Uui
     let mut expected = recorded.iter().peekable();
     for event in stored.iter().filter(|event| event.kind == EventKind::Line) {
         let got: Value = serde_json::from_str(&event.payload).expect("stored line is JSON");
+        while expected
+            .peek()
+            .is_some_and(|next| is_stream_block(next) && **next != got)
+        {
+            expected.next();
+        }
         if let Some(next) = expected.peek() {
             let mut want = (*next).clone();
             if want["type"] == "control_response"
@@ -216,7 +232,7 @@ async fn basic_run_is_persisted_with_usage_samples() {
     manager.shutdown().await.unwrap();
 
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
-    assert_contiguous(&stored, 1);
+    assert_ordered(&stored, 1);
     assert_eq!(
         host(&stored[0]),
         HostEvent::Started {
@@ -231,7 +247,7 @@ async fn basic_run_is_persisted_with_usage_samples() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, id);
     assert_eq!(rows[0].cwd, env.cwd);
-    assert_eq!(rows[0].last_seq, stored.len() as u64);
+    assert_eq!(rows[0].last_seq, stored.last().unwrap().seq);
     assert_eq!(rows[0].state, SessionState::Stopped);
     assert_eq!(
         rows[0].cache.as_ref().map(|cache| cache.ttl_secs),
@@ -523,7 +539,7 @@ async fn a_session_resumes_after_a_restart_and_continues_its_seqs() {
     manager.shutdown().await.unwrap();
 
     let stored = manager.events_after(id, first_run, ALL).await.unwrap();
-    assert_contiguous(&stored, first_run + 1);
+    assert_ordered(&stored, first_run + 1);
     // No message reached the first child, so the CLI has no conversation to resume.
     assert_eq!(
         host(&stored[0]),
@@ -1056,7 +1072,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     manager.shutdown().await.unwrap();
 
     let stored = manager.events_after(id, first_run, ALL).await.unwrap();
-    assert_contiguous(&stored, first_run + 1);
+    assert_ordered(&stored, first_run + 1);
     assert_eq!(
         host(&stored[0]),
         HostEvent::Restarted {
@@ -1180,7 +1196,7 @@ async fn a_lagging_subscriber_does_not_lose_history() {
 
     assert!(matches!(lagging.recv().await, Err(RecvError::Lagged(_))));
     let stored = manager.events_after(session.id(), 0, ALL).await.unwrap();
-    assert_contiguous(&stored, 1);
+    assert_ordered(&stored, 1);
     let noise: Vec<&StoredEvent> = stored
         .iter()
         .filter(|event| event.payload.contains("\"noise\""))

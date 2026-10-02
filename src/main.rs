@@ -69,6 +69,8 @@ enum PruneCmd {
     Streams(PruneArgs),
     /// Replace tool outputs over 1 KB older than a day by a marker.
     ToolOutputs(PruneArgs),
+    /// Run the server's first-launch prune: backup, both prunes, vacuum.
+    First(PruneArgs),
 }
 
 #[derive(Args, Debug)]
@@ -241,7 +243,7 @@ async fn main() -> Result<ExitCode> {
 fn run_prune(what: PruneCmd) -> Result<ExitCode> {
     use vigie::store::prune::{self, Mode};
 
-    let (PruneCmd::Streams(args) | PruneCmd::ToolOutputs(args)) = &what;
+    let (PruneCmd::Streams(args) | PruneCmd::ToolOutputs(args) | PruneCmd::First(args)) = &what;
     let live = Store::default_path()?;
     if live.exists() && std::fs::canonicalize(&args.db)? == std::fs::canonicalize(&live)? {
         bail!("{} is the live history; prune a copy", args.db.display());
@@ -287,9 +289,9 @@ fn run_prune(what: PruneCmd) -> Result<ExitCode> {
             }
         }
         PruneCmd::ToolOutputs(_) => {
-            let cutoff = chrono::Utc::now() - chrono::Duration::days(1);
+            let cutoff = prune::output_cutoff(chrono::Utc::now());
             let transaction = connection.unchecked_transaction()?;
-            let report = prune::prune_tool_results(&transaction, cutoff)?;
+            let report = prune::prune_tool_results(&transaction, None, cutoff)?;
             let verb = match mode {
                 Mode::DryRun => "Would replace",
                 Mode::Delete => "Replaced",
@@ -306,6 +308,18 @@ fn run_prune(what: PruneCmd) -> Result<ExitCode> {
                 Mode::DryRun => transaction.rollback()?,
                 Mode::Delete => transaction.commit()?,
             }
+        }
+        PruneCmd::First(_) => {
+            if mode == Mode::DryRun {
+                bail!("the first prune has no dry run");
+            }
+            prune::first_prune(&connection, &args.db)?;
+            let auto_vacuum: i64 =
+                connection.pragma_query_value(None, "auto_vacuum", |row| row.get(0))?;
+            println!(
+                "First prune done; auto_vacuum {auto_vacuum}, backup at {}.",
+                prune::backup_path(&args.db).display()
+            );
         }
     }
     if mode == Mode::Delete {
@@ -335,6 +349,27 @@ fn run_prune(what: PruneCmd) -> Result<ExitCode> {
         started.elapsed().as_secs_f64()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// Prunes the whole history at launch, then each hour the tool outputs that
+/// crossed the age cutoff since the previous pass.
+fn spawn_pruning(store: Store) {
+    use vigie::store::prune::output_cutoff;
+
+    tokio::spawn(async move {
+        if let Err(err) = store.prune_history().await {
+            warn!("prune history: {err:#}");
+        }
+        let mut previous = output_cutoff(chrono::Utc::now());
+        let mut hourly = tokio::time::interval(Duration::from_secs(3600));
+        hourly.tick().await;
+        loop {
+            hourly.tick().await;
+            let cutoff = output_cutoff(chrono::Utc::now());
+            store.prune_old_outputs(Some(previous), cutoff);
+            previous = cutoff;
+        }
+    });
 }
 
 fn run_revoke_all() -> Result<ExitCode> {
@@ -377,6 +412,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
+    spawn_pruning(store.clone());
     let restart =
         ServerRestart::new(Supervision::from_env()).with_running_build(RunningBuild::from_env());
     let manager = SessionManager::start(store, Program::claude(), &dir, restart).await?;

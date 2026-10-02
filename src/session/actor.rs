@@ -148,6 +148,8 @@ pub struct Actor {
     /// Set when the stop was requested for a reason.
     stop_reason: Option<StopReason>,
     seq: u64,
+    /// Stream lines up to this seq were handed to pruning.
+    pruned_seq: u64,
     views: Views,
     tracker: ActivityTracker,
     agents: AgentTracker,
@@ -192,6 +194,7 @@ impl Actor {
             end: None,
             stop_reason: None,
             seq: config.last_seq,
+            pruned_seq: config.last_seq,
             views,
             tracker: ActivityTracker::default(),
             agents: AgentTracker::default(),
@@ -343,6 +346,10 @@ impl Actor {
                 self.fail_gate(GateFailure::Overage);
             }
             Inbound::Result(_) => {
+                if let Some(history) = &self.history {
+                    history.prune_turn_streams(self.id, self.pruned_seq + 1..=self.seq);
+                    self.pruned_seq = self.seq;
+                }
                 let attachments = std::mem::take(&mut self.turn_attachments);
                 if !attachments.is_empty() {
                     let paths = attachments.clone();

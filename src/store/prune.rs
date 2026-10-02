@@ -19,13 +19,16 @@
 //! `json_set`, so the rest of each line keeps its text and key order.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::RangeInclusive;
+use std::path::Path;
 
-use anyhow::Result;
-use chrono::{DateTime, Utc};
+use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, params};
 use serde_json::Value;
+use uuid::Uuid;
 
-use super::format_time;
+use super::{Store, format_time};
 
 /// Tool results up to this size, serialized, are kept: errors, test totals,
 /// short command outputs.
@@ -180,26 +183,36 @@ pub fn prune_all_streams(connection: &Connection, mode: Mode) -> Result<StreamPr
     let mut total = StreamPrune::default();
     for session in sessions {
         let transaction = connection.unchecked_transaction()?;
-        total.add(prune_streams(&transaction, &session, mode)?);
+        total.add(prune_streams(&transaction, &session, ALL_SEQS, mode)?);
         transaction.commit()?;
     }
     Ok(total)
 }
 
+/// Every seq SQLite stores; its integers are signed.
+pub const ALL_SEQS: RangeInclusive<u64> = 0..=i64::MAX as u64;
+
 /// Prunes the block lines of the finished messages of `session` whose
-/// `assistant` lines carry the same blocks.
-pub fn prune_streams(connection: &Connection, session: &str, mode: Mode) -> Result<StreamPrune> {
+/// `assistant` lines carry the same blocks, among its lines in `seqs`. A
+/// message only partly in `seqs` is kept.
+pub fn prune_streams(
+    connection: &Connection,
+    session: &str,
+    seqs: RangeInclusive<u64>,
+    mode: Mode,
+) -> Result<StreamPrune> {
     let mut report = StreamPrune::default();
     let mut open: HashMap<Option<String>, Run> = HashMap::new();
     let mut finished = Vec::new();
     let mut answers: HashMap<String, Vec<Value>> = HashMap::new();
     let mut statement = connection.prepare(
         "SELECT seq, payload FROM events
-         WHERE session_id = ?1 AND kind = 'line'
+         WHERE session_id = ?1 AND seq BETWEEN ?2 AND ?3 AND kind = 'line'
              AND json_extract(payload, '$.type') IN ('stream_event', 'assistant')
          ORDER BY seq",
     )?;
-    let mut rows = statement.query([session])?;
+    let (first, last) = (*seqs.start(), (*seqs.end()).min(*ALL_SEQS.end()));
+    let mut rows = statement.query(params![session, first, last])?;
     while let Some(row) = rows.next()? {
         let seq: u64 = row.get(0)?;
         let payload: String = row.get(1)?;
@@ -359,15 +372,21 @@ struct LineEdit {
 }
 
 /// Replaces the tool results over `RESULT_LIMIT` in `user` lines stored before
-/// `before`. The caller owns the transaction: a dry run rolls it back.
-pub fn prune_tool_results(connection: &Connection, before: DateTime<Utc>) -> Result<ResultPrune> {
+/// `before`, and at or after `since` when given. The caller owns the
+/// transaction: a dry run rolls it back.
+pub fn prune_tool_results(
+    connection: &Connection,
+    since: Option<DateTime<Utc>>,
+    before: DateTime<Utc>,
+) -> Result<ResultPrune> {
     let mut edits = Vec::new();
     {
         let mut statement = connection.prepare(
             "SELECT session_id, seq, payload FROM events
-             WHERE kind = 'line' AND time < ?1 AND json_extract(payload, '$.type') = 'user'",
+             WHERE time < ?1 AND (?2 IS NULL OR time >= ?2) AND kind = 'line'
+                 AND json_extract(payload, '$.type') = 'user'",
         )?;
-        let mut rows = statement.query([format_time(before)])?;
+        let mut rows = statement.query(params![format_time(before), since.map(format_time)])?;
         while let Some(row) = rows.next()? {
             let payload: String = row.get(2)?;
             let Ok(line) = serde_json::from_str::<Value>(&payload) else {
@@ -422,6 +441,105 @@ pub fn prune_tool_results(connection: &Connection, before: DateTime<Utc>) -> Res
         report.bytes_after += size.query_row(params![session, seq], |row| row.get::<_, u64>(0))?;
     }
     Ok(report)
+}
+
+/// Tool outputs older than this are pruned.
+pub fn output_cutoff(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - Duration::days(1)
+}
+
+/// Where the first prune keeps the history as it was, next to the database.
+pub fn backup_path(database: &Path) -> std::path::PathBuf {
+    database.with_file_name("history-before-prune.db")
+}
+
+/// Run once per database, before the writer starts, until `auto_vacuum` is on:
+/// backs the history up (unless a backup exists), prunes it whole, then
+/// rebuilds the file with incremental auto vacuum so later prunes give space back.
+pub fn first_prune(connection: &Connection, database: &Path) -> Result<()> {
+    let auto_vacuum: i64 = connection.pragma_query_value(None, "auto_vacuum", |row| row.get(0))?;
+    // 2 is INCREMENTAL.
+    if auto_vacuum == 2 {
+        return Ok(());
+    }
+    let has_events: bool =
+        connection.query_row("SELECT EXISTS (SELECT 1 FROM events)", [], |row| row.get(0))?;
+    if has_events {
+        let backup = backup_path(database);
+        if !backup.exists() {
+            tracing::info!("backing the history up to {}", backup.display());
+            let target = backup.to_str().context("backup path is not UTF-8")?;
+            connection
+                .execute("VACUUM INTO ?1", [target])
+                .with_context(|| format!("back up to {}", backup.display()))?;
+        }
+        tracing::info!("pruning the history once whole");
+        let streams = prune_all_streams(connection, Mode::Delete)?;
+        let transaction = connection.unchecked_transaction()?;
+        let outputs = prune_tool_results(&transaction, None, output_cutoff(Utc::now()))?;
+        transaction.commit()?;
+        tracing::info!(
+            stream_rows = streams.rows,
+            output_lines = outputs.lines,
+            "history pruned; rebuilding the file"
+        );
+    }
+    connection.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;")?;
+    Ok(())
+}
+
+/// Gives the pages freed by a prune back to the file system.
+fn reclaim(connection: &Connection) -> Result<()> {
+    connection.execute_batch("PRAGMA incremental_vacuum;")?;
+    Ok(())
+}
+
+impl Store {
+    /// Prunes the stream lines `session` stored in `seqs`, typically one turn's;
+    /// a failure is logged.
+    pub fn prune_turn_streams(&self, session: Uuid, seqs: RangeInclusive<u64>) {
+        self.write("prune streams", move |connection| {
+            let report = prune_streams(connection, &session.to_string(), seqs, Mode::Delete)?;
+            if report.rows > 0 {
+                reclaim(connection)?;
+            }
+            Ok(())
+        });
+    }
+
+    /// Prunes every session's stream lines, one job per session so writes
+    /// interleave, then the tool outputs older than a day.
+    pub async fn prune_history(&self) -> Result<()> {
+        let sessions = self
+            .call(|connection| {
+                let ids = connection
+                    .prepare("SELECT id FROM sessions")?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(ids)
+            })
+            .await?;
+        for session in sessions {
+            self.write("prune streams", move |connection| {
+                prune_streams(connection, &session, ALL_SEQS, Mode::Delete)?;
+                Ok(())
+            });
+        }
+        self.prune_old_outputs(None, output_cutoff(Utc::now()));
+        Ok(())
+    }
+
+    /// Prunes the tool outputs stored before `before`, and at or after `since`
+    /// when given; a failure is logged.
+    pub fn prune_old_outputs(&self, since: Option<DateTime<Utc>>, before: DateTime<Utc>) {
+        self.write("prune tool outputs", move |connection| {
+            let report = prune_tool_results(connection, since, before)?;
+            if report.lines > 0 {
+                tracing::debug!(lines = report.lines, "tool outputs pruned");
+            }
+            reclaim(connection)
+        });
+    }
 }
 
 /// Rows per event type: `line` rows by CLI line type, stream lines also by
@@ -574,14 +692,14 @@ mod tests {
             message_delta(),
             stop(),
         ]);
-        let dry = prune_streams(&connection, SESSION, Mode::DryRun).unwrap();
+        let dry = prune_streams(&connection, SESSION, ALL_SEQS, Mode::DryRun).unwrap();
         assert_eq!((dry.messages, dry.rows), (1, 11));
         assert_eq!(seqs(&connection).len(), 17);
 
-        let report = prune_streams(&connection, SESSION, Mode::Delete).unwrap();
+        let report = prune_streams(&connection, SESSION, ALL_SEQS, Mode::Delete).unwrap();
         assert_eq!(report, dry);
         assert_eq!(seqs(&connection), vec![1, 6, 11, 15, 16, 17]);
-        let again = prune_streams(&connection, SESSION, Mode::DryRun).unwrap();
+        let again = prune_streams(&connection, SESSION, ALL_SEQS, Mode::DryRun).unwrap();
         assert_eq!(again, StreamPrune::default());
     }
 
@@ -620,7 +738,7 @@ mod tests {
             text_start(0),
             text(0, "live"),
         ]);
-        let report = prune_streams(&connection, SESSION, Mode::Delete).unwrap();
+        let report = prune_streams(&connection, SESSION, ALL_SEQS, Mode::Delete).unwrap();
         assert_eq!(report.messages, 0);
         let kept: Vec<(&str, usize)> = report
             .kept
@@ -689,7 +807,7 @@ mod tests {
                 .unwrap();
         }
         let cutoff = "2026-10-01T00:00:00Z".parse().unwrap();
-        let report = prune_tool_results(&connection, cutoff).unwrap();
+        let report = prune_tool_results(&connection, None, cutoff).unwrap();
         assert_eq!((report.lines, report.results), (2, 3));
         assert!(report.bytes_after < report.bytes_before / 4, "{report:?}");
 
@@ -723,8 +841,61 @@ mod tests {
         assert_eq!(payload(3), lines[2].1);
         assert_eq!(payload(4), lines[3].1);
 
-        let again = prune_tool_results(&connection, cutoff).unwrap();
+        let again = prune_tool_results(&connection, None, cutoff).unwrap();
         assert_eq!(again, ResultPrune::default());
+    }
+
+    #[tokio::test]
+    async fn the_first_open_backs_up_prunes_and_turns_auto_vacuum_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let lines = [
+            start("m1"),
+            text_start(0),
+            text(0, "Hello"),
+            block_stop(0),
+            said("m1", "Hello"),
+            stop(),
+        ];
+        {
+            let connection = Connection::open(&path).unwrap();
+            migrate(&connection).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO sessions (id, cwd, created_at, updated_at, state)
+                     VALUES (?1, 'c', 't', 't', 'stopped')",
+                    [SESSION],
+                )
+                .unwrap();
+            for (index, line) in lines.iter().enumerate() {
+                connection
+                    .execute(
+                        "INSERT INTO events (session_id, seq, time, kind, payload)
+                         VALUES (?1, ?2, 't', 'line', ?3)",
+                        params![SESSION, index + 1, line.to_string()],
+                    )
+                    .unwrap();
+            }
+        }
+        let read = |path: &Path| {
+            let connection = Connection::open(path).unwrap();
+            let auto_vacuum: i64 = connection
+                .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
+                .unwrap();
+            (seqs(&connection), auto_vacuum)
+        };
+
+        let store = Store::open(&path).unwrap();
+        store.flush().await.unwrap();
+        assert_eq!(read(&path), (vec![1, 5, 6], 2));
+        assert_eq!(read(&backup_path(&path)).0, vec![1, 2, 3, 4, 5, 6]);
+        drop(store);
+
+        // A second open finds auto vacuum on: no backup, no prune.
+        std::fs::remove_file(backup_path(&path)).unwrap();
+        let store = Store::open(&path).unwrap();
+        store.flush().await.unwrap();
+        assert!(!backup_path(&path).exists());
     }
 
     #[test]
@@ -745,7 +916,7 @@ mod tests {
             said("m1", "main"),
             stop(),
         ]);
-        let report = prune_streams(&connection, SESSION, Mode::Delete).unwrap();
+        let report = prune_streams(&connection, SESSION, ALL_SEQS, Mode::Delete).unwrap();
         assert_eq!((report.messages, report.rows), (2, 4));
         assert_eq!(seqs(&connection), vec![1, 2, 7, 8, 9, 10]);
     }

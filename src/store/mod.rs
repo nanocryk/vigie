@@ -218,6 +218,10 @@ impl Store {
         connection.pragma_update(None, "synchronous", "normal")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         migrate(&connection).with_context(|| format!("migrate {}", path.display()))?;
+        // Nothing is pruned unless the backup succeeds; the next launch tries again.
+        if let Err(err) = prune::first_prune(&connection, path) {
+            tracing::warn!("first prune of {}: {err:#}", path.display());
+        }
         let (jobs, queue) = mpsc::channel();
         std::thread::Builder::new()
             .name("vigie-history".into())

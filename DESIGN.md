@@ -28,7 +28,11 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 
 - The host owns every session; clients connect to the server.
 - A session is never continued in a terminal.
-- vigie keeps its own history of messages per session and never asks the SDK or the transcript files for past messages: "history is not edited".
+- vigie keeps its own history of messages per session and never asks the SDK or the transcript files for past messages. Claude's transcripts are never edited.
+- vigie's history is pruned of what nobody reads, so it stays small:
+  - Stream lines: after each turn, a finished message's block lines (`content_block_start`, `_delta`, `_stop`) are deleted when its `assistant` lines carry the same blocks (count, types, and text). Message lines (`message_start`, `message_delta`, `message_stop`) are kept, and so is every line of an interrupted reply.
+  - Tool outputs: those over 1 KB and older than a day are replaced by `[output pruned, N KB]` in both copies the CLI stores; a file edit keeps the patch the diff view draws. Pruned at launch, then hourly.
+  - The first launch with pruning backs the history up to `~/.vigie/history-before-prune.db`, prunes it whole, and rebuilds the file with incremental auto vacuum, so later prunes give their space back. It takes a few minutes, once.
 - vigie serves past context from its own history, more efficiently than a script reading transcripts. `/tail-session` stays independent of vigie, for when vigie is broken or not in use.
 - Search across all discussions, served from vigie's history without touching Claude's context or the SDK.
 - Background tasks started by Claude are visible to vigie, shown in the session, and count in the session's idle state.
