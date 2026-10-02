@@ -9,7 +9,7 @@ import {
   rowSwipeRules,
   strongestHighlight,
 } from "@/home";
-import { type SwipeInput, type SwipeState, idle, step } from "@/swipe";
+import { DEFAULT_TUNING, type SwipeInput, type SwipeState, idle, step } from "@/swipe";
 import type { SessionView } from "@/wire";
 
 const session = (id: string, patch: Partial<SessionView> = {}): SessionView => ({
@@ -129,6 +129,7 @@ describe("keepOrder", () => {
 describe("row gestures", () => {
   const context = (live: boolean) => ({
     width: 400,
+    tuning: DEFAULT_TUNING,
     ...rowSwipeRules(rowAction(session("s", { live }))),
   });
   const swipeLeft = (t: number): SwipeInput[] => [
@@ -155,7 +156,7 @@ describe("row gestures", () => {
   it("restores an archived row on the first right swipe, never on a left one", () => {
     const archived = session("s", { archived_at: "2026-09-27T11:00:00Z" });
     expect(rowAction(archived)).toBe("restore");
-    const rules = { width: 400, ...rowSwipeRules("restore") };
+    const rules = { width: 400, tuning: DEFAULT_TUNING, ...rowSwipeRules("restore") };
     const swipe = (fromX: number, toX: number): SwipeState =>
       [
         { type: "down", x: fromX, y: 20, t: 0 } as const,

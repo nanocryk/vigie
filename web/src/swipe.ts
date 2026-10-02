@@ -3,16 +3,22 @@
 
 export type Side = "left" | "right";
 
-/** A side needs this share of the panel width... */
-export const SIDE_FRACTION = 0.2;
-/** ...and at least this many pixels of horizontal travel. */
-export const SIDE_MIN_PX = 56;
+/** The per device part of the gesture. */
+export interface SwipeTuning {
+  /** A side needs this share of the panel width... */
+  fraction: number;
+  /** ...and at least this many pixels of horizontal travel. */
+  minPx: number;
+  /** Time after the first swipe during which the second one confirms. */
+  confirmMs: number;
+}
+
+export const DEFAULT_TUNING: SwipeTuning = { fraction: 0.2, minPx: 56, confirmMs: 3000 };
+
 /** Horizontal travel must be at least this multiple of the vertical travel. */
 export const HORIZONTAL_RATIO = 2;
 /** Movement under this, in pixels, counts as a tap. */
 export const TAP_SLOP_PX = 10;
-/** Time after the first swipe during which the second one confirms. */
-export const CONFIRM_WINDOW_MS = 3000;
 /** Time after the first swipe before a dangerous choice can be confirmed. */
 export const DANGER_COOLDOWN_MS = 1000;
 
@@ -49,11 +55,13 @@ export interface SwipeContext {
   swipes: SwipeCount | Readonly<Record<Side, SwipeCount>>;
   /** 2: the first press arms, the second fires. A dangerous choice always takes 2. */
   presses: 1 | 2;
+  tuning: SwipeTuning;
 }
 
 export type SwipeCount = 1 | 2;
 
-export type SwipeRules = Omit<SwipeContext, "width">;
+/** What a panel decides; the width and tuning come from the device. */
+export type SwipeRules = Omit<SwipeContext, "width" | "tuning">;
 
 function swipesFor(context: SwipeContext, side: Side): SwipeCount {
   return typeof context.swipes === "number" ? context.swipes : context.swipes[side];
@@ -63,14 +71,21 @@ export const BOTH_SIDES: readonly Side[] = ["left", "right"];
 
 export const idle: SwipeState = { kind: "idle" };
 
-export function sideThreshold(width: number): number {
-  return Math.max(SIDE_FRACTION * width, SIDE_MIN_PX);
+export function sideThreshold(width: number, tuning: SwipeTuning): number {
+  return Math.max(tuning.fraction * width, tuning.minPx);
 }
 
 /** The side a movement chooses, or null below the threshold or when not mostly horizontal. */
-export function chooseSide(dx: number, dy: number, width: number): Side | null {
+export function chooseSide(
+  dx: number,
+  dy: number,
+  width: number,
+  tuning: SwipeTuning,
+): Side | null {
   const travel = Math.abs(dx);
-  if (travel < sideThreshold(width) || travel < HORIZONTAL_RATIO * Math.abs(dy)) return null;
+  if (travel < sideThreshold(width, tuning) || travel < HORIZONTAL_RATIO * Math.abs(dy)) {
+    return null;
+  }
   return dx > 0 ? "right" : "left";
 }
 
@@ -83,10 +98,10 @@ function cooled(armed: Armed, t: number, dangerous: boolean): boolean {
 }
 
 /** Drops an arming whose confirmation window has passed. */
-function expire(state: SwipeState, t: number): SwipeState {
-  if (state.kind === "armed" && t >= state.at + CONFIRM_WINDOW_MS) return idle;
+function expire(state: SwipeState, t: number, confirmMs: number): SwipeState {
+  if (state.kind === "armed" && t >= state.at + confirmMs) return idle;
   if (state.kind === "dragging" && state.armed !== null) {
-    if (t >= state.armed.at + CONFIRM_WINDOW_MS) return { ...state, armed: null };
+    if (t >= state.armed.at + confirmMs) return { ...state, armed: null };
   }
   return state;
 }
@@ -103,7 +118,7 @@ function release(
   t: number,
   context: SwipeContext,
 ): SwipeState {
-  const side = chooseSide(drag.dx, drag.dy, context.width);
+  const side = chooseSide(drag.dx, drag.dy, context.width, context.tuning);
   const armed = drag.armed;
   if (armed === null) {
     if (side === null || !context.sides.includes(side)) return idle;
@@ -118,7 +133,7 @@ function release(
 
 export function step(state: SwipeState, input: SwipeInput, context: SwipeContext): SwipeState {
   if (state.kind === "fired") return state;
-  const current = expire(state, input.t);
+  const current = expire(state, input.t, context.tuning.confirmMs);
   switch (input.type) {
     case "down":
       if (current.kind === "dragging") return current;
@@ -179,12 +194,13 @@ export function armedLabel(dangerous: boolean): string {
 
 /** What to draw for `state` at time `now`. */
 export function swipeView(state: SwipeState, now: number, context: SwipeContext): SwipeView {
-  const current = expire(state, now);
+  const { confirmMs } = context.tuning;
+  const current = expire(state, now, confirmMs);
   const armedOf = (armed: Armed): ArmedView => ({
     side: armed.side,
     label: armedLabel(context.dangerous),
     ready: cooled(armed, now, context.dangerous),
-    elapsed: Math.min(1, Math.max(0, (now - armed.at) / CONFIRM_WINDOW_MS)),
+    elapsed: Math.min(1, Math.max(0, (now - armed.at) / confirmMs)),
   });
   switch (current.kind) {
     case "idle":
@@ -193,7 +209,7 @@ export function swipeView(state: SwipeState, now: number, context: SwipeContext)
       // A panel never follows the finger toward a side it cannot choose.
       const dx = context.sides.includes(current.dx < 0 ? "left" : "right") ? current.dx : 0;
       const horizontal = Math.abs(dx) >= HORIZONTAL_RATIO * Math.abs(current.dy);
-      const reach = Math.min(1, Math.abs(dx) / sideThreshold(context.width));
+      const reach = Math.min(1, Math.abs(dx) / sideThreshold(context.width, context.tuning));
       return {
         dragging: true,
         offset: dx,

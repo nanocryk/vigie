@@ -30,6 +30,15 @@ import {
   waitForNewBuild,
 } from "@/server";
 import {
+  CONFIRM_WINDOWS,
+  DISTANCES,
+  type Distance,
+  SAFE_ASK_SWIPES,
+  type SafeAskSwipes,
+  setSwipePrefs,
+  useSwipePrefs,
+} from "@/swipePrefs";
+import {
   STEP_LABELS,
   type UpdateStatus,
   checkForUpdate,
@@ -91,6 +100,50 @@ function Choices<T extends string | number>({
         ))}
       </div>
     </div>
+  );
+}
+
+const DISTANCE_LABELS: Record<Distance, string> = {
+  short: "Short",
+  default: "Default",
+  long: "Long",
+};
+
+const SAFE_ASK_LABELS: Record<SafeAskSwipes, string> = {
+  two: "Two swipes",
+  one: "One swipe",
+};
+
+function Swipes() {
+  const prefs = useSwipePrefs();
+  return (
+    <SettingsSection
+      id="swipes"
+      title="Swipes"
+      summary={`${DISTANCE_LABELS[prefs.distance]} distance, ${prefs.confirmWindow / 1000} s to confirm, ${SAFE_ASK_LABELS[prefs.safeAsk].toLowerCase()} for safe asks.`}
+    >
+      <Choices
+        label="Distance to choose a side"
+        options={DISTANCES}
+        value={prefs.distance}
+        name={(distance) => DISTANCE_LABELS[distance]}
+        onPick={(distance) => setSwipePrefs({ ...prefs, distance })}
+      />
+      <Choices
+        label="Time for the second swipe"
+        options={CONFIRM_WINDOWS}
+        value={prefs.confirmWindow}
+        name={(window) => `${window / 1000} s`}
+        onPick={(confirmWindow) => setSwipePrefs({ ...prefs, confirmWindow })}
+      />
+      <Choices
+        label="Asks that are not dangerous take"
+        options={SAFE_ASK_SWIPES}
+        value={prefs.safeAsk}
+        name={(count) => SAFE_ASK_LABELS[count]}
+        onPick={(safeAsk) => setSwipePrefs({ ...prefs, safeAsk })}
+      />
+    </SettingsSection>
   );
 }
 
@@ -487,6 +540,7 @@ export function DeviceSettings({ client }: { client: Client }) {
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-2 p-4">
           <Display />
+          <Swipes />
           <Notifications />
           <Devices />
           <Update onBuilt={setUpdated} />

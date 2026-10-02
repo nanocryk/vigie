@@ -13,6 +13,7 @@ import {
   step,
   swipeView,
 } from "@/swipe";
+import { tuningOf, useSwipePrefs } from "@/swipePrefs";
 
 /** Controls inside the panel keep their own pointer handling. */
 const OWN_POINTER = "button, a, input, textarea, select, [data-swipe-ignore]";
@@ -69,17 +70,18 @@ function background(view: SwipeView): string {
  * `key`) to start over.
  */
 export function useSwipe(rules: SwipeRules, onConfirm: (side: Side) => void) {
+  const tuning = tuningOf(useSwipePrefs());
   const [state, setState] = useState<SwipeState>(idle);
   const [now, setNow] = useState(() => performance.now());
   const [width, setWidth] = useState(0);
   const surface = useRef<HTMLDivElement>(null);
   const stateRef = useRef<SwipeState>(idle);
-  const contextRef = useRef<SwipeContext>({ width: 0, ...rules });
+  const contextRef = useRef<SwipeContext>({ width: 0, tuning, ...rules });
   const confirmRef = useRef(onConfirm);
 
   useLayoutEffect(() => {
     confirmRef.current = onConfirm;
-    contextRef.current = { ...rules, width: contextRef.current.width };
+    contextRef.current = { ...rules, tuning, width: contextRef.current.width };
   });
 
   const dispatch = useCallback((input: SwipeInput) => {
@@ -153,7 +155,7 @@ export function useSwipe(rules: SwipeRules, onConfirm: (side: Side) => void) {
     };
   }, [dispatch]);
 
-  const view = swipeView(state, now, { ...rules, width });
+  const view = swipeView(state, now, { ...rules, tuning, width });
   const press = (side: Side) => dispatch({ type: "press", side, t: performance.now() });
   return { surface, view, press };
 }
@@ -169,12 +171,15 @@ export interface SwipeProps {
 }
 
 /**
- * A panel confirmed by two swipes in the same direction, or by the buttons under
- * it. Remount it (new `key`) to start over.
+ * A panel confirmed by two swipes in the same direction (one when the device
+ * allows it for a choice that is not dangerous), or by the buttons under it.
+ * Remount it (new `key`) to start over.
  */
 export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: SwipeProps) {
+  const { safeAsk } = useSwipePrefs();
+  const swipes = !dangerous && safeAsk === "one" ? 1 : 2;
   const { surface, view, press } = useSwipe(
-    { dangerous, sides: BOTH_SIDES, swipes: 2, presses: 1 },
+    { dangerous, sides: BOTH_SIDES, swipes, presses: 1 },
     onConfirm,
   );
   const sideButton = (side: Side) => {
@@ -221,7 +226,9 @@ export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: S
 
       <div className="flex items-center justify-between gap-2">
         {sideButton("left")}
-        <span className="text-muted-foreground voice-ui text-xs">swipe twice</span>
+        <span className="text-muted-foreground voice-ui text-xs">
+          {swipes === 1 ? "swipe once" : "swipe twice"}
+        </span>
         <div className="flex items-center gap-2">
           {beforeRight}
           {sideButton("right")}

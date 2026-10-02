@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOTH_SIDES,
-  CONFIRM_WINDOW_MS,
   DANGER_COOLDOWN_MS,
+  DEFAULT_TUNING,
   type Side,
   type SwipeContext,
   type SwipeInput,
@@ -21,7 +21,9 @@ const SAFE: SwipeContext = {
   sides: BOTH_SIDES,
   swipes: 2,
   presses: 1,
+  tuning: DEFAULT_TUNING,
 };
+const CONFIRM_WINDOW_MS = DEFAULT_TUNING.confirmMs;
 const DANGEROUS: SwipeContext = { ...SAFE, dangerous: true };
 /** A live Home row: left only, two swipes or two presses. */
 const KILL: SwipeContext = { ...SAFE, sides: ["left"], presses: 2 };
@@ -54,14 +56,30 @@ const fired = (side: Side): SwipeState => ({ kind: "fired", side });
 
 describe("chooseSide", () => {
   it("needs 20% of the width, 56 px, and mostly horizontal travel", () => {
-    expect(chooseSide(THRESHOLD, 0, WIDTH)).toBe("right");
-    expect(chooseSide(-THRESHOLD, 0, WIDTH)).toBe("left");
-    expect(chooseSide(THRESHOLD - 1, 0, WIDTH)).toBeNull();
-    expect(chooseSide(THRESHOLD, THRESHOLD / 2, WIDTH)).toBe("right");
-    expect(chooseSide(THRESHOLD, THRESHOLD / 2 + 1, WIDTH)).toBeNull();
+    const tuning = DEFAULT_TUNING;
+    expect(chooseSide(THRESHOLD, 0, WIDTH, tuning)).toBe("right");
+    expect(chooseSide(-THRESHOLD, 0, WIDTH, tuning)).toBe("left");
+    expect(chooseSide(THRESHOLD - 1, 0, WIDTH, tuning)).toBeNull();
+    expect(chooseSide(THRESHOLD, THRESHOLD / 2, WIDTH, tuning)).toBe("right");
+    expect(chooseSide(THRESHOLD, THRESHOLD / 2 + 1, WIDTH, tuning)).toBeNull();
     // A narrow panel falls back on the 56 px floor.
-    expect(chooseSide(55, 0, 150)).toBeNull();
-    expect(chooseSide(56, 0, 150)).toBe("right");
+    expect(chooseSide(55, 0, 150, tuning)).toBeNull();
+    expect(chooseSide(56, 0, 150, tuning)).toBe("right");
+  });
+
+  it("follows the device's distance", () => {
+    const short = { ...DEFAULT_TUNING, fraction: 0.12, minPx: 40 };
+    expect(chooseSide(48, 0, WIDTH, short)).toBe("right");
+    expect(chooseSide(47, 0, WIDTH, short)).toBeNull();
+    expect(chooseSide(40, 0, 150, short)).toBe("right");
+  });
+});
+
+describe("confirm window", () => {
+  it("follows the device's tuning", () => {
+    const LONG: SwipeContext = { ...SAFE, tuning: { ...DEFAULT_TUNING, confirmMs: 5000 } };
+    expect(run([...swipe(150, 0), ...swipe(150, 4000)], LONG)).toEqual(fired("right"));
+    expect(run([...swipe(150, 0), ...swipe(150, 4000)], SAFE)).toEqual(armed("right", 4100));
   });
 });
 
