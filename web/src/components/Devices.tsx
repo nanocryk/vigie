@@ -1,6 +1,7 @@
 import qrcode from "qrcode-generator";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
+import { SettingsSection } from "@/components/SettingsSection";
 import { useClock, useNow } from "@/components/useNow";
 import {
   type Device,
@@ -389,14 +390,13 @@ function PairSection({ devices }: { devices: Device[] | null }) {
   };
 
   return (
-    <section className="bg-card space-y-3 rounded-[5px] border p-4">
+    <div className="space-y-3 border-t pt-3">
       <div>
-        <h2 className="voice-heading text-base">Pair a new device</h2>
+        <h3 className="voice-heading text-sm">Pair a new device</h3>
         <p className="text-muted-foreground voice-ui text-xs">
           Scan the code or open the link on the new device. Single use, valid 5 minutes.
         </p>
       </div>
-
       {pairing.kind === "open" ? (
         <PairCard link={pairing.link} renew={create} close={() => setPairing({ kind: "idle" })} />
       ) : (
@@ -451,7 +451,7 @@ function PairSection({ devices }: { devices: Device[] | null }) {
         </>
       )}
       {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
-    </section>
+    </div>
   );
 }
 
@@ -460,27 +460,28 @@ export function Devices() {
   const now = useNow();
   const sorted = useMemo(() => (devices === null ? null : [...devices].sort(byRelevance)), [devices]);
   return (
-    <>
-      <section className="bg-card space-y-3 rounded-[5px] border p-4">
-        <div>
-          <h2 className="voice-heading text-base">Paired devices</h2>
-          <p className="text-muted-foreground voice-ui text-xs">
-            Every browser or installed app that can reach this server.
-          </p>
-        </div>
-        {sorted === null && error === null && (
-          <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
-        )}
-        {sorted !== null && (
-          <ul className="space-y-2">
-            {sorted.map((device) => (
-              <DeviceCard key={device.id} device={device} now={now} />
-            ))}
-          </ul>
-        )}
-        {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
-      </section>
+    <SettingsSection
+      id="devices"
+      title="Devices"
+      summary={
+        sorted === null
+          ? "Every browser or installed app that can reach this server."
+          : `${sorted.length} ${sorted.length === 1 ? "browser or app" : "browsers or apps"} can reach this server.`
+      }
+      forceOpen={error !== null}
+    >
+      {sorted === null && error === null && (
+        <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
+      )}
+      {sorted !== null && (
+        <ul className="space-y-2">
+          {sorted.map((device) => (
+            <DeviceCard key={device.id} device={device} now={now} />
+          ))}
+        </ul>
+      )}
+      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
       <PairSection devices={devices} />
-    </>
+    </SettingsSection>
   );
 }
