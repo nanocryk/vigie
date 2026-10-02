@@ -66,7 +66,8 @@ function errorMessage(err: unknown): string {
 /** Past this, text shows plain: highlighting a huge file stalls a phone. */
 const HIGHLIGHT_MAX_CHARS = 256 * 1024;
 
-const TOOL = "voice-ui hover:bg-muted flex items-center gap-1.5 rounded-[5px] border px-2.5 py-1.5 text-sm disabled:opacity-50";
+const TOOL =
+  "voice-ui hover:bg-muted flex items-center gap-1.5 rounded-[5px] border px-2.5 py-1.5 text-sm disabled:opacity-50";
 const ROW = "hover:bg-muted flex w-full items-center gap-3 px-3 py-2.5 text-left";
 
 // ---- Icons ----
@@ -245,7 +246,7 @@ function TabSwitcher({
             changeExplorer((state) => selectTab(state, tab.id));
             setOpen(false);
           }}
-          className={`hover:bg-muted flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left ${current ? "bg-primary/10" : ""}`}
+          className={`flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-muted ${current ? "bg-primary/10" : ""}`}
         >
           <TabIcon
             tab={tab}
@@ -258,8 +259,8 @@ function TabSwitcher({
             }
           />
           <span className="min-w-0 flex-1">
-            <span className="voice-ui block truncate text-sm">{tabTitle(tab, sessions)}</span>
-            <span className="text-muted-foreground voice-code block truncate text-xs">
+            <span className="block truncate text-sm voice-ui">{tabTitle(tab, sessions)}</span>
+            <span className="block truncate text-xs voice-code text-muted-foreground">
               {tabDetail(tab)}
             </span>
           </span>
@@ -269,7 +270,7 @@ function TabSwitcher({
           disabled={!closable}
           aria-label={`Close ${tabTitle(tab, sessions)}`}
           onClick={() => changeExplorer((state) => closeTab(state, tab.id))}
-          className="text-muted-foreground hover:bg-muted hover:text-foreground px-3 disabled:invisible"
+          className="px-3 text-muted-foreground hover:bg-muted hover:text-foreground disabled:invisible"
         >
           <CloseIcon className="size-4" />
         </button>
@@ -284,7 +285,7 @@ function TabSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`${TOOL} bg-card max-w-full`}
+        className={`${TOOL} max-w-full bg-card`}
       >
         <TabIcon
           tab={active}
@@ -292,22 +293,22 @@ function TabSwitcher({
         />
         <span className="truncate">{tabTitle(active, sessions)}</span>
         {tabs.length > 1 && (
-          <span className="bg-muted text-muted-foreground rounded-full px-1.5 text-[0.6875rem]">
+          <span className="rounded-full bg-muted px-1.5 text-[0.6875rem] text-muted-foreground">
             {tabs.length}
           </span>
         )}
-        <ChevronIcon className="text-muted-foreground size-4" />
+        <ChevronIcon className="size-4 text-muted-foreground" />
       </button>
       {open && (
         <div
           role="menu"
-          className="bg-background absolute top-full left-0 z-30 mt-1 max-h-[70dvh] w-[min(22rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-[5px] border shadow-lg"
+          className="absolute top-full left-0 z-30 mt-1 max-h-[70dvh] w-[min(22rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-[5px] border bg-background shadow-lg"
         >
-          <p className="voice-ui text-muted-foreground px-3 pt-2 pb-1 text-xs">Tabs</p>
+          <p className="px-3 pt-2 pb-1 text-xs voice-ui text-muted-foreground">Tabs</p>
           <ul>{free.map((tab) => entry(tab, free.length > 1))}</ul>
           {sessionTabs.length > 0 && (
             <>
-              <p className="voice-ui text-muted-foreground border-t px-3 pt-2 pb-1 text-xs">
+              <p className="border-t px-3 pt-2 pb-1 text-xs voice-ui text-muted-foreground">
                 Session tabs
               </p>
               <ul>{sessionTabs.map((tab) => entry(tab, true))}</ul>
@@ -319,7 +320,7 @@ function TabSwitcher({
               changeExplorer(newFreeTab);
               setOpen(false);
             }}
-            className="voice-ui text-primary hover:bg-muted flex w-full items-center gap-3 border-t px-3 py-2.5 text-sm"
+            className="flex w-full items-center gap-3 border-t px-3 py-2.5 text-sm voice-ui text-primary hover:bg-muted"
           >
             <PlusIcon />
             New tab
@@ -348,9 +349,9 @@ function PlaceRow({
       <button type="button" onClick={() => go(place.path)} className={ROW}>
         {icon}
         <span className="min-w-0 flex-1">
-          <span className="voice-ui block truncate">{place.label}</span>
+          <span className="block truncate voice-ui">{place.label}</span>
           {detail !== null && (
-            <span className="text-muted-foreground voice-code block truncate text-xs">
+            <span className="block truncate text-xs voice-code text-muted-foreground">
               {detail}
             </span>
           )}
@@ -363,10 +364,10 @@ function PlaceRow({
 function PlacesSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-1">
-      <h2 className="voice-ui text-muted-foreground px-1 text-xs tracking-wide uppercase">
+      <h2 className="px-1 text-xs voice-ui tracking-wide text-muted-foreground uppercase">
         {title}
       </h2>
-      <ul className="bg-card divide-y overflow-hidden rounded-[5px] border">{children}</ul>
+      <ul className="divide-y overflow-hidden rounded-[5px] border bg-card">{children}</ul>
     </section>
   );
 }
@@ -389,10 +390,10 @@ function PlacesView({
 
   return (
     <div className={`${PANEL} space-y-5 p-3`}>
-      {error !== null && <p className="text-destructive voice-ui text-sm">{error}</p>}
+      {error !== null && <p className="text-sm voice-ui text-destructive">{error}</p>}
       {places !== null && places.drives.length > 0 && (
         <section className="space-y-1">
-          <h2 className="voice-ui text-muted-foreground px-1 text-xs tracking-wide uppercase">
+          <h2 className="px-1 text-xs voice-ui tracking-wide text-muted-foreground uppercase">
             Drives
           </h2>
           <div className="flex flex-wrap gap-2">
@@ -401,7 +402,7 @@ function PlacesView({
                 key={drive.path}
                 type="button"
                 onClick={() => go(drive.path)}
-                className="bg-card hover:bg-muted voice-ui flex items-center gap-2 rounded-[5px] border px-3 py-2.5"
+                className="flex items-center gap-2 rounded-[5px] border bg-card px-3 py-2.5 voice-ui hover:bg-muted"
               >
                 <DriveIcon className="text-muted-foreground" />
                 {drive.label}
@@ -437,7 +438,7 @@ function PlacesView({
         </PlacesSection>
       )}
       {places === null && error === null && (
-        <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
+        <p className="text-sm voice-ui text-muted-foreground">Loading...</p>
       )}
     </div>
   );
@@ -455,13 +456,13 @@ function Breadcrumb({ folder, go }: { folder: string | null; go: (path: string |
   return (
     <div
       ref={strip}
-      className="voice-ui flex min-w-0 items-center gap-0.5 overflow-x-auto text-sm whitespace-nowrap [scrollbar-width:none]"
+      className="flex min-w-0 [scrollbar-width:none] items-center gap-0.5 overflow-x-auto text-sm voice-ui whitespace-nowrap"
     >
       <button
         type="button"
         aria-label="Places"
         onClick={() => go(null)}
-        className={`hover:bg-muted flex shrink-0 items-center rounded-[5px] p-1.5 ${folder === null ? "text-primary" : "text-muted-foreground"}`}
+        className={`flex shrink-0 items-center rounded-[5px] p-1.5 hover:bg-muted ${folder === null ? "text-primary" : "text-muted-foreground"}`}
       >
         <PlacesIcon className="size-4" />
       </button>
@@ -469,12 +470,12 @@ function Breadcrumb({ folder, go }: { folder: string | null; go: (path: string |
         const last = index === segments.length - 1;
         return (
           <span key={crumb.path} className="flex shrink-0 items-center">
-            <span className="text-muted-foreground/60 px-0.5">›</span>
+            <span className="px-0.5 text-muted-foreground/60">›</span>
             <button
               type="button"
               disabled={last}
               onClick={() => go(crumb.path)}
-              className={`rounded-[5px] px-1.5 py-1 ${last ? "text-foreground font-medium" : "text-muted-foreground hover:bg-muted"}`}
+              className={`rounded-[5px] px-1.5 py-1 ${last ? "font-medium text-foreground" : "text-muted-foreground hover:bg-muted"}`}
             >
               {crumb.label}
             </button>
@@ -523,8 +524,8 @@ function EntryRow({
         className={`${ROW} ${entry.hidden ? "opacity-55" : ""}`}
       >
         {icon}
-        <span className="voice-ui min-w-0 flex-1 truncate">{entry.name}</span>
-        <span className="text-muted-foreground voice-ui shrink-0 text-xs">{meta.join(" · ")}</span>
+        <span className="min-w-0 flex-1 truncate voice-ui">{entry.name}</span>
+        <span className="shrink-0 text-xs voice-ui text-muted-foreground">{meta.join(" · ")}</span>
       </button>
     </li>
   );
@@ -568,12 +569,12 @@ function NewFolderRow({
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}
-          className="voice-ui bg-background focus:ring-ring min-w-0 flex-1 rounded-[5px] border px-2 py-1.5 text-base outline-none focus:ring-2"
+          className="min-w-0 flex-1 rounded-[5px] border bg-background px-2 py-1.5 text-base voice-ui outline-none focus:ring-2 focus:ring-ring"
         />
         <button
           type="submit"
           disabled={busy || name.trim() === ""}
-          className="voice-ui bg-primary text-primary-foreground rounded-[5px] px-3 py-1.5 text-sm disabled:opacity-50"
+          className="rounded-[5px] bg-primary px-3 py-1.5 text-sm voice-ui text-primary-foreground disabled:opacity-50"
         >
           Create
         </button>
@@ -581,12 +582,12 @@ function NewFolderRow({
           type="button"
           aria-label="Cancel"
           onClick={() => done(null)}
-          className="text-muted-foreground hover:bg-muted rounded-[5px] p-1.5"
+          className="rounded-[5px] p-1.5 text-muted-foreground hover:bg-muted"
         >
           <CloseIcon className="size-4" />
         </button>
       </form>
-      {error !== null && <p className="text-destructive voice-ui mt-1 pl-8 text-xs">{error}</p>}
+      {error !== null && <p className="mt-1 pl-8 text-xs voice-ui text-destructive">{error}</p>}
     </li>
   );
 }
@@ -621,9 +622,7 @@ function FolderView({
         .then((status) => {
           if (!alive) return;
           setMarks(
-            status.root === null
-              ? null
-              : { ...folderMarks(status, tab.folder), root: status.root },
+            status.root === null ? null : { ...folderMarks(status, tab.folder), root: status.root },
           );
         })
         .catch(() => {});
@@ -704,9 +703,13 @@ function FolderView({
       <div className={`${PANEL} p-3`}>
         {error !== null && (
           <div className="space-y-2 rounded-[5px] border p-3">
-            <p className="text-destructive voice-ui text-sm">{error}</p>
+            <p className="text-sm voice-ui text-destructive">{error}</p>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setReload((count) => count + 1)} className={TOOL}>
+              <button
+                type="button"
+                onClick={() => setReload((count) => count + 1)}
+                className={TOOL}
+              >
                 Retry
               </button>
               <button type="button" onClick={() => go(null)} className={TOOL}>
@@ -717,10 +720,10 @@ function FolderView({
           </div>
         )}
         {listing === null && error === null && (
-          <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
+          <p className="text-sm voice-ui text-muted-foreground">Loading...</p>
         )}
         {listing !== null && error === null && (
-          <ul className="bg-card divide-y overflow-hidden rounded-[5px] border">
+          <ul className="divide-y overflow-hidden rounded-[5px] border bg-card">
             {creating && (
               <NewFolderRow
                 parent={listing.path}
@@ -761,22 +764,22 @@ function FolderView({
                   className={`${ROW} bg-git-deleted/15 hover:bg-git-deleted/25`}
                 >
                   <FileIcon className="text-git-deleted" />
-                  <span className="voice-ui text-muted-foreground min-w-0 flex-1 truncate">
+                  <span className="min-w-0 flex-1 truncate voice-ui text-muted-foreground">
                     {baseName(path)}
                   </span>
-                  <span className="text-git-deleted voice-ui shrink-0 text-xs">deleted</span>
+                  <span className="shrink-0 text-xs voice-ui text-git-deleted">deleted</span>
                 </button>
               </li>
             ))}
             {shown.length === 0 && (marks?.deleted.length ?? 0) === 0 && !creating && (
-              <li className="text-muted-foreground voice-ui px-3 py-6 text-center text-sm">
+              <li className="px-3 py-6 text-center text-sm voice-ui text-muted-foreground">
                 {hiddenCount > 0 ? `Only hidden items (${hiddenCount})` : "Empty folder"}
               </li>
             )}
           </ul>
         )}
         {listing !== null && hiddenCount > 0 && shown.length > 0 && (
-          <p className="text-muted-foreground voice-ui px-1 pt-2 text-xs">
+          <p className="px-1 pt-2 text-xs voice-ui text-muted-foreground">
             {hiddenCount} hidden {hiddenCount === 1 ? "item" : "items"}
           </p>
         )}
@@ -845,7 +848,7 @@ function TextBody({
   }, [target]);
 
   return (
-    <div ref={body} className="voice-code grid grid-cols-[auto_1fr] text-[0.8125rem] leading-5">
+    <div ref={body} className="grid grid-cols-[auto_1fr] text-[0.8125rem] leading-5 voice-code">
       {Array.from({ length: count }, (_, index) => {
         const number = index + 1;
         const lit = flash === number ? "bg-git-modified/25" : "";
@@ -858,14 +861,14 @@ function TextBody({
                 onClick={() => onMark(number)}
                 title="Show in the diff"
                 style={{ boxShadow: markShadow(number, count, marks) }}
-                className={`text-muted-foreground hover:text-primary cursor-pointer border-r pr-2 pl-3 text-right transition-colors duration-700 select-none hover:underline ${lit}`}
+                className={`cursor-pointer border-r pr-2 pl-3 text-right text-muted-foreground transition-colors duration-700 select-none hover:text-primary hover:underline ${lit}`}
               >
                 {number}
               </button>
             ) : (
               <span
                 data-line={number}
-                className={`text-muted-foreground/60 border-r pr-2 pl-3 text-right transition-colors duration-700 select-none ${lit}`}
+                className={`border-r pr-2 pl-3 text-right text-muted-foreground/60 transition-colors duration-700 select-none ${lit}`}
               >
                 {number}
               </span>
@@ -895,19 +898,21 @@ function ImageBody({ path, size }: { path: string; size: number }) {
   return (
     <div className="flex min-h-full flex-col items-center justify-center gap-2 p-3">
       {failed ? (
-        <p className="text-muted-foreground voice-ui text-sm">Cannot display this image.</p>
+        <p className="text-sm voice-ui text-muted-foreground">Cannot display this image.</p>
       ) : (
         <img
           src={rawUrl(path)}
           alt={folderName(path)}
           onLoad={(event) =>
-            setDimensions(`${event.currentTarget.naturalWidth} × ${event.currentTarget.naturalHeight}`)
+            setDimensions(
+              `${event.currentTarget.naturalWidth} × ${event.currentTarget.naturalHeight}`,
+            )
           }
           onError={() => setFailed(true)}
           className="max-h-[70dvh] max-w-full rounded-[5px] border bg-[repeating-conic-gradient(#8881_0_25%,transparent_0_50%)] bg-[length:16px_16px] object-contain"
         />
       )}
-      <p className="text-muted-foreground voice-ui text-xs">
+      <p className="text-xs voice-ui text-muted-foreground">
         {[dimensions, formatSize(size)].filter((part) => part !== null).join(", ")}
       </p>
     </div>
@@ -993,11 +998,11 @@ function FileViewer({
             type="button"
             onClick={close}
             aria-label={`Back to the ${backTo.toLowerCase()}`}
-            className="text-primary hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 py-1 text-sm"
+            className="shrink-0 rounded-[5px] px-2 py-1 text-sm voice-ui text-primary hover:bg-muted"
           >
             &lsaquo; {backTo}
           </button>
-          <span className="voice-ui min-w-0 flex-1 truncate text-sm font-medium" title={path}>
+          <span className="min-w-0 flex-1 truncate text-sm voice-ui font-medium" title={path}>
             {folderName(path)}
           </span>
           {markdown && (
@@ -1010,7 +1015,7 @@ function FileViewer({
                     type="button"
                     aria-pressed={on}
                     onClick={() => setRaw(choice === "Raw")}
-                    className={`voice-ui px-2.5 py-1 ${on ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                    className={`px-2.5 py-1 voice-ui ${on ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                   >
                     {choice}
                   </button>
@@ -1022,12 +1027,12 @@ function FileViewer({
       </div>
       <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
         <div className={PANEL}>
-          {error !== null && <p className="text-destructive voice-ui p-3 text-sm">{error}</p>}
+          {error !== null && <p className="p-3 text-sm voice-ui text-destructive">{error}</p>}
           {view === null && error === null && (
-            <p className="text-muted-foreground voice-ui p-3 text-sm">Loading...</p>
+            <p className="p-3 text-sm voice-ui text-muted-foreground">Loading...</p>
           )}
           {view?.kind === "text" && view.truncated && (
-            <p className="bg-gauge-glow/15 voice-ui px-3 py-1.5 text-xs">
+            <p className="bg-gauge-glow/15 px-3 py-1.5 text-xs voice-ui">
               Showing the first 2 MB of {formatSize(view.size)}.
             </p>
           )}
@@ -1051,7 +1056,7 @@ function FileViewer({
             ))}
           {view?.kind === "image" && <ImageBody path={view.path} size={view.size} />}
           {view?.kind === "binary" && (
-            <div className="text-muted-foreground voice-ui flex flex-col items-center gap-2 p-8 text-center text-sm">
+            <div className="flex flex-col items-center gap-2 p-8 text-center text-sm voice-ui text-muted-foreground">
               <FileIcon className="size-8" />
               <p>This file cannot be displayed.</p>
               <p className="text-xs">{formatSize(view.size)}</p>
@@ -1179,9 +1184,7 @@ export function Explorer({ client }: { client: Client }) {
     changeExplorer((current) => updateTab(current, tab.id, { file: null, line: null }));
   const openDiff = (root: string, focus: DiffFocus | null = null) => {
     setDiffFocus(focus);
-    changeExplorer((current) =>
-      updateTab(current, tab.id, { diff: root, file: null, line: null }),
-    );
+    changeExplorer((current) => updateTab(current, tab.id, { diff: root, file: null, line: null }));
   };
   const closeDiff = () =>
     changeExplorer((current) => updateTab(current, tab.id, { diff: null, file: null, line: null }));
@@ -1221,7 +1224,7 @@ export function Explorer({ client }: { client: Client }) {
                   changeExplorer((current) => ({ ...current, showHidden: !current.showHidden }))
                 }
                 title={state.showHidden ? "Hide hidden files" : "Show hidden files"}
-                className={`${TOOL} ${state.showHidden ? "border-primary text-primary bg-primary/10" : "text-muted-foreground"}`}
+                className={`${TOOL} ${state.showHidden ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground"}`}
               >
                 <EyeIcon className="size-4" />
                 <span className="text-xs max-sm:hidden">Hidden</span>
@@ -1235,7 +1238,7 @@ export function Explorer({ client }: { client: Client }) {
                   title="Open the session's discussion"
                   className={TOOL}
                 >
-                  <ChatIcon className="text-mode-plan size-4" />
+                  <ChatIcon className="size-4 text-mode-plan" />
                   <span className="text-xs max-sm:hidden">Discussion</span>
                 </button>
                 <button
@@ -1244,7 +1247,7 @@ export function Explorer({ client }: { client: Client }) {
                   title="Back to the session's folder"
                   className={TOOL}
                 >
-                  <FolderIcon className="text-mode-plan size-4" />
+                  <FolderIcon className="size-4 text-mode-plan" />
                   <span className="text-xs max-sm:hidden">Project</span>
                 </button>
               </>
@@ -1257,7 +1260,7 @@ export function Explorer({ client }: { client: Client }) {
                 title={tab.diff !== null ? "Close the diff" : "Pending changes"}
                 className={`${TOOL} ${tab.diff !== null ? "border-git-modified bg-git-modified/10" : ""}`}
               >
-                <DiffIcon className="text-git-modified size-4" />
+                <DiffIcon className="size-4 text-git-modified" />
                 <span className="text-xs max-sm:hidden">Diff</span>
               </button>
             )}
@@ -1311,7 +1314,7 @@ export function Explorer({ client }: { client: Client }) {
             <footer className="shrink-0 border-t px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <div className={`${PANEL} space-y-1.5`}>
                 {startError !== null && (
-                  <p className="text-destructive voice-ui text-xs">{startError}</p>
+                  <p className="text-xs voice-ui text-destructive">{startError}</p>
                 )}
                 <div className="flex gap-2">
                   <button
@@ -1327,7 +1330,7 @@ export function Explorer({ client }: { client: Client }) {
                     type="button"
                     disabled={starting}
                     onClick={() => void start(folder)}
-                    className="bg-primary text-primary-foreground voice-ui flex min-w-0 flex-1 items-center justify-center gap-2 rounded-[5px] px-3 py-2 text-sm disabled:opacity-50"
+                    className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-[5px] bg-primary px-3 py-2 text-sm voice-ui text-primary-foreground disabled:opacity-50"
                   >
                     <ChatIcon className="size-4" />
                     <span className="truncate">

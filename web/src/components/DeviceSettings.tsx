@@ -6,14 +6,7 @@ import { ConnectionDot } from "@/components/SessionList";
 import { SettingsSection } from "@/components/SettingsSection";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
-import {
-  SCALES,
-  THEMES,
-  type Scale,
-  type ThemeChoice,
-  setDisplay,
-  useDisplay,
-} from "@/display";
+import { SCALES, THEMES, type Scale, type ThemeChoice, setDisplay, useDisplay } from "@/display";
 import {
   type PushConfig,
   disablePush,
@@ -84,7 +77,7 @@ function Choices<T extends string | number>({
 }) {
   return (
     <div className="space-y-1.5">
-      <p className="voice-ui text-muted-foreground text-xs">{label}</p>
+      <p className="text-xs voice-ui text-muted-foreground">{label}</p>
       <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
         {options.map((option) => (
           <button
@@ -93,7 +86,7 @@ function Choices<T extends string | number>({
             role="radio"
             aria-checked={option === value}
             onClick={() => onPick(option)}
-            className={`voice-ui rounded-[5px] border px-3 py-1.5 text-sm ${option === value ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
+            className={`rounded-[5px] border px-3 py-1.5 text-sm voice-ui ${option === value ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
           >
             {name(option)}
           </button>
@@ -222,19 +215,19 @@ function Notifications() {
               if (config === null) return;
               run(() => (on ? disablePush() : enablePush(config)));
             }}
-            className={`${BUTTON} shrink-0 ${on ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
+            className={`${BUTTON} shrink-0 ${on ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"}`}
           >
             {busy ? "..." : on ? "On" : "Off"}
           </button>
         )
       }
     >
-      <p className="text-muted-foreground voice-ui text-sm">
+      <p className="text-sm voice-ui text-muted-foreground">
         Asks, finished turns, unexpected stops and caches about to go cold, while no device is
         looking at the discussion.
       </p>
       {!pushSupported() && (
-        <p className="text-muted-foreground voice-ui text-sm">
+        <p className="text-sm voice-ui text-muted-foreground">
           This browser cannot receive push notifications. On iOS, add vigie to the home screen
           first.
         </p>
@@ -254,7 +247,7 @@ function Notifications() {
           {tested ? "Test sent" : "Send a test"}
         </button>
       )}
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </SettingsSection>
   );
 }
@@ -298,7 +291,7 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
   };
 
   if (status === null) {
-    return error === null ? null : <p className="text-destructive voice-ui text-xs">{error}</p>;
+    return error === null ? null : <p className="text-xs voice-ui text-destructive">{error}</p>;
   }
   const { check, run } = status;
   const behind = check.state === "done" ? check.behind : 0;
@@ -325,7 +318,7 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
             type="button"
             disabled={busy}
             onClick={start}
-            className={`${BUTTON} hover:bg-muted shrink-0`}
+            className={`${BUTTON} shrink-0 hover:bg-muted`}
           >
             {run.state === "failed" ? "Retry" : "Update"}
           </button>
@@ -335,7 +328,7 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
       {body && (
         <>
           {manual && (
-            <p className="voice-ui text-sm">
+            <p className="text-sm voice-ui">
               To update, stop the server, run <code className="voice-code">git pull</code> in the
               repository, then <code className="voice-code">npm ci</code> and{" "}
               <code className="voice-code">npm run build</code> in{" "}
@@ -345,20 +338,20 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
             </p>
           )}
           {run.state === "running" && (
-            <p className="voice-ui text-sm">{STEP_LABELS[run.step]}...</p>
+            <p className="text-sm voice-ui">{STEP_LABELS[run.step]}...</p>
           )}
           {run.state === "built" && (
-            <p className="voice-ui text-sm">Update built: restart the server below to run it.</p>
+            <p className="text-sm voice-ui">Update built: restart the server below to run it.</p>
           )}
           {run.state === "failed" && (
             <div className="space-y-2">
-              <p className="text-destructive voice-ui text-sm">{STEP_LABELS[run.step]} failed:</p>
-              <pre className="voice-code bg-background max-h-60 overflow-auto rounded-[5px] border p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <p className="text-sm voice-ui text-destructive">{STEP_LABELS[run.step]} failed:</p>
+              <pre className="max-h-60 overflow-auto rounded-[5px] border bg-background p-2 text-xs voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
                 {run.output}
               </pre>
             </div>
           )}
-          {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+          {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
         </>
       )}
     </SettingsSection>
@@ -444,7 +437,7 @@ function ServerRestart({ updated }: { updated: boolean }) {
   };
 
   if (status?.supervised !== true) {
-    return error === null ? null : <p className="text-destructive voice-ui text-xs">{error}</p>;
+    return error === null ? null : <p className="text-xs voice-ui text-destructive">{error}</p>;
   }
   const turns = status.turns;
   const waiting = pending && !restarting && !confirming;
@@ -465,7 +458,7 @@ function ServerRestart({ updated }: { updated: boolean }) {
             type="button"
             disabled={busy || restarting}
             onClick={ask}
-            className={`${BUTTON} shrink-0 ${updated ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
+            className={`${BUTTON} shrink-0 ${updated ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"}`}
           >
             {restarting ? "Restarting..." : pending ? "Restart now" : "Restart"}
           </button>
@@ -476,24 +469,24 @@ function ServerRestart({ updated }: { updated: boolean }) {
         <>
           {waiting && (
             <div className="flex items-center justify-between gap-3">
-              <p className="voice-ui text-sm">
-                Restart pending: waits for {turns} running {turns === 1 ? "turn" : "turns"} to
-                end. Messages sent meanwhile are held.
+              <p className="text-sm voice-ui">
+                Restart pending: waits for {turns} running {turns === 1 ? "turn" : "turns"} to end.
+                Messages sent meanwhile are held.
               </p>
               <button
                 type="button"
                 disabled={busy}
                 onClick={cancel}
-                className={`${BUTTON} hover:bg-muted shrink-0`}
+                className={`${BUTTON} shrink-0 hover:bg-muted`}
               >
                 Cancel
               </button>
             </div>
           )}
           {confirming && (
-            <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
-              <p className="voice-heading text-destructive text-base">Restart the server now?</p>
-              <p className="voice-ui text-sm">
+            <div className="space-y-3 rounded-[5px] border-2 border-destructive bg-destructive/15 p-3">
+              <p className="text-base voice-heading text-destructive">Restart the server now?</p>
+              <p className="text-sm voice-ui">
                 {turns === 0
                   ? "No turn is running."
                   : `${turns} running ${turns === 1 ? "turn" : "turns"} will be stopped.`}
@@ -503,7 +496,7 @@ function ServerRestart({ updated }: { updated: boolean }) {
                   type="button"
                   disabled={busy}
                   onClick={restart}
-                  className="bg-destructive voice-ui rounded-[5px] px-4 py-2 text-sm text-black disabled:opacity-50"
+                  className="rounded-[5px] bg-destructive px-4 py-2 text-sm voice-ui text-black disabled:opacity-50"
                 >
                   Restart
                 </button>
@@ -511,14 +504,14 @@ function ServerRestart({ updated }: { updated: boolean }) {
                   type="button"
                   disabled={busy}
                   onClick={() => setConfirming(false)}
-                  className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+                  className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui disabled:opacity-50"
                 >
                   Back
                 </button>
               </div>
             </div>
           )}
-          {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+          {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
         </>
       )}
     </SettingsSection>

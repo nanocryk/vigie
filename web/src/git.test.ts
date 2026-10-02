@@ -49,7 +49,11 @@ describe("parseRepoDiff", () => {
 });
 
 describe("marks", () => {
-  const line = (kind: "context" | "added" | "removed", old: number | null, next: number | null) => ({
+  const line = (
+    kind: "context" | "added" | "removed",
+    old: number | null,
+    next: number | null,
+  ) => ({
     kind,
     text: "",
     old,
@@ -115,7 +119,12 @@ describe("helpers", () => {
   });
 
   it("groups by folder with the root first", () => {
-    const groups = groupByFolder([file("z/b.ts"), file("README.md"), file("a/x.ts"), file("z/a.ts")]);
+    const groups = groupByFolder([
+      file("z/b.ts"),
+      file("README.md"),
+      file("a/x.ts"),
+      file("z/a.ts"),
+    ]);
     expect(groups.map((group) => [group.folder, group.files.map((f) => f.path)])).toEqual([
       ["", ["README.md"]],
       ["a", ["a/x.ts"]],

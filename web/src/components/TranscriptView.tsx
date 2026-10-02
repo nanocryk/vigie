@@ -117,7 +117,7 @@ function BackgroundRows({
         return (
           <div
             key={task.task_id}
-            className="bg-muted text-foreground voice-ui flex items-center gap-2 px-3 py-1.5 text-xs"
+            className="flex items-center gap-2 bg-muted px-3 py-1.5 text-xs voice-ui text-foreground"
           >
             <span className="min-w-0 flex-1 truncate">
               <span className="text-muted-foreground">
@@ -144,7 +144,7 @@ function BackgroundRows({
           </div>
         );
       })}
-      {error !== null && <p className="text-destructive voice-ui px-3 text-xs">{error}</p>}
+      {error !== null && <p className="px-3 text-xs voice-ui text-destructive">{error}</p>}
     </div>
   );
 }
@@ -177,7 +177,7 @@ function UserBubble({
   const frame = held ? "border-2 border-dashed" : "border-r-2 rounded-r-none";
   return (
     <div
-      className={`bg-bubble-user border-ring ml-16 ${BUBBLE} ${frame} ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
+      className={`ml-16 border-ring bg-bubble-user ${BUBBLE} ${frame} ${dim === true ? "opacity-60" : ""} ${filesRoom(attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
     >
       {children}
     </div>
@@ -217,7 +217,7 @@ const TOOL_SUMMARY =
 
 function StatusMark({ status }: { status: ToolStatus }) {
   return (
-    <span className={`voice-code w-7 shrink-0 text-xs ${STATUS_CLASS[status]}`}>
+    <span className={`w-7 shrink-0 text-xs voice-code ${STATUS_CLASS[status]}`}>
       {status === "running" ? <Dots /> : STATUS_TEXT[status]}
     </span>
   );
@@ -236,7 +236,7 @@ function ToolOutput({ item }: { item: ToolItem }) {
 function ToolInput({ item }: { item: ToolItem }) {
   return (
     <details>
-      <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">input</summary>
+      <summary className="cursor-pointer text-xs voice-ui text-muted-foreground">input</summary>
       <pre className={`${PANEL} mt-1`}>{JSON.stringify(item.input, null, 2)}</pre>
     </details>
   );
@@ -248,8 +248,10 @@ function ToolStop({ taskId, alone }: { taskId: string; alone: boolean }) {
   const { stopping, error, stop } = useStopTask(onStop ?? (() => Promise.resolve()));
   if (onStop === null) return null;
   return (
-    <span className={`flex shrink-0 items-center gap-1.5 self-center ${alone ? "ml-auto pl-2" : ""}`}>
-      {error !== null && <span className="text-destructive voice-ui text-xs">{error}</span>}
+    <span
+      className={`flex shrink-0 items-center gap-1.5 self-center ${alone ? "ml-auto pl-2" : ""}`}
+    >
+      {error !== null && <span className="text-xs voice-ui text-destructive">{error}</span>}
       <button
         type="button"
         disabled={stopping.has(taskId)}
@@ -283,20 +285,18 @@ function ToolRow({
   const plan = DIFF_TOOLS.has(item.name) ? planFileName(item.input) : null;
   const diff = useMemo(
     () =>
-      DIFF_TOOLS.has(item.name) && plan === null
-        ? toolDiff({ ...item, path: item.summary })
-        : null,
+      DIFF_TOOLS.has(item.name) && plan === null ? toolDiff({ ...item, path: item.summary }) : null,
     [item, plan],
   );
   if (diff !== null && awaiting) {
     return (
-      <div className="border-ring border-l-2 text-sm">
+      <div className="border-l-2 border-ring text-sm">
         <div className={TOOL_SUMMARY}>
           <StatusMark status={item.status} />
-          <span className="voice-code min-w-0 truncate">
+          <span className="min-w-0 truncate voice-code">
             <span className="voice-ui">{diff.verb}</span>({diff.path})
           </span>
-          <span className="text-muted-foreground voice-ui ml-auto shrink-0 pl-2 text-xs">
+          <span className="ml-auto shrink-0 pl-2 text-xs voice-ui text-muted-foreground">
             awaiting approval
           </span>
         </div>
@@ -310,13 +310,17 @@ function ToolRow({
     <div
       className={`rounded-r-[5px] border-l-2 text-sm ${planApproval ? "border-mode-plan bg-mode-plan/15" : "border-ring"}`}
     >
-      <details className="group open:bg-muted rounded-r-[5px] open:pb-2">
+      <details className="group rounded-r-[5px] open:bg-muted open:pb-2">
         <summary className={TOOL_SUMMARY}>
           <StatusMark status={item.status} />
-          <span className="voice-ui shrink-0">
-            {plan === null ? toolDisplayName(item.name) : item.name === "Write" ? "Plan written" : "Plan edited"}
+          <span className="shrink-0 voice-ui">
+            {plan === null
+              ? toolDisplayName(item.name)
+              : item.name === "Write"
+                ? "Plan written"
+                : "Plan edited"}
           </span>
-          <span className="voice-code text-muted-foreground min-w-0 truncate">
+          <span className="min-w-0 truncate voice-code text-muted-foreground">
             {plan ?? item.summary}
           </span>
           {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
@@ -327,7 +331,7 @@ function ToolRow({
           <ToolOutput item={item} />
           {item.attached !== null && (
             <details>
-              <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
+              <summary className="cursor-pointer text-xs voice-ui text-muted-foreground">
                 skill content
               </summary>
               <pre className={`${PANEL} mt-1`}>{item.attached}</pre>
@@ -345,8 +349,8 @@ function ToolRow({
 function ApprovalNote({ item }: { item: ToolItem }) {
   if (item.note === undefined) return null;
   return (
-    <div className="voice-prose mr-2 ml-9 pb-1 text-sm">
-      <span className="text-muted-foreground voice-ui text-xs">Note</span>
+    <div className="mr-2 ml-9 pb-1 text-sm voice-prose">
+      <span className="text-xs voice-ui text-muted-foreground">Note</span>
       <Markdown text={item.note} />
     </div>
   );
@@ -355,12 +359,12 @@ function ApprovalNote({ item }: { item: ToolItem }) {
 /** The message that woke Claude after background tasks were stopped, shown as a tool row. */
 function WakeRow({ stops, pending }: { stops: readonly string[]; pending: boolean }) {
   return (
-    <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>
-      <span className="voice-code text-primary w-7 shrink-0 text-xs">
+    <div className={`${TOOL_SUMMARY} cursor-default border-l-2 border-ring text-sm`}>
+      <span className="w-7 shrink-0 text-xs voice-code text-primary">
         {pending ? <Dots /> : "↻"}
       </span>
-      <span className="voice-ui shrink-0">Wake</span>
-      <span className="voice-code text-muted-foreground min-w-0 truncate">
+      <span className="shrink-0 voice-ui">Wake</span>
+      <span className="min-w-0 truncate voice-code text-muted-foreground">
         Stopped: {stops.join("; ")}
       </span>
     </div>
@@ -378,11 +382,11 @@ function TaskEndRow({ item }: { item: Extract<Item, { kind: "task_end" }> }) {
   const mark = TASK_END_MARK[item.status];
   const outputFile = item.outputFile;
   return (
-    <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
+    <details className="group rounded-r-[5px] border-l-2 border-ring text-sm open:bg-muted open:pb-2">
       <summary className={TOOL_SUMMARY}>
-        <span className={`voice-code w-7 shrink-0 text-xs ${mark.className}`}>{mark.text}</span>
-        <span className="voice-ui shrink-0">Background</span>
-        <span className="voice-code text-muted-foreground min-w-0 truncate">{item.summary}</span>
+        <span className={`w-7 shrink-0 text-xs voice-code ${mark.className}`}>{mark.text}</span>
+        <span className="shrink-0 voice-ui">Background</span>
+        <span className="min-w-0 truncate voice-code text-muted-foreground">{item.summary}</span>
       </summary>
       <div className="mt-1 mr-2 ml-9 space-y-2">
         {outputFile !== null && (
@@ -392,7 +396,7 @@ function TaskEndRow({ item }: { item: Extract<Item, { kind: "task_end" }> }) {
               changeExplorer((state) => openFileInLastFree(state, outputFile));
               navigate({ kind: "files" });
             }}
-            className="text-primary voice-ui rounded-[5px] border px-2 py-0.5 text-xs"
+            className="rounded-[5px] border px-2 py-0.5 text-xs voice-ui text-primary"
           >
             Open output
           </button>
@@ -408,25 +412,25 @@ function DiffRow({ item, diff, stamp }: { item: ToolItem; diff: FileDiff; stamp:
   const [open, setOpen] = useState(true);
   const timing = toolTiming(item);
   return (
-    <div className="border-ring rounded-r-[5px] border-l-2 text-sm">
+    <div className="rounded-r-[5px] border-l-2 border-ring text-sm">
       <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary className={TOOL_SUMMARY}>
           <StatusMark status={item.status} />
-          <span className="voice-code min-w-0 truncate">
+          <span className="min-w-0 truncate voice-code">
             <span className="voice-ui">{diff.verb}</span>({diff.path})
           </span>
           {stamp !== null && <span className={`${STAMP} ml-auto shrink-0 pl-2`}>{stamp}</span>}
         </summary>
         <div className="mt-0.5 mr-2 ml-2 space-y-1 pb-1">
           <div className="flex items-baseline gap-2 pl-7">
-            <span className="text-muted-foreground voice-ui text-xs">
+            <span className="text-xs voice-ui text-muted-foreground">
               &#x2514; {changeSummary(diff.added, diff.removed)}
             </span>
             {timing !== null && <span className={`${STAMP} ml-auto`}>{timing}</span>}
           </div>
           <DiffBlock diff={diff} />
           <details className="space-y-2">
-            <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">raw</summary>
+            <summary className="cursor-pointer text-xs voice-ui text-muted-foreground">raw</summary>
             <div className="mt-1 space-y-2">
               <ToolOutput item={item} />
               <ToolInput item={item} />
@@ -486,7 +490,7 @@ function BubbleBody({
   return (
     <>
       {raw ? (
-        <pre className="voice-code text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <pre className="text-sm voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
           {text}
         </pre>
       ) : (
@@ -501,11 +505,15 @@ function BubbleBody({
               type="button"
               aria-pressed={raw}
               onClick={() => setRaw((on) => !on)}
-              className="hover:text-foreground cursor-pointer"
+              className="cursor-pointer hover:text-foreground"
             >
               {raw ? "[see rendered]" : "[see raw]"}
             </button>
-            <button type="button" onClick={copyShown} className="hover:text-foreground cursor-pointer">
+            <button
+              type="button"
+              onClick={copyShown}
+              className="cursor-pointer hover:text-foreground"
+            >
               {copy === "copied" ? "[copied]" : copy === "failed" ? "[copy failed]" : "[copy]"}
             </button>
           </div>
@@ -528,18 +536,18 @@ function ChangesRow({ item }: { item: Extract<Item, { kind: "changes" }> }) {
   const files = item.files === 1 ? "1 file" : `${item.files} files`;
   const body = (
     <>
-      <span className="voice-code text-primary w-7 shrink-0 text-xs">±</span>
-      <span className="voice-ui shrink-0">Changed {files}</span>
+      <span className="w-7 shrink-0 text-xs voice-code text-primary">±</span>
+      <span className="shrink-0 voice-ui">Changed {files}</span>
       <Counts file={item} />
     </>
   );
   return openDiff === null ? (
-    <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>{body}</div>
+    <div className={`${TOOL_SUMMARY} cursor-default border-l-2 border-ring text-sm`}>{body}</div>
   ) : (
     <button
       type="button"
       onClick={openDiff}
-      className={`${TOOL_SUMMARY} border-ring w-full border-l-2 text-left text-sm`}
+      className={`${TOOL_SUMMARY} w-full border-l-2 border-ring text-left text-sm`}
     >
       {body}
     </button>
@@ -636,13 +644,13 @@ const ItemView = memo(function ItemView({
             />
           </UserBubble>
           {item.relayed === true && (
-            <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
+            <div className="px-1 text-right text-xs voice-ui text-muted-foreground">
               via main agent
             </div>
           )}
           {label !== null && (
             <div
-              className={`text-muted-foreground voice-ui px-1 text-xs ${item.delivery === "handled" ? "text-left" : "text-right"}`}
+              className={`px-1 text-xs voice-ui text-muted-foreground ${item.delivery === "handled" ? "text-left" : "text-right"}`}
             >
               {label}
             </div>
@@ -653,7 +661,7 @@ const ItemView = memo(function ItemView({
     case "claude":
       return (
         <div
-          className={`bg-bubble-claude border-ring voice-prose mr-16 border-l-2 ${BUBBLE} rounded-l-none ${filesRoom(item.attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
+          className={`mr-16 border-l-2 border-ring bg-bubble-claude voice-prose ${BUBBLE} rounded-l-none ${filesRoom(item.attachments)} ${glow === null ? "" : GLOW_CLASS[glow]}`}
         >
           <BubbleBody
             text={item.text}
@@ -669,15 +677,15 @@ const ItemView = memo(function ItemView({
     case "thinking":
       if (item.text === "") {
         return thinkingNow ? (
-          <div className="text-muted-foreground voice-ui px-1 text-xs">
+          <div className="px-1 text-xs voice-ui text-muted-foreground">
             thinking
             <Dots />
           </div>
         ) : null;
       }
       return (
-        <details className="text-muted-foreground px-1 text-xs">
-          <summary className="voice-ui cursor-pointer">
+        <details className="px-1 text-xs text-muted-foreground">
+          <summary className="cursor-pointer voice-ui">
             {thinkingNow ? (
               <>
                 thinking
@@ -687,7 +695,7 @@ const ItemView = memo(function ItemView({
               "thought"
             )}
           </summary>
-          <div className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{item.text}</div>
+          <div className="mt-1 [overflow-wrap:anywhere] whitespace-pre-wrap">{item.text}</div>
         </details>
       );
     case "tool":
@@ -702,11 +710,11 @@ const ItemView = memo(function ItemView({
     case "notice": {
       const tone = item.tone === "error" ? "text-destructive" : "text-muted-foreground";
       return item.detail === null ? (
-        <div className={`voice-ui px-1 text-center text-xs ${tone}`}>{item.text}</div>
+        <div className={`px-1 text-center text-xs voice-ui ${tone}`}>{item.text}</div>
       ) : (
         <details className={`px-1 text-xs ${tone}`}>
-          <summary className="voice-ui cursor-pointer text-center">{item.text}</summary>
-          <pre className="bg-muted mt-1 max-h-60 overflow-auto rounded-[5px] p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+          <summary className="cursor-pointer text-center voice-ui">{item.text}</summary>
+          <pre className="mt-1 max-h-60 overflow-auto rounded-[5px] bg-muted p-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
             {item.detail}
           </pre>
         </details>
@@ -714,13 +722,13 @@ const ItemView = memo(function ItemView({
     }
     case "agent":
       return (
-        <div className={`${TOOL_SUMMARY} border-ring cursor-default border-l-2 text-sm`}>
-          <span className="voice-code text-primary w-7 shrink-0 text-xs">&#x2192;</span>
-          <span className="voice-ui min-w-0 truncate">Agent created: {item.name}</span>
+        <div className={`${TOOL_SUMMARY} cursor-default border-l-2 border-ring text-sm`}>
+          <span className="w-7 shrink-0 text-xs voice-code text-primary">&#x2192;</span>
+          <span className="min-w-0 truncate voice-ui">Agent created: {item.name}</span>
           <button
             type="button"
             onClick={() => onOpen(item.toolUseId)}
-            className="text-primary voice-ui ml-auto shrink-0 rounded-[5px] border px-2 text-xs"
+            className="ml-auto shrink-0 rounded-[5px] border px-2 text-xs voice-ui text-primary"
           >
             Open
           </button>
@@ -732,23 +740,23 @@ const ItemView = memo(function ItemView({
       return <ChangesRow item={item} />;
     case "brief":
       return (
-        <details className="group open:bg-muted border-ring rounded-r-[5px] border-l-2 text-sm open:pb-2">
+        <details className="group rounded-r-[5px] border-l-2 border-ring text-sm open:bg-muted open:pb-2">
           <summary className={TOOL_SUMMARY}>
-            <span className="voice-code text-muted-foreground w-7 shrink-0 text-xs">&#x2190;</span>
-            <span className="voice-ui shrink-0">Brief</span>
-            <span className="voice-code text-muted-foreground min-w-0 truncate">{item.text}</span>
+            <span className="w-7 shrink-0 text-xs voice-code text-muted-foreground">&#x2190;</span>
+            <span className="shrink-0 voice-ui">Brief</span>
+            <span className="min-w-0 truncate voice-code text-muted-foreground">{item.text}</span>
           </summary>
           <pre className={`${PANEL} mt-1 mr-2 ml-9`}>{item.text}</pre>
         </details>
       );
     case "relay_failed":
       return (
-        <div className="text-destructive voice-ui flex flex-wrap items-baseline justify-center gap-2 px-1 text-xs">
+        <div className="flex flex-wrap items-baseline justify-center gap-2 px-1 text-xs voice-ui text-destructive">
           <span>{relayFailureText(item.reason)}</span>
           <button
             type="button"
             onClick={() => onOpen(null)}
-            className="border-destructive rounded-[5px] border px-2"
+            className="rounded-[5px] border border-destructive px-2"
           >
             Go to main discussion
           </button>
@@ -789,11 +797,15 @@ function PendingView({
         <Markdown text={pending.text} />
         <BubbleFiles paths={pending.attachments} side="user" />
       </UserBubble>
-      <div className="voice-ui flex justify-end gap-3 text-xs">
+      <div className="flex justify-end gap-3 text-xs voice-ui">
         {pending.status === "failed" ? (
           <>
             <span className="text-destructive">{pending.error ?? "Not sent"}</span>
-            <button type="button" className="text-primary underline" onClick={() => onRetry(pending)}>
+            <button
+              type="button"
+              className="text-primary underline"
+              onClick={() => onRetry(pending)}
+            >
               retry
             </button>
             <button
@@ -866,7 +878,7 @@ function HeldView({
           <BubbleFiles paths={held.attachments} side="user" />
         </UserBubble>
       </div>
-      <div className="text-muted-foreground voice-ui px-1 text-right text-xs">
+      <div className="px-1 text-right text-xs voice-ui text-muted-foreground">
         {editing ? "editing in the composer" : HELD_TAG[held.mode]}
       </div>
       {open && !editing && (
@@ -874,7 +886,7 @@ function HeldView({
           <button
             type="button"
             onClick={() => actions.onSendNow(held)}
-            className={`${HELD_ACTION} bg-primary text-primary-foreground border-primary`}
+            className={`${HELD_ACTION} border-primary bg-primary text-primary-foreground`}
           >
             Send now
           </button>
@@ -895,7 +907,7 @@ function HeldView({
           <button
             type="button"
             onClick={() => actions.onDrop(held)}
-            className={`${HELD_ACTION} bg-card hover:bg-muted border-destructive text-destructive`}
+            className={`${HELD_ACTION} border-destructive bg-card text-destructive hover:bg-muted`}
           >
             Delete
           </button>
@@ -905,13 +917,7 @@ function HeldView({
   );
 }
 
-function HeldList({
-  held,
-  actions,
-}: {
-  held: readonly HeldMessage[];
-  actions: HeldActions;
-}) {
+function HeldList({ held, actions }: { held: readonly HeldMessage[]; actions: HeldActions }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
@@ -1099,8 +1105,7 @@ export function TranscriptView({
   const onScroll = useCallback(() => {
     const element = scroller.current;
     if (element === null) return;
-    const bottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_SLACK;
+    const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_SLACK;
     atBottom.current = bottom;
     fromBottom.current = element.scrollHeight - element.scrollTop;
     updateJump();
@@ -1194,8 +1199,7 @@ export function TranscriptView({
     const message = lastMessageElement();
     if (element === null || message === null) return;
     atBottom.current = false;
-    element.scrollTop +=
-      message.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    element.scrollTop += message.getBoundingClientRect().top - element.getBoundingClientRect().top;
     const key = lastMessage.current;
     if (key !== null) setGlow({ key, phase: "on" });
   }, [lastMessageElement]);
@@ -1209,11 +1213,7 @@ export function TranscriptView({
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div
-        ref={scroller}
-        onScroll={onScroll}
-        className="h-full overflow-y-auto overscroll-contain"
-      >
+      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain">
         <div
           ref={content}
           onClickCapture={onSummaryClick}
@@ -1221,13 +1221,13 @@ export function TranscriptView({
           className={`mx-auto max-w-5xl space-y-2 px-3 pt-4 select-text ${jumpButton === null ? "pb-4" : "pb-12"}`}
         >
           {items.length === 0 && pending.length === 0 && held.length === 0 && (
-            <p className="text-muted-foreground voice-ui text-center text-sm">
+            <p className="text-center text-sm voice-ui text-muted-foreground">
               {loading ? "Loading..." : "No messages yet."}
             </p>
           )}
           {items.length > 0 && (
             // One fixed height whatever it says, so it never shifts the view.
-            <div className="text-muted-foreground voice-ui flex h-6 items-center justify-center text-xs">
+            <div className="flex h-6 items-center justify-center text-xs voice-ui text-muted-foreground">
               {beginning === "loaded"
                 ? "Beginning of discussion"
                 : request === "in_flight"
@@ -1236,38 +1236,45 @@ export function TranscriptView({
             </div>
           )}
           <OpenAttachment.Provider value={onOpenAttachment}>
-          <LatestHashes.Provider value={attachedHashes}>
-          <OpenDiff.Provider value={onOpenDiff}>
-          <StopToolTask.Provider value={onStopTool}>
-            {items.map((item, index) => (
-              <ItemView
-                key={item.key}
-                item={item}
-                onOpen={onOpen}
-                last={index === lastUser && pending.length === 0}
-                now={now}
-                toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
-                awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
-                taskId={
-                  item.kind === "tool" && item.status === "running"
-                    ? (toolTasks.get(item.toolUseId) ?? null)
-                    : null
-                }
-                thinkingNow={item.kind === "thinking" && turnOpen && index === items.length - 1}
-                glow={glow?.key === item.key ? glow.phase : null}
-              />
-            ))}
-            {pending.map((send) => (
-              <PendingView key={send.id} pending={send} onRetry={onRetry} onDismiss={onDismiss} />
-            ))}
-          </StopToolTask.Provider>
-          </OpenDiff.Provider>
-          </LatestHashes.Provider>
+            <LatestHashes.Provider value={attachedHashes}>
+              <OpenDiff.Provider value={onOpenDiff}>
+                <StopToolTask.Provider value={onStopTool}>
+                  {items.map((item, index) => (
+                    <ItemView
+                      key={item.key}
+                      item={item}
+                      onOpen={onOpen}
+                      last={index === lastUser && pending.length === 0}
+                      now={now}
+                      toolTime={item.kind === "tool" && toolTimeVisible(items, index)}
+                      awaiting={item.kind === "tool" && awaiting.has(item.toolUseId)}
+                      taskId={
+                        item.kind === "tool" && item.status === "running"
+                          ? (toolTasks.get(item.toolUseId) ?? null)
+                          : null
+                      }
+                      thinkingNow={
+                        item.kind === "thinking" && turnOpen && index === items.length - 1
+                      }
+                      glow={glow?.key === item.key ? glow.phase : null}
+                    />
+                  ))}
+                  {pending.map((send) => (
+                    <PendingView
+                      key={send.id}
+                      pending={send}
+                      onRetry={onRetry}
+                      onDismiss={onDismiss}
+                    />
+                  ))}
+                </StopToolTask.Provider>
+              </OpenDiff.Provider>
+            </LatestHashes.Provider>
           </OpenAttachment.Provider>
           {pending.length === 0 && quietWork(items, turnOpen) && (
             <div
               aria-label="Claude is working"
-              className="text-muted-foreground voice-ui px-1 text-sm leading-none"
+              className="px-1 text-sm leading-none voice-ui text-muted-foreground"
             >
               <Dots />
             </div>
@@ -1287,7 +1294,7 @@ export function TranscriptView({
             <button
               type="button"
               onClick={jumpButton === "latest" ? jump : jumpToLastMessage}
-              className="bg-primary text-primary-foreground voice-ui pointer-events-auto rounded-[5px] px-3 py-1.5 text-xs shadow-md"
+              className="pointer-events-auto rounded-[5px] bg-primary px-3 py-1.5 text-xs voice-ui text-primary-foreground shadow-md"
             >
               {jumpButton === "latest" ? <>latest &darr;</> : <>&uarr; Last message</>}
             </button>

@@ -76,7 +76,12 @@ export function parseTaskNotification(
   const status = field("status");
   if (summary === null || status === null) return null;
   return {
-    status: status === "completed" ? "ok" : status === "failed" || status === "error" ? "error" : "stopped",
+    status:
+      status === "completed"
+        ? "ok"
+        : status === "failed" || status === "error"
+          ? "error"
+          : "stopped",
     summary,
     outputFile: field("output-file"),
   };
@@ -440,7 +445,10 @@ const SKILL_TOOL = "Skill";
  * vigie's attach tool: its effect shows as chips on the reply, so its row is hidden.
  * History recorded before the rename names it after the `vigie2` server.
  */
-const SET_ATTACHMENTS_TOOLS = new Set(["mcp__vigie__set_attachments", "mcp__vigie2__set_attachments"]);
+const SET_ATTACHMENTS_TOOLS = new Set([
+  "mcp__vigie__set_attachments",
+  "mcp__vigie2__set_attachments",
+]);
 
 const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
@@ -574,7 +582,10 @@ export function toolDisplayName(name: string): string {
   const parts = name.split("__");
   const [prefix, server, ...rest] = parts;
   if (prefix !== "mcp" || server === undefined || server === "" || rest.length === 0) return name;
-  const words = rest.join("_").split(/[_-]+/).filter((word) => word !== "");
+  const words = rest
+    .join("_")
+    .split(/[_-]+/)
+    .filter((word) => word !== "");
   if (words.length === 0) return name;
   const tool = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
   return `${tool} (${server})`;
@@ -777,9 +788,10 @@ class Draft {
       if (task.prompt !== null) this.scoped(task.toolUseId).brief(task.prompt, key);
       return;
     }
-    const id = task.toolUseId !== null && this.agents.has(task.toolUseId)
-      ? task.toolUseId
-      : this.agentOfTask(task.taskId);
+    const id =
+      task.toolUseId !== null && this.agents.has(task.toolUseId)
+        ? task.toolUseId
+        : this.agentOfTask(task.taskId);
     if (id === null) return;
     this.touchAgent(id);
     const agent = this.agents.get(id);
@@ -1150,7 +1162,10 @@ class Draft {
           this.terminalCommands = line.terminalCommands;
         }
         // History recorded before `permission_mode` host events only has these.
-        if ((line.subtype === "init" || line.subtype === "status") && line.permissionMode !== null) {
+        if (
+          (line.subtype === "init" || line.subtype === "status") &&
+          line.permissionMode !== null
+        ) {
           this.permissionMode = line.permissionMode;
         }
         return;
@@ -1328,10 +1343,7 @@ class Draft {
   }
 
   /** Puts `paths` on the last Claude text since the last user message; dropped when there is none. */
-  private attachToReply(
-    paths: readonly string[],
-    hashes: Readonly<Record<string, string>>,
-  ): void {
+  private attachToReply(paths: readonly string[], hashes: Readonly<Record<string, string>>): void {
     for (let index = this.items.length - 1; index >= 0; index -= 1) {
       const item = this.items[index];
       if (item?.kind === "user") return;
@@ -1342,10 +1354,7 @@ class Draft {
     }
   }
 
-  private toolResult(
-    block: Extract<ContentBlock, { type: "tool_result" }>,
-    result: unknown,
-  ): void {
+  private toolResult(block: Extract<ContentBlock, { type: "tool_result" }>, result: unknown): void {
     const index = this.tools.get(block.toolUseId);
     if (index === undefined) return;
     const item = this.items[index];
@@ -1371,7 +1380,13 @@ class Draft {
           if (index !== undefined && item?.kind === "claude") {
             this.items[index] = { ...item, messageId, text: block.text, streaming: false };
           } else {
-            this.add({ kind: "claude", key: blockKey, messageId, text: block.text, streaming: false });
+            this.add({
+              kind: "claude",
+              key: blockKey,
+              messageId,
+              text: block.text,
+              streaming: false,
+            });
           }
           return;
         }

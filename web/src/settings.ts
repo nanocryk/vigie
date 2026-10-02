@@ -30,7 +30,10 @@ export function sameSettings(a: Settings, b: Settings): boolean {
   return a.model === b.model && a.effort === b.effort;
 }
 
-export function modelEntry(models: readonly ModelChoice[], model: string | null): ModelChoice | null {
+export function modelEntry(
+  models: readonly ModelChoice[],
+  model: string | null,
+): ModelChoice | null {
   return models.find((entry) => entry.value === (model ?? DEFAULT_MODEL)) ?? null;
 }
 
@@ -53,7 +56,9 @@ function shortName(entry: ModelChoice): string {
  */
 export function appliedModelName(models: readonly ModelChoice[], applied: string): string {
   const id = applied.replace(/\[[^\]]*\]$/, "");
-  const entry = models.find((model) => model.value !== DEFAULT_MODEL && model.resolved_model === id);
+  const entry = models.find(
+    (model) => model.value !== DEFAULT_MODEL && model.resolved_model === id,
+  );
   return entry === undefined ? applied : shortName(entry);
 }
 
@@ -135,7 +140,11 @@ export function defaultEffort(
  * The CLI's default entry stores no model. A model without the picked effort
  * level drops it, back to the CLI's pick.
  */
-export function pickModel(picks: Settings, value: string, models: readonly ModelChoice[]): Settings {
+export function pickModel(
+  picks: Settings,
+  value: string,
+  models: readonly ModelChoice[],
+): Settings {
   const model = value === DEFAULT_MODEL ? null : value;
   const levels = effortLevels(models, model);
   const effort = picks.effort !== null && levels.includes(picks.effort) ? picks.effort : null;

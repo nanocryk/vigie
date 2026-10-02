@@ -34,7 +34,7 @@ export function RestartBanner({ session }: { session: SessionView | null }) {
         type="button"
         onClick={() => dismissAdvice(session.id, tokens)}
         title={`${Math.round(advice.staleShare * 100)}% of the context is older than the last exchanges a restart keeps. Tap to hide until the context is rebuilt.`}
-        className="bg-primary text-primary-foreground voice-ui flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-xs"
+        className="flex w-full cursor-pointer items-center gap-2 bg-primary px-3 py-1.5 text-xs voice-ui text-primary-foreground"
       >
         <span className="flex-1 text-center">
           Task done? Restarting should make each message {formatRatio(advice.ratio)} cheaper.

@@ -68,7 +68,9 @@ describe("labels and levels", () => {
     expect(modelTabLabel(MODELS, null, null, false, shared)).toBe("Opus 5.5");
     expect(modelTabLabel([], null, null, false, shared)).toBe(shared);
     expect(modelTabLabel(MODELS, null, "haiku", false, shared)).toBe("Haiku 4.5");
-    expect(modelTabLabel(MODELS, "claude-haiku-4-5-20251001", null, false, shared)).toBe("Haiku 4.5");
+    expect(modelTabLabel(MODELS, "claude-haiku-4-5-20251001", null, false, shared)).toBe(
+      "Haiku 4.5",
+    );
     expect(modelTabLabel(MODELS, null, null, true, "claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
     expect(effortTabLabel(null, null, false, "medium")).toBe("medium effort");
     expect(effortTabLabel(null, "max", false, "medium")).toBe("max effort");
@@ -120,7 +122,9 @@ describe("firstButton", () => {
   it("resumes for free when nothing changed, else rewarms", () => {
     expect(firstButton(current, current)).toBe("resume");
     expect(firstButton({ ...current, effort: "max" }, current)).toBe("rewarm");
-    expect(firstButton({ model: null, effort: null }, { model: null, effort: null })).toBe("resume");
+    expect(firstButton({ model: null, effort: null }, { model: null, effort: null })).toBe(
+      "resume",
+    );
   });
 });
 
@@ -165,10 +169,14 @@ describe("appliedOutcome", () => {
   const restarting: SettingsFlow = { kind: "applying", picks, choice: "blank" };
 
   it("waits until the session list shows the picks", () => {
-    expect(appliedOutcome(rewarming, { ...current, settingsChangedAt: 5 })).toEqual({ done: false });
-    expect(appliedOutcome({ kind: "choosing", picks }, { ...picks, settingsChangedAt: 5 })).toEqual({
+    expect(appliedOutcome(rewarming, { ...current, settingsChangedAt: 5 })).toEqual({
       done: false,
     });
+    expect(appliedOutcome({ kind: "choosing", picks }, { ...picks, settingsChangedAt: 5 })).toEqual(
+      {
+        done: false,
+      },
+    );
   });
 
   it("answers the spell of the change with the rewarm", () => {

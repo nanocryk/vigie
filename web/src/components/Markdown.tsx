@@ -54,7 +54,9 @@ function InlineCode({ node, children }: { children?: ReactNode } & ExtraProps) {
   const links = useContext(FileLinksContext);
   const text = node === undefined ? "" : textOf(node);
   const ref = useMemo(() => (links === null ? null : parseFileRef(text)), [links, text]);
-  const kind = usePathKind(ref === null || links === null ? null : resolveRefPath(ref.path, links.cwd));
+  const kind = usePathKind(
+    ref === null || links === null ? null : resolveRefPath(ref.path, links.cwd),
+  );
   if (links === null || ref === null || kind === null) return <code>{children}</code>;
   const line = kind.kind === "file" ? ref.line : null;
   // An anchor rather than a button, so a long path wraps like the text around it.

@@ -24,22 +24,28 @@ function CardBody({ card }: { card: CommandCard }) {
   return (
     <>
       <div className="flex items-baseline gap-2">
-        <span className="voice-heading text-sm">{card.title ?? `/${card.name}`}</span>
+        <span className="text-sm voice-heading">{card.title ?? `/${card.name}`}</span>
         {card.argumentHint !== "" && (
-          <span className="text-muted-foreground voice-code truncate text-xs">
+          <span className="truncate text-xs voice-code text-muted-foreground">
             {card.argumentHint}
           </span>
         )}
       </div>
       {card.description !== "" && (
-        <p className="text-muted-foreground voice-ui line-clamp-2 text-xs">{card.description}</p>
+        <p className="line-clamp-2 text-xs voice-ui text-muted-foreground">{card.description}</p>
       )}
     </>
   );
 }
 
 /** Used by two swipes right on touch screens, or by its Use button pressed twice. */
-function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: CommandCard) => void }) {
+function CommandCardView({
+  card,
+  onUse,
+}: {
+  card: CommandCard;
+  onUse: (card: CommandCard) => void;
+}) {
   const { surface, view, press } = useSwipe(
     { dangerous: false, sides: USE_SIDES, swipes: 2, presses: 2 },
     () => onUse(card),
@@ -52,7 +58,7 @@ function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: Com
         {coarse && (
           <div
             aria-hidden
-            className="voice-ui absolute inset-0 flex items-center justify-start rounded-[5px] px-4 text-sm text-black"
+            className="absolute inset-0 flex items-center justify-start rounded-[5px] px-4 text-sm voice-ui text-black"
             style={{ background: reveal(view.lean, armed) }}
           >
             Use
@@ -60,7 +66,7 @@ function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: Com
         )}
         <div
           ref={coarse ? surface : undefined}
-          className={`bg-card relative w-full touch-pan-y rounded-[5px] border px-3 py-2 select-none ${armed ? "border-swipe-accept-strong" : ""} ${card.own !== null ? "border-l-primary border-l-4" : ""}`}
+          className={`relative w-full touch-pan-y rounded-[5px] border bg-card px-3 py-2 select-none ${armed ? "border-swipe-accept-strong" : ""} ${card.own !== null ? "border-l-4 border-l-primary" : ""}`}
           style={{
             transform: `translateX(${view.offset}px)`,
             transition: view.dragging ? "none" : SPRING_BACK,
@@ -69,7 +75,7 @@ function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: Com
           <CardBody card={card} />
         </div>
         {coarse && armed && (
-          <span className="bg-card voice-heading text-swipe-accept-strong pointer-events-none absolute top-1.5 right-2 rounded-[5px] px-2 py-0.5 text-sm shadow-sm">
+          <span className="pointer-events-none absolute top-1.5 right-2 rounded-[5px] bg-card px-2 py-0.5 text-sm voice-heading text-swipe-accept-strong shadow-sm">
             Use?
           </span>
         )}
@@ -79,7 +85,7 @@ function CommandCardView({ card, onUse }: { card: CommandCard; onUse: (card: Com
           type="button"
           disabled={view.fired !== null}
           onClick={() => press("right")}
-          className={`voice-ui shrink-0 rounded-[5px] border px-3 text-xs disabled:opacity-50 ${armed ? "bg-swipe-accept-strong text-card border-swipe-accept-strong" : "border-swipe-accept-strong text-swipe-accept-strong hover:bg-muted"}`}
+          className={`shrink-0 rounded-[5px] border px-3 text-xs voice-ui disabled:opacity-50 ${armed ? "border-swipe-accept-strong bg-swipe-accept-strong text-card" : "border-swipe-accept-strong text-swipe-accept-strong hover:bg-muted"}`}
         >
           {armed ? "Use?" : "Use"}
         </button>
@@ -103,33 +109,37 @@ export function CommandsPanel({
 }) {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 px-3">
-      <div className="bg-background pointer-events-auto mx-auto flex max-h-[60dvh] max-w-5xl flex-col rounded-[5px] border shadow-lg">
+      <div className="pointer-events-auto mx-auto flex max-h-[60dvh] max-w-5xl flex-col rounded-[5px] border bg-background shadow-lg">
         <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-          <span className="voice-heading text-sm">
+          <span className="text-sm voice-heading">
             {argument === null ? "Commands" : "Arguments"}
           </span>
-          <span className="text-muted-foreground voice-ui truncate text-xs">
+          <span className="truncate text-xs voice-ui text-muted-foreground">
             {argument === null && coarsePointer() ? "swipe right twice to use ›" : ""}
           </span>
           <button
             type="button"
             onClick={onClose}
-            className="voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-0.5 text-xs"
+            className="shrink-0 rounded-[5px] px-2 py-0.5 text-xs voice-ui hover:bg-muted"
           >
             Close
           </button>
         </div>
         <div className="min-h-0 overflow-y-auto overscroll-contain p-2">
           {argument !== null ? (
-            <div className="bg-card rounded-[5px] border px-3 py-2">
+            <div className="rounded-[5px] border bg-card px-3 py-2">
               <CardBody card={argument} />
             </div>
           ) : cards.length === 0 ? (
-            <p className="text-muted-foreground voice-ui px-1 py-2 text-sm">No matching command.</p>
+            <p className="px-1 py-2 text-sm voice-ui text-muted-foreground">No matching command.</p>
           ) : (
             <ul className="space-y-1.5">
               {cards.map((card) => (
-                <CommandCardView key={`${card.own ?? "claude"}-${card.name}`} card={card} onUse={onUse} />
+                <CommandCardView
+                  key={`${card.own ?? "claude"}-${card.name}`}
+                  card={card}
+                  onUse={onUse}
+                />
               ))}
             </ul>
           )}
@@ -180,7 +190,7 @@ export function CommandField({
   return (
     <div className="mx-auto max-w-5xl space-y-1">
       {draftKept && (
-        <div className="text-muted-foreground voice-ui text-xs">
+        <div className="text-xs voice-ui text-muted-foreground">
           Your draft stays in the composer; the command goes alone.
         </div>
       )}
@@ -195,14 +205,10 @@ export function CommandField({
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint={browsing ? "done" : "send"}
-          className="bg-card focus:ring-ring voice-code min-h-14 min-w-0 flex-1 rounded-[5px] border px-3 text-sm outline-none focus:ring-2"
+          className="min-h-14 min-w-0 flex-1 rounded-[5px] border bg-card px-3 text-sm voice-code outline-none focus:ring-2 focus:ring-ring"
         />
         {browsing ? (
-          <button
-            type="button"
-            onClick={onClose}
-            className={`bg-card border ${ACTION}`}
-          >
+          <button type="button" onClick={onClose} className={`border bg-card ${ACTION}`}>
             Close
           </button>
         ) : (

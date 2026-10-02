@@ -93,7 +93,7 @@ function SettingEntry({
           <button
             type="button"
             onClick={control.onStop}
-            className={`${CHIP} border-destructive text-destructive bg-card w-full text-left`}
+            className={`${CHIP} w-full border-destructive bg-card text-left text-destructive`}
           >
             {control.stopLabel}
           </button>
@@ -102,7 +102,7 @@ function SettingEntry({
       {expanded && picking && (
         <div role="listbox" className="flex flex-col gap-1 px-4 pb-3">
           {control.options.length === 0 ? (
-            <span className="text-muted-foreground voice-ui text-sm">None for this model.</span>
+            <span className="text-sm voice-ui text-muted-foreground">None for this model.</span>
           ) : (
             control.options.map((option) => (
               <button
@@ -114,7 +114,7 @@ function SettingEntry({
                   control.onPick(option.value);
                   onPicked();
                 }}
-                className={`${CHIP} text-left ${option.value === control.selected ? "bg-primary text-primary-foreground border-primary" : "bg-card hover:bg-muted"}`}
+                className={`${CHIP} text-left ${option.value === control.selected ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
               >
                 {option.label}
               </button>
@@ -192,12 +192,12 @@ function NameForm({ control, onDone }: { control: NameControl; onDone: () => voi
             onDone();
           }}
           aria-label="Session name"
-          className="voice-ui bg-background min-w-0 flex-1 rounded-[5px] border px-2 py-1 text-base"
+          className="min-w-0 flex-1 rounded-[5px] border bg-background px-2 py-1 text-base voice-ui"
         />
         <button
           type="submit"
           disabled={busy}
-          className={`${CHIP} bg-primary text-primary-foreground border-primary`}
+          className={`${CHIP} border-primary bg-primary text-primary-foreground`}
         >
           Save
         </button>
@@ -205,7 +205,7 @@ function NameForm({ control, onDone }: { control: NameControl; onDone: () => voi
           Cancel
         </button>
       </div>
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </form>
   );
 }
@@ -249,7 +249,9 @@ function AgentsEntry({
         onConfirm={confirm}
       />
       {notice !== null && (
-        <p className={`voice-ui px-4 pb-2 text-xs ${idle ? "text-muted-foreground" : "text-destructive"}`}>
+        <p
+          className={`px-4 pb-2 text-xs voice-ui ${idle ? "text-muted-foreground" : "text-destructive"}`}
+        >
           {notice}
         </p>
       )}
@@ -282,7 +284,7 @@ function AgentsRow({
         {swipeable && (
           <div
             aria-hidden
-            className="voice-ui absolute inset-0 flex items-center justify-end px-4 text-sm text-black"
+            className="absolute inset-0 flex items-center justify-end px-4 text-sm voice-ui text-black"
             style={{ background: reveal(view.lean, armed) }}
           >
             Stop all
@@ -298,14 +300,14 @@ function AgentsRow({
             event.preventDefault();
             onOpen();
           }}
-          className={`${ENTRY} bg-background hover:bg-muted relative touch-pan-y select-none ${armed ? "text-destructive" : ""}`}
+          className={`${ENTRY} relative touch-pan-y bg-background select-none hover:bg-muted ${armed ? "text-destructive" : ""}`}
           style={{
             transform: `translateX(${view.offset}px)`,
             transition: view.dragging ? "none" : SPRING_BACK,
           }}
         >
           <span>{armed ? "Stop all?" : "Agents"}</span>
-          <span className="text-muted-foreground truncate text-sm">{summary}</span>
+          <span className="truncate text-sm text-muted-foreground">{summary}</span>
         </div>
       </div>
       {!coarse && stoppable && (
@@ -402,7 +404,7 @@ export function SessionMenu({
         <div
           ref={root}
           role="menu"
-          className="bg-background pointer-events-auto max-h-[70dvh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-[5px] border shadow-lg"
+          className="pointer-events-auto max-h-[70dvh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-[5px] border bg-background shadow-lg"
         >
           <ul>
             {name !== null && (
@@ -440,7 +442,7 @@ export function SessionMenu({
                 </div>
               </div>
               {modeControl.error !== null && (
-                <p className="text-destructive voice-ui px-4 pb-2 text-xs">{modeControl.error}</p>
+                <p className="px-4 pb-2 text-xs voice-ui text-destructive">{modeControl.error}</p>
               )}
             </Entry>
             <SettingEntry
@@ -469,7 +471,7 @@ export function SessionMenu({
                 className={`${ENTRY} hover:bg-muted`}
               >
                 <span>Commands</span>
-                <span className="text-muted-foreground voice-code text-sm">/</span>
+                <span className="text-sm voice-code text-muted-foreground">/</span>
               </button>
             </Entry>
             <Entry>
@@ -487,10 +489,10 @@ export function SessionMenu({
                 type="button"
                 disabled={!restartEnabled}
                 onClick={onRestart}
-                className={`${ENTRY} hover:bg-muted flex-col items-start gap-0.5`}
+                className={`${ENTRY} flex-col items-start gap-0.5 hover:bg-muted`}
               >
                 <span>Restart...</span>
-                <span className="text-muted-foreground text-xs">
+                <span className="text-xs text-muted-foreground">
                   Resume as is, or start fresh with the last exchanges or with no context.
                 </span>
               </button>
@@ -500,15 +502,15 @@ export function SessionMenu({
                 type="button"
                 disabled={!revoke.enabled || revoke.busy}
                 onClick={revoke.onRevoke}
-                className={`${ENTRY} hover:bg-muted flex-col items-start gap-0.5`}
+                className={`${ENTRY} flex-col items-start gap-0.5 hover:bg-muted`}
               >
                 <span>{revoke.busy ? "Revoking..." : "Revoke all grants"}</span>
-                <span className="text-muted-foreground text-xs">
+                <span className="text-xs text-muted-foreground">
                   Restarts Claude on this session without the folders granted from asks.
                 </span>
               </button>
               {revoke.error !== null && (
-                <p className="text-destructive voice-ui px-4 pb-2 text-xs">{revoke.error}</p>
+                <p className="px-4 pb-2 text-xs voice-ui text-destructive">{revoke.error}</p>
               )}
             </Entry>
             {draft !== null && (
@@ -519,7 +521,7 @@ export function SessionMenu({
                     <button
                       type="button"
                       onClick={draft.onHold}
-                      className={`${CHIP} bg-card hover:bg-muted border-dashed`}
+                      className={`${CHIP} border-dashed bg-card hover:bg-muted`}
                     >
                       Hold
                     </button>
@@ -527,7 +529,7 @@ export function SessionMenu({
                       <button
                         type="button"
                         onClick={draft.onSendNow}
-                        className={`${CHIP} bg-primary text-primary-foreground border-primary`}
+                        className={`${CHIP} border-primary bg-primary text-primary-foreground`}
                       >
                         Send now
                       </button>
@@ -543,7 +545,8 @@ export function SessionMenu({
   );
 }
 
-const PILL = "voice-ui shrink-0 rounded-[5px] border px-2 leading-5 whitespace-nowrap disabled:opacity-60";
+const PILL =
+  "voice-ui shrink-0 rounded-[5px] border px-2 leading-5 whitespace-nowrap disabled:opacity-60";
 
 /** The thin bar's mode and model pills, each opening the menu on its entry, and the agents glance. */
 export function MenuPills({
@@ -583,7 +586,7 @@ export function MenuPills({
         {...{ [MENU_TOGGLE]: "" }}
         disabled={!enabled}
         onClick={() => onOpen("model")}
-        className={`${PILL} bg-card max-w-[40vw] min-w-0 truncate`}
+        className={`${PILL} max-w-[40vw] min-w-0 truncate bg-card`}
       >
         {modelLabel}
       </button>
@@ -591,7 +594,7 @@ export function MenuPills({
         <button
           type="button"
           onClick={onAgents}
-          className={`${PILL} bg-card border-primary text-primary`}
+          className={`${PILL} border-primary bg-card text-primary`}
         >
           {agents}
         </button>

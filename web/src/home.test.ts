@@ -54,7 +54,9 @@ describe("rowHighlight", () => {
     const all = { asks: 1, unread: "stopped", busy: true, ...lowCache } as const;
     expect(rowHighlight(session("s", all), NOW)).toBe("ask");
     expect(rowHighlight(session("s", { ...all, asks: 0 }), NOW)).toBe("stopped");
-    expect(rowHighlight(session("s", { ...all, asks: 0, unread: "finished" }), NOW)).toBe("cooling");
+    expect(rowHighlight(session("s", { ...all, asks: 0, unread: "finished" }), NOW)).toBe(
+      "cooling",
+    );
     expect(rowHighlight(session("s", { unread: "finished", busy: true }), NOW)).toBe("finished");
     expect(rowHighlight(session("s", { busy: true }), NOW)).toBe("working");
     expect(rowHighlight(session("s"), NOW)).toBeNull();

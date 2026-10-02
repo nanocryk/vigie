@@ -37,7 +37,7 @@ function StatusMark({ status }: { status: FileStatus }) {
   return (
     <span
       title={mark.label}
-      className={`voice-code w-3 shrink-0 text-center text-xs font-bold ${mark.className}`}
+      className={`w-3 shrink-0 text-center text-xs voice-code font-bold ${mark.className}`}
     >
       {mark.letter}
     </span>
@@ -46,7 +46,7 @@ function StatusMark({ status }: { status: FileStatus }) {
 
 export function Counts({ file }: { file: Pick<ChangedFile, "added" | "removed"> }) {
   return (
-    <span className="voice-code shrink-0 text-xs whitespace-nowrap">
+    <span className="shrink-0 text-xs voice-code whitespace-nowrap">
       {file.added > 0 && <span className="text-git-added">+{file.added}</span>}
       {file.added > 0 && file.removed > 0 && " "}
       {file.removed > 0 && <span className="text-git-deleted">−{file.removed}</span>}
@@ -89,8 +89,7 @@ function useCollapsed(files: readonly ChangedFile[], initial: ReadonlyMap<string
     (path: string, value: boolean) => setFlipped((current) => new Map(current).set(path, value)),
     [],
   );
-  const setAll = (value: boolean) =>
-    setFlipped(new Map(files.map((file) => [file.path, value])));
+  const setAll = (value: boolean) => setFlipped(new Map(files.map((file) => [file.path, value])));
   return { collapsed, flipped, set, setAll };
 }
 
@@ -113,7 +112,7 @@ function FileSection({
   const folder = dirName(file.path);
   return (
     <section id={fileId(file.path)} className="scroll-mt-2 rounded-[5px] border">
-      <div className="bg-card sticky top-0 z-10 flex items-center gap-2 rounded-t-[5px] border-b px-2 py-1.5">
+      <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[5px] border-b bg-card px-2 py-1.5">
         <button
           type="button"
           aria-expanded={!collapsed}
@@ -122,12 +121,12 @@ function FileSection({
         >
           <span
             aria-hidden
-            className={`text-muted-foreground w-3 shrink-0 text-xs transition-transform ${collapsed ? "" : "rotate-90"}`}
+            className={`w-3 shrink-0 text-xs text-muted-foreground transition-transform ${collapsed ? "" : "rotate-90"}`}
           >
             ▶
           </span>
           <StatusMark status={file.status} />
-          <span className="voice-code min-w-0 flex-1 truncate text-xs">
+          <span className="min-w-0 flex-1 truncate text-xs voice-code">
             {folder !== "" && <span className="text-muted-foreground">{folder}/</span>}
             {baseName(file.path)}
             {file.oldPath !== null && (
@@ -141,7 +140,7 @@ function FileSection({
             type="button"
             onClick={() => openFile(null)}
             title="Open the file"
-            className="text-muted-foreground hover:bg-muted hover:text-foreground voice-ui shrink-0 rounded-[5px] px-1.5 text-xs"
+            className="shrink-0 rounded-[5px] px-1.5 text-xs voice-ui text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             Open
           </button>
@@ -149,7 +148,7 @@ function FileSection({
       </div>
       {!collapsed &&
         (file.note !== null ? (
-          <p className="text-muted-foreground voice-ui px-3 py-2 text-xs">{file.note}</p>
+          <p className="px-3 py-2 text-xs voice-ui text-muted-foreground">{file.note}</p>
         ) : block !== null && block.hunks.length > 0 ? (
           <DiffBlock
             diff={block}
@@ -159,7 +158,7 @@ function FileSection({
             {...(file.status === "deleted" ? { onRemovedNumber: openFolder } : {})}
           />
         ) : (
-          <p className="text-muted-foreground voice-ui px-3 py-2 text-xs">
+          <p className="px-3 py-2 text-xs voice-ui text-muted-foreground">
             {file.status === "renamed"
               ? "Renamed, content unchanged."
               : file.status === "deleted"
@@ -209,7 +208,8 @@ export function DiffView({
   useEffect(
     () => () => {
       const { diff: last, flipped: lastFlipped } = latest.current;
-      if (last !== null) kept.set(keepKey, { diff: last, flipped: lastFlipped, scroll: scroll.current });
+      if (last !== null)
+        kept.set(keepKey, { diff: last, flipped: lastFlipped, scroll: scroll.current });
     },
     [keepKey],
   );
@@ -282,11 +282,11 @@ export function DiffView({
             type="button"
             onClick={close}
             aria-label="Back to the folder"
-            className="text-primary hover:bg-muted voice-ui shrink-0 rounded-[5px] px-2 py-1 text-sm"
+            className="shrink-0 rounded-[5px] px-2 py-1 text-sm voice-ui text-primary hover:bg-muted"
           >
             &lsaquo; Folder
           </button>
-          <span className="voice-ui min-w-0 flex-1 truncate text-sm font-medium" title={root}>
+          <span className="min-w-0 flex-1 truncate text-sm voice-ui font-medium" title={root}>
             Changes in {folderName(root)}
           </span>
           <button
@@ -310,27 +310,27 @@ export function DiffView({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         <div className={`${PANEL} space-y-3 p-3`}>
-          {error !== null && <p className="text-destructive voice-ui text-sm">{error}</p>}
+          {error !== null && <p className="text-sm voice-ui text-destructive">{error}</p>}
           {diff === null && error === null && (
-            <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
+            <p className="text-sm voice-ui text-muted-foreground">Loading...</p>
           )}
           {diff !== null && files.length === 0 && (
-            <p className="text-muted-foreground voice-ui py-8 text-center text-sm">
+            <p className="py-8 text-center text-sm voice-ui text-muted-foreground">
               No pending changes.
             </p>
           )}
           {files.length > 0 && (
             <>
-              <div className="voice-ui flex items-center gap-2 px-1 text-sm">
+              <div className="flex items-center gap-2 px-1 text-sm voice-ui">
                 <span>
                   {files.length} {files.length === 1 ? "file" : "files"}
                 </span>
                 <Counts file={totals} />
               </div>
-              <nav className="bg-card overflow-hidden rounded-[5px] border">
+              <nav className="overflow-hidden rounded-[5px] border bg-card">
                 {groupByFolder(files).map((group) => (
                   <div key={group.folder} className="border-t first:border-t-0">
-                    <p className="text-muted-foreground voice-code bg-muted/40 px-3 py-1 text-[0.6875rem]">
+                    <p className="bg-muted/40 px-3 py-1 text-[0.6875rem] voice-code text-muted-foreground">
                       {group.folder === "" ? "./" : `${group.folder}/`}
                     </p>
                     <ul>
@@ -339,11 +339,11 @@ export function DiffView({
                           <button
                             type="button"
                             onClick={() => jump(file)}
-                            className="hover:bg-muted flex w-full items-center gap-2 px-3 py-1.5 text-left"
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
                           >
                             <StatusMark status={file.status} />
                             <span
-                              className={`voice-code min-w-0 flex-1 truncate text-xs ${file.status === "deleted" ? "text-muted-foreground line-through" : ""}`}
+                              className={`min-w-0 flex-1 truncate text-xs voice-code ${file.status === "deleted" ? "text-muted-foreground line-through" : ""}`}
                             >
                               {baseName(file.path)}
                             </span>

@@ -39,8 +39,8 @@ function ChipFace({
     );
   }
   return (
-    <span className="voice-ui flex h-full max-w-36 items-center gap-1.5 px-2.5 text-xs">
-      <FileIcon className="text-muted-foreground size-4" />
+    <span className="flex h-full max-w-36 items-center gap-1.5 px-2.5 text-xs voice-ui">
+      <FileIcon className="size-4 text-muted-foreground" />
       <span className="truncate">{name}</span>
     </span>
   );
@@ -92,17 +92,18 @@ export function AttachmentChip({
 }) {
   const name = attachmentName(path);
   const drift = useDrift(path, hash);
-  const note = drift === "modified" ? "modified since" : drift === "deleted" ? "deleted since" : null;
+  const note =
+    drift === "modified" ? "modified since" : drift === "deleted" ? "deleted since" : null;
   return (
     <button
       type="button"
       title={note === null ? name : `${name} (${note})`}
       onClick={() => onOpen(path)}
-      className="bg-card ring-background hover:ring-ring relative flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md shadow-md ring-2 transition-shadow"
+      className="relative flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md bg-card shadow-md ring-2 ring-background transition-shadow hover:ring-ring"
     >
       <ChipFace name={name} path={path} hash={hash} size="size-11" />
       {note !== null && (
-        <span className="voice-ui absolute inset-x-0 bottom-0 bg-black/70 text-center text-[0.625rem] leading-3 text-white">
+        <span className="absolute inset-x-0 bottom-0 bg-black/70 text-center text-[0.625rem] leading-3 voice-ui text-white">
           {drift === "modified" ? "modified" : "deleted"}
         </span>
       )}
@@ -125,7 +126,7 @@ export function ComposerFiles({
         <div
           key={file.key}
           title={file.error ?? file.name}
-          className={`bg-background relative flex h-14 min-w-14 items-center justify-center overflow-hidden rounded-md border ${
+          className={`relative flex h-14 min-w-14 items-center justify-center overflow-hidden rounded-md border bg-background ${
             file.status === "failed" ? "border-destructive" : ""
           } ${file.status === "uploading" ? "animate-pulse" : ""}`}
         >
@@ -135,7 +136,7 @@ export function ComposerFiles({
             size="size-14"
           />
           {file.status === "failed" && (
-            <span className="bg-destructive voice-ui absolute bottom-0.5 left-0.5 flex size-4 items-center justify-center rounded-full text-[0.625rem] font-bold text-black">
+            <span className="absolute bottom-0.5 left-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[0.625rem] voice-ui font-bold text-black">
               !
             </span>
           )}

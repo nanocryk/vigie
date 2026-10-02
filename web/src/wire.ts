@@ -348,17 +348,11 @@ export interface PlanReview {
 
 /** `unknown` stands for a reason this client does not know. */
 export type RelayFailure =
-  | "altered"
-  | "other_recipient"
-  | "not_forwarded"
-  | "no_acknowledgement"
-  | "ended"
-  | "unknown";
+  "altered" | "other_recipient" | "not_forwarded" | "no_acknowledgement" | "ended" | "unknown";
 
 /** `send_message` is the tool use id of the SendMessage call that forwarded the text. */
 export type RelayOutcome =
-  | { kind: "faithful"; send_message: string }
-  | { kind: "failed"; reason: RelayFailure };
+  { kind: "faithful"; send_message: string } | { kind: "failed"; reason: RelayFailure };
 
 const RELAY_FAILURES: readonly RelayFailure[] = [
   "altered",
@@ -769,7 +763,7 @@ export function parseUsageSnapshot(raw: unknown, label: string): UsageSnapshot {
 /** Entries of unexpected shape are left out, as in a `catalog` event. */
 export function parseSharedCatalog(raw: unknown, label: string): SharedCatalog {
   const value = record(raw, label);
-  const list = <T,>(key: string, parse: (entry: unknown) => T | null): T[] | null => {
+  const list = <T>(key: string, parse: (entry: unknown) => T | null): T[] | null => {
     const entries = value[key];
     if (entries === undefined || entries === null) return null;
     if (!Array.isArray(entries)) fail(`${label}.${key}`, "expected an array", entries);

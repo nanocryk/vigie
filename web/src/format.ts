@@ -2,7 +2,12 @@ import type { SessionState, SessionView } from "@/wire";
 
 /** Last segment of a Windows or POSIX path. */
 export function folderName(path: string): string {
-  return path.split(/[\\/]/).filter((part) => part !== "").at(-1) ?? path;
+  return (
+    path
+      .split(/[\\/]/)
+      .filter((part) => part !== "")
+      .at(-1) ?? path
+  );
 }
 
 /** The session's name, else its folder name. */

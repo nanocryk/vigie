@@ -76,7 +76,12 @@ export function usePermissionMode(
     setPending(true);
     setError(null);
     client
-      .command({ type: "set_permission_mode", session, mode: next, client_id: client.newClientId() })
+      .command({
+        type: "set_permission_mode",
+        session,
+        mode: next,
+        client_id: client.newClientId(),
+      })
       .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setPending(false));
   };
@@ -88,7 +93,13 @@ export function usePermissionMode(
   useEffect(() => {
     if (!enabled || pending) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
+      if (
+        event.key !== "Tab" ||
+        !event.shiftKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey
+      ) {
         return;
       }
       event.preventDefault();

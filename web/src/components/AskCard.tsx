@@ -100,7 +100,8 @@ const BUTTON = "voice-ui rounded-[5px] px-4 py-2 text-sm disabled:opacity-50";
 
 const OPTION = "block w-full rounded-[5px] border px-3 py-1.5 text-left text-sm";
 
-const FIELD = "focus:ring-ring voice-ui rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2";
+const FIELD =
+  "focus:ring-ring voice-ui rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2";
 
 function optionLook(checked: boolean): string {
   return checked ? "border-primary bg-primary/10" : "bg-background";
@@ -128,13 +129,13 @@ function QuestionView({
   const label = `Other answer to: ${question.question}`;
   return (
     <fieldset className="space-y-1.5">
-      <legend className="voice-prose mb-1 text-sm">
+      <legend className="mb-1 text-sm voice-prose">
         {question.header !== null && (
-          <span className="text-muted-foreground voice-ui mr-2 text-xs">{question.header}</span>
+          <span className="mr-2 text-xs voice-ui text-muted-foreground">{question.header}</span>
         )}
         {question.question}
         {question.multiSelect && (
-          <span className="text-muted-foreground voice-ui ml-2 text-xs">(several allowed)</span>
+          <span className="ml-2 text-xs voice-ui text-muted-foreground">(several allowed)</span>
         )}
       </legend>
       {question.options.map((option) => {
@@ -150,7 +151,7 @@ function QuestionView({
           >
             <span className="voice-ui">{option.label}</span>
             {option.description !== null && (
-              <span className="text-muted-foreground block text-xs">{option.description}</span>
+              <span className="block text-xs text-muted-foreground">{option.description}</span>
             )}
           </button>
         );
@@ -162,7 +163,7 @@ function QuestionView({
               key={entry}
               className={`${OPTION} ${optionLook(true)} flex items-center justify-between gap-2`}
             >
-              <span className="voice-ui min-w-0 [overflow-wrap:anywhere]">{entry}</span>
+              <span className="min-w-0 voice-ui [overflow-wrap:anywhere]">{entry}</span>
               <button
                 type="button"
                 disabled={disabled}
@@ -170,7 +171,7 @@ function QuestionView({
                 onClick={() =>
                   onChange({ ...choice, custom: choice.custom.filter((item) => item !== entry) })
                 }
-                className="text-muted-foreground hover:text-foreground shrink-0 px-1 disabled:opacity-50"
+                className="shrink-0 px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 ✕
               </button>
@@ -188,14 +189,14 @@ function QuestionView({
               disabled={disabled}
               placeholder="Other"
               aria-label={label}
-              className={`${FIELD} bg-background min-w-0 flex-1`}
+              className={`${FIELD} min-w-0 flex-1 bg-background`}
             />
             <button
               type="button"
               disabled={disabled || choice.draft.trim() === ""}
               aria-label="Add this answer"
               onClick={() => onChange(addDraft(choice))}
-              className="voice-ui bg-background rounded-[5px] border px-3 text-base disabled:opacity-50"
+              className="rounded-[5px] border bg-background px-3 text-base voice-ui disabled:opacity-50"
             >
               +
             </button>
@@ -244,35 +245,35 @@ function InputView({
     [ask, cwd],
   );
   if (ask.input === undefined) {
-    return <p className="text-muted-foreground text-sm">Input not received.</p>;
+    return <p className="text-sm text-muted-foreground">Input not received.</p>;
   }
   return (
     <>
       {context !== null && CONTEXT_TOOLS.has(ask.toolName) && (
-        <div className="bg-bubble-claude border-ring voice-prose max-h-[25dvh] min-w-0 overflow-y-auto rounded-[5px] rounded-l-none border-l-2 px-3 py-2 text-sm">
+        <div className="max-h-[25dvh] min-w-0 overflow-y-auto rounded-[5px] rounded-l-none border-l-2 border-ring bg-bubble-claude px-3 py-2 text-sm voice-prose">
           <Markdown text={context} />
         </div>
       )}
       {diff === null ? (
-        <div className="voice-code bg-background rounded-[5px] border p-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <div className="rounded-[5px] border bg-background p-2 text-sm voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
           {toolSummary(ask.toolName, ask.input, cwd)}
         </div>
       ) : (
         <div className="space-y-1">
-          <div className="voice-code min-w-0 truncate text-sm">
+          <div className="min-w-0 truncate text-sm voice-code">
             <span className="voice-ui">{diff.verb}</span>({diff.path})
           </div>
-          <div className="text-muted-foreground voice-ui text-xs">
+          <div className="text-xs voice-ui text-muted-foreground">
             &#x2514; {changeSummary(diff.added, diff.removed)}
           </div>
           <DiffBlock diff={diff} maxHeight="max-h-[40dvh]" wrap />
         </div>
       )}
       <details className="mt-1">
-        <summary className="text-muted-foreground voice-ui cursor-pointer text-xs">
+        <summary className="cursor-pointer text-xs voice-ui text-muted-foreground">
           full input
         </summary>
-        <pre className="bg-muted mt-1 max-h-60 overflow-auto rounded-[5px] p-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <pre className="mt-1 max-h-60 overflow-auto rounded-[5px] bg-muted p-2 text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
           {JSON.stringify(ask.input, null, 2)}
         </pre>
       </details>
@@ -301,7 +302,7 @@ function CardFrame({
   const deadline = useContext(MainDeadline);
   return (
     <section
-      className={`bg-card border-primary/40 flex max-h-[50%] shrink-0 flex-col border-t-2 px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
+      className={`flex max-h-[50%] shrink-0 flex-col border-t-2 border-primary/40 bg-card px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
     >
       {/* Shrinking only for `content`: in `frame` it would clip the bottom instead of scrolling. */}
       <div
@@ -312,7 +313,7 @@ function CardFrame({
           <button
             type="button"
             onClick={goTo.onGo}
-            className="border-primary text-primary voice-ui hover:bg-muted self-start rounded-[5px] border px-2 py-1 text-xs"
+            className="self-start rounded-[5px] border border-primary px-2 py-1 text-xs voice-ui text-primary hover:bg-muted"
           >
             Go to agent: {goTo.name}
           </button>
@@ -320,9 +321,9 @@ function CardFrame({
         {denyAt !== null && <DenyCountdown denyAt={denyAt} />}
         {title !== null && (
           <div className="flex items-baseline justify-between gap-2">
-            <h2 className="voice-heading text-sm">{title}</h2>
+            <h2 className="text-sm voice-heading">{title}</h2>
             {queued > 0 && (
-              <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
+              <span className="text-xs voice-ui text-muted-foreground">{queued} more queued</span>
             )}
           </div>
         )}
@@ -398,10 +399,10 @@ function FolderPicker({
   const pickedIndex = picked === null ? -1 : segments.indexOf(picked);
   return (
     <div className="space-y-1">
-      <p className="text-muted-foreground voice-ui text-xs [overflow-wrap:anywhere]">
+      <p className="text-xs voice-ui [overflow-wrap:anywhere] text-muted-foreground">
         {picked === null ? GRANT_HINT[kind] : `${GRANT_PICKED[kind]} ${picked.path}`}
       </p>
-      <div className="voice-code flex flex-wrap items-center gap-y-1 text-sm">
+      <div className="flex flex-wrap items-center gap-y-1 text-sm voice-code">
         {segments.map((segment, index) => {
           const on = index === pickedIndex;
           // Folders under the pick are covered by it.
@@ -416,7 +417,7 @@ function FolderPicker({
           return (
             <Fragment key={segment.path}>
               {segment.separator !== "" && (
-                <span className="text-muted-foreground px-0.5">{segment.separator}</span>
+                <span className="px-0.5 text-muted-foreground">{segment.separator}</span>
               )}
               <button
                 type="button"
@@ -460,7 +461,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={copy}
-      className="voice-ui border-destructive rounded-[5px] border px-2 py-0.5 text-xs"
+      className="rounded-[5px] border border-destructive px-2 py-0.5 text-xs voice-ui"
     >
       {label}
     </button>
@@ -485,7 +486,10 @@ const NO_APPROVAL_INPUT: ApprovalInput = {
 
 function approvalHoldsInput(input: ApprovalInput): boolean {
   return (
-    input.note.trim() !== "" || input.acceptEdits || input.alwaysForFile || input.pickedPath !== null
+    input.note.trim() !== "" ||
+    input.acceptEdits ||
+    input.alwaysForFile ||
+    input.pickedPath !== null
   );
 }
 
@@ -559,7 +563,7 @@ function ApprovalCard({
               disabled={sending}
               aria-pressed={acceptEdits}
               onClick={() => set({ acceptEdits: !acceptEdits })}
-              className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${acceptEdits ? "bg-mode-accept text-mode-accept-foreground border-mode-accept" : "text-muted-foreground bg-card/60"}`}
+              className={`rounded-[5px] border px-2 py-1 text-sm voice-ui disabled:opacity-50 ${acceptEdits ? "border-mode-accept bg-mode-accept text-mode-accept-foreground" : "bg-card/60 text-muted-foreground"}`}
             >
               {acceptEdits ? "✓ " : ""}Accept edits
             </button>
@@ -568,7 +572,7 @@ function ApprovalCard({
       >
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex items-baseline justify-between gap-2">
-            <h2 className="voice-heading text-sm">
+            <h2 className="text-sm voice-heading">
               {isPlan
                 ? "Plan approval"
                 : DIFF_TOOLS.has(ask.toolName)
@@ -576,11 +580,11 @@ function ApprovalCard({
                   : `Allow ${toolDisplayName(ask.toolName)}?`}
             </h2>
             {queued > 0 && (
-              <span className="text-muted-foreground voice-ui text-xs">{queued} more queued</span>
+              <span className="text-xs voice-ui text-muted-foreground">{queued} more queued</span>
             )}
           </div>
           {danger.dangerous && (
-            <div className="border-destructive bg-destructive/15 text-destructive rounded-[5px] border px-3 py-2 text-sm">
+            <div className="rounded-[5px] border border-destructive bg-destructive/15 px-3 py-2 text-sm text-destructive">
               <div className="flex items-baseline justify-between gap-2">
                 <p className="voice-heading">Dangerous</p>
                 <CopyButton text={danger.reasons.join("\n")} />
@@ -615,12 +619,12 @@ function ApprovalCard({
                 disabled={sending}
                 aria-pressed={alwaysForFile}
                 onClick={() => set({ alwaysForFile: !alwaysForFile })}
-                className={`voice-ui rounded-[5px] border px-2 py-1 text-sm disabled:opacity-50 ${alwaysForFile ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground bg-card/60"}`}
+                className={`rounded-[5px] border px-2 py-1 text-sm voice-ui disabled:opacity-50 ${alwaysForFile ? "border-primary bg-primary text-primary-foreground" : "bg-card/60 text-muted-foreground"}`}
               >
                 {alwaysForFile ? "✓ " : ""}Always for this file
               </button>
               {alwaysForFile && (
-                <p className="text-muted-foreground voice-ui text-xs [overflow-wrap:anywhere]">
+                <p className="text-xs voice-ui [overflow-wrap:anywhere] text-muted-foreground">
                   {`Allowing also allows later ${ask.file.kind === "read" ? "reads" : "edits"} of ${relativePath(ask.file.path, cwd)} until the Claude process stops`}
                 </p>
               )}
@@ -633,22 +637,22 @@ function ApprovalCard({
               disabled={sending}
               rows={2}
               placeholder="Note sent with the answer: the deny reason, or a follow-up after allowing"
-              className="bg-background focus:ring-ring voice-prose w-full shrink-0 resize-y rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
+              className="w-full shrink-0 resize-y rounded-[5px] border bg-background px-3 py-1.5 text-base voice-prose outline-none focus:ring-2 focus:ring-ring"
             />
           ) : (
             <button
               type="button"
               disabled={sending}
               onClick={() => set({ noteOpen: true })}
-              className="text-primary voice-ui bg-card/60 self-start rounded-[5px] px-2 py-1 text-sm disabled:opacity-50"
+              className="self-start rounded-[5px] bg-card/60 px-2 py-1 text-sm voice-ui text-primary disabled:opacity-50"
             >
               + Note
             </button>
           )}
         </div>
       </Swipe>
-      {sending && <p className="text-muted-foreground voice-ui text-sm">Sending...</p>}
-      {error !== null && <p className="text-destructive text-sm">{error}</p>}
+      {sending && <p className="text-sm voice-ui text-muted-foreground">Sending...</p>}
+      {error !== null && <p className="text-sm text-destructive">{error}</p>}
     </CardFrame>
   );
 }
@@ -673,7 +677,7 @@ function DenyCountdown({ denyAt }: { denyAt: number }) {
   }, []);
   return (
     <p
-      className="text-destructive voice-ui text-xs"
+      className="text-xs voice-ui text-destructive"
       title="The agent's cache expires soon: unanswered, the ask is denied and the agent told to wrap up"
     >
       {denyCountdown(denyAt, now)}
@@ -806,7 +810,7 @@ function DecisionCard({
         }}
         disabled={sending}
         placeholder="Deny message for Claude (optional)"
-        className="bg-background focus:ring-ring w-full rounded-[5px] border px-3 py-1.5 text-base outline-none focus:ring-2"
+        className="w-full rounded-[5px] border bg-background px-3 py-1.5 text-base outline-none focus:ring-2 focus:ring-ring"
       />
 
       <div className="flex flex-wrap justify-end gap-2">
@@ -814,7 +818,7 @@ function DecisionCard({
           type="button"
           disabled={sending}
           onClick={deny}
-          className={`border-destructive text-destructive border ${BUTTON}`}
+          className={`border border-destructive text-destructive ${BUTTON}`}
         >
           Deny
         </button>
@@ -838,7 +842,7 @@ function DecisionCard({
           </button>
         )}
       </div>
-      {error !== null && <p className="text-destructive text-sm">{error}</p>}
+      {error !== null && <p className="text-sm text-destructive">{error}</p>}
     </CardFrame>
   );
 }

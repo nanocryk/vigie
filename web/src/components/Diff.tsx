@@ -34,13 +34,10 @@ export function DiffBlock({
 }) {
   const width = gutterWidth(diff.hunks);
   const text = wrap ? "pr-3 min-w-0 whitespace-pre-wrap break-all" : "pr-3 whitespace-pre";
-  const html = useMemo(
-    () => diff.hunks.map((hunk) => highlightHunk(hunk, diff.language)),
-    [diff],
-  );
+  const html = useMemo(() => diff.hunks.map((hunk) => highlightHunk(hunk, diff.language)), [diff]);
   return (
     <div
-      className={`bg-code-block voice-code overflow-auto rounded-[5px] py-1 text-xs leading-[1.45] ${maxHeight}`}
+      className={`overflow-auto rounded-[5px] bg-code-block py-1 text-xs leading-[1.45] voice-code ${maxHeight}`}
     >
       <div className={wrap ? "w-full" : "w-max min-w-full"}>
         {diff.hunks.map((hunk, h) => (
@@ -62,15 +59,19 @@ export function DiffBlock({
                         onClick={() => {
                           if (line.number !== null) tap(line.number);
                         }}
-                        title={line.kind === "removed" ? "Open its folder" : `Open at line ${line.number}`}
-                        className="text-muted-foreground hover:text-primary shrink-0 cursor-pointer pl-2 text-right select-none hover:underline"
+                        title={
+                          line.kind === "removed"
+                            ? "Open its folder"
+                            : `Open at line ${line.number}`
+                        }
+                        className="shrink-0 cursor-pointer pl-2 text-right text-muted-foreground select-none hover:text-primary hover:underline"
                         style={{ width: `calc(${width}ch + 0.5rem)` }}
                       >
                         {line.number}
                       </button>
                     ) : (
                       <span
-                        className="text-muted-foreground shrink-0 pl-2 text-right select-none"
+                        className="shrink-0 pl-2 text-right text-muted-foreground select-none"
                         style={{ width: `calc(${width}ch + 0.5rem)` }}
                       >
                         {line.number ?? ""}

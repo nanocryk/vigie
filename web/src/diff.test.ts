@@ -257,30 +257,30 @@ describe("tool diffs from transcript fixtures", () => {
     const diff = diffOf(
       toolEvents(
         "Write",
-        { file_path: `${CWD}/Cargo.toml`, content: "[package]\nname = \"b\"\n" },
+        { file_path: `${CWD}/Cargo.toml`, content: '[package]\nname = "b"\n' },
         {
           content: "The file has been updated.",
           result: {
             type: "update",
             filePath: `${CWD}/Cargo.toml`,
-            content: "[package]\nname = \"b\"\n",
+            content: '[package]\nname = "b"\n',
             structuredPatch: [
               {
                 oldStart: 1,
                 oldLines: 2,
                 newStart: 1,
                 newLines: 2,
-                lines: [" [package]", "-name = \"a\"", "+name = \"b\""],
+                lines: [" [package]", '-name = "a"', '+name = "b"'],
               },
             ],
-            originalFile: "[package]\nname = \"a\"\n",
+            originalFile: '[package]\nname = "a"\n',
           },
         },
       ),
     );
     expect(diff?.verb).toBe("Update");
     expect(diff?.language).toBe("ini");
-    expect(render(diff?.hunks ?? [])).toEqual([[" 1 [package]", "-2 name = \"a\"", "+2 name = \"b\""]]);
+    expect(render(diff?.hunks ?? [])).toEqual([[" 1 [package]", '-2 name = "a"', '+2 name = "b"']]);
   });
 
   it("Write without a result adds its input content", () => {
@@ -304,7 +304,7 @@ describe("summary and highlighting", () => {
   });
 
   it("highlights each side and maps lines back", () => {
-    const hunk = lineDiff("let a = 1;\nlet b = 2;", "let a = 1;\nlet c = \"x\";");
+    const hunk = lineDiff("let a = 1;\nlet b = 2;", 'let a = 1;\nlet c = "x";');
     const html = highlightHunk(hunk, "rust");
     expect(html).toHaveLength(3);
     expect(html[1]).toContain("b");

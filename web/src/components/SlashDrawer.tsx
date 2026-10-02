@@ -4,11 +4,11 @@ import type { Drawer, Suggestion } from "@/completion";
 function MatchedName({ suggestion }: { suggestion: Suggestion }) {
   const matched = new Set(suggestion.indexes);
   return (
-    <span className="voice-code shrink-0 text-sm">
+    <span className="shrink-0 text-sm voice-code">
       /
       {[...suggestion.card.name].map((char, index) =>
         matched.has(index) ? (
-          <span key={index} className="text-primary font-semibold">
+          <span key={index} className="font-semibold text-primary">
             {char}
           </span>
         ) : (
@@ -32,7 +32,7 @@ export function SlashDrawer({
   onDismiss: () => void;
 }) {
   return (
-    <div className="bg-background absolute inset-x-0 bottom-full z-20 mb-1 overflow-hidden rounded-[5px] border shadow-lg">
+    <div className="absolute inset-x-0 bottom-full z-20 mb-1 overflow-hidden rounded-[5px] border bg-background shadow-lg">
       {drawer.kind === "suggest" ? (
         <ul role="listbox">
           {drawer.suggestions.map((suggestion, index) => (
@@ -41,10 +41,10 @@ export function SlashDrawer({
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onPick(suggestion.card)}
-                className={`hover:bg-muted flex w-full cursor-pointer items-baseline gap-2 px-3 py-1.5 text-left ${index === selected ? "bg-muted" : ""}`}
+                className={`flex w-full cursor-pointer items-baseline gap-2 px-3 py-1.5 text-left hover:bg-muted ${index === selected ? "bg-muted" : ""}`}
               >
                 <MatchedName suggestion={suggestion} />
-                <span className="text-muted-foreground voice-ui min-w-0 truncate text-xs">
+                <span className="min-w-0 truncate text-xs voice-ui text-muted-foreground">
                   {suggestion.card.description}
                 </span>
               </button>
@@ -58,8 +58,8 @@ export function SlashDrawer({
           onClick={onDismiss}
           className="flex w-full cursor-pointer items-baseline gap-2 px-3 py-1.5 text-left"
         >
-          <span className="voice-code shrink-0 text-sm">/{drawer.card.name}</span>
-          <span className="text-muted-foreground voice-code min-w-0 truncate text-xs">
+          <span className="shrink-0 text-sm voice-code">/{drawer.card.name}</span>
+          <span className="min-w-0 truncate text-xs voice-code text-muted-foreground">
             {drawer.card.argumentHint}
           </span>
         </button>

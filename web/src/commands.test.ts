@@ -22,7 +22,9 @@ const COMMANDS: CommandInfo[] = [
 ];
 
 function card(name: string): CommandCard {
-  const found = commandCards(COMMANDS, []).find((entry) => entry.name === name && entry.own === null);
+  const found = commandCards(COMMANDS, []).find(
+    (entry) => entry.name === name && entry.own === null,
+  );
   if (found === undefined) throw new Error(`card: no Claude command ${JSON.stringify(name)}`);
   return found;
 }
@@ -66,7 +68,11 @@ describe("filterCards", () => {
 
 describe("panelStep", () => {
   it("sends a command without argument at once", () => {
-    const { state, effect } = run(closedPanel, { type: "open_tab" }, { type: "use", card: card("canif") });
+    const { state, effect } = run(
+      closedPanel,
+      { type: "open_tab" },
+      { type: "use", card: card("canif") },
+    );
     expect(state).toEqual(closedPanel);
     expect(effect).toEqual({ kind: "send", text: "/canif" });
   });
@@ -97,7 +103,11 @@ describe("panelStep", () => {
   });
 
   it("filters without an effect", () => {
-    const { state, effect } = run(closedPanel, { type: "open_tab" }, { type: "filter", text: "can" });
+    const { state, effect } = run(
+      closedPanel,
+      { type: "open_tab" },
+      { type: "filter", text: "can" },
+    );
     expect(state).toEqual({ kind: "browsing", filter: "can" });
     expect(effect).toEqual({ kind: "none" });
   });

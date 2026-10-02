@@ -21,7 +21,12 @@ const MAX_LENGTH = 500;
  */
 export function parseFileRef(code: string): FileRef | null {
   const text = code.trim();
-  if (text.length < 2 || text.length > MAX_LENGTH || text.startsWith("-") || NOT_A_PATH.test(text)) {
+  if (
+    text.length < 2 ||
+    text.length > MAX_LENGTH ||
+    text.startsWith("-") ||
+    NOT_A_PATH.test(text)
+  ) {
     return null;
   }
   const suffix = LINE_SUFFIX.exec(text);

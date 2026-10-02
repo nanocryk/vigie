@@ -46,7 +46,7 @@ export function CacheLowBanner({
   const remainingMs = deadline.coldAt - now;
   if (remainingMs <= 0 || remainingMs > cacheLowMs(deadline.ttlMs)) return null;
   return (
-    <p className="border-gauge-glow bg-gauge-glow/15 text-gauge-glow voice-ui mx-auto mb-1 max-w-5xl rounded-[5px] border px-3 py-1.5 text-xs">
+    <p className="mx-auto mb-1 max-w-5xl rounded-[5px] border border-gauge-glow bg-gauge-glow/15 px-3 py-1.5 text-xs voice-ui text-gauge-glow">
       Cache cold in {formatSpan(remainingMs)}: {LOW_SUBJECT[subject]} behind the cold-cache choice.
     </p>
   );
@@ -85,7 +85,8 @@ const RESUME_AS_IS = {
 };
 const REWARM_SETTINGS = {
   label: "Rewarm with new settings",
-  explain: "Same Claude session on the new settings: the next request reads the whole context again.",
+  explain:
+    "Same Claude session on the new settings: the next request reads the whole context again.",
 };
 
 function RewarmWarning({
@@ -102,23 +103,26 @@ function RewarmWarning({
   onConfirm: () => void;
   onBack: () => void;
 }) {
-  const size = context === null ? "the whole context" : `${formatTokens(context.used_tokens)} tokens`;
+  const size =
+    context === null ? "the whole context" : `${formatTokens(context.used_tokens)} tokens`;
   return (
-    <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
-      <p className="voice-heading text-destructive text-base">Rewarm re-sends {size} at full price</p>
-      <p className="voice-ui text-sm">
+    <div className="space-y-3 rounded-[5px] border-2 border-destructive bg-destructive/15 p-3">
+      <p className="text-base voice-heading text-destructive">
+        Rewarm re-sends {size} at full price
+      </p>
+      <p className="text-sm voice-ui">
         {settings
           ? "A new model or effort level cannot use the current cache"
           : "The cache expired"}
-        , so the next request pays for writing the whole conversation into the cache again,
-        charged against your 5h and 7d windows. Continue or Blank usually cost far less.
+        , so the next request pays for writing the whole conversation into the cache again, charged
+        against your 5h and 7d windows. Continue or Blank usually cost far less.
       </p>
       <div className="flex gap-2">
         <button
           type="button"
           disabled={busy}
           onClick={onConfirm}
-          className="bg-destructive voice-ui rounded-[5px] px-4 py-2 text-sm text-black disabled:opacity-50"
+          className="rounded-[5px] bg-destructive px-4 py-2 text-sm voice-ui text-black disabled:opacity-50"
         >
           Rewarm anyway
         </button>
@@ -126,7 +130,7 @@ function RewarmWarning({
           type="button"
           disabled={busy}
           onClick={onBack}
-          className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+          className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui disabled:opacity-50"
         >
           Back
         </button>
@@ -156,25 +160,26 @@ export function AgentColdPanel({
   onRelay: () => void;
   onCancel: () => void;
 }) {
-  const size = promptTokens > 0 ? `about ${formatTokens(promptTokens)} tokens` : "its whole context";
+  const size =
+    promptTokens > 0 ? `about ${formatTokens(promptTokens)} tokens` : "its whole context";
   return (
-    <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <section className="shrink-0 border-t-2 border-primary/40 bg-card px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-5xl space-y-3">
-        <div className="border-destructive bg-destructive/15 space-y-3 rounded-[5px] border-2 p-3">
-          <p className="voice-heading text-destructive text-base">
+        <div className="space-y-3 rounded-[5px] border-2 border-destructive bg-destructive/15 p-3">
+          <p className="text-base voice-heading text-destructive">
             The cache of agent {name} is cold
           </p>
-          <p className="voice-ui text-sm">
-            An agent's cache lasts 5 minutes after its last request. Relaying this message makes
-            it read {size} again at full price, charged against your 5h and 7d windows.
+          <p className="text-sm voice-ui">
+            An agent's cache lasts 5 minutes after its last request. Relaying this message makes it
+            read {size} again at full price, charged against your 5h and 7d windows.
           </p>
-          <p className="text-muted-foreground voice-ui truncate text-xs">Your message: {text}</p>
+          <p className="truncate text-xs voice-ui text-muted-foreground">Your message: {text}</p>
           <div className="flex gap-2">
             <button
               type="button"
               disabled={busy}
               onClick={onRelay}
-              className="bg-destructive voice-ui rounded-[5px] px-4 py-2 text-sm text-black disabled:opacity-50"
+              className="rounded-[5px] bg-destructive px-4 py-2 text-sm voice-ui text-black disabled:opacity-50"
             >
               Relay anyway
             </button>
@@ -182,7 +187,7 @@ export function AgentColdPanel({
               type="button"
               disabled={busy}
               onClick={onCancel}
-              className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+              className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui disabled:opacity-50"
             >
               Cancel
             </button>
@@ -238,19 +243,19 @@ export function ColdPanel({
         ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
         : "The cache is cold.";
   return (
-    <section className="bg-card border-primary/40 shrink-0 border-t-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <section className="shrink-0 border-t-2 border-primary/40 bg-card px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-5xl space-y-3">
-        <div className="voice-ui space-y-0.5 text-sm">
+        <div className="space-y-0.5 text-sm voice-ui">
           <div>
             {heading} <span className="text-muted-foreground">{contextSummary(context)}</span>
           </div>
           {askWaiting && (
-            <div className="text-muted-foreground text-xs">
+            <div className="text-xs text-muted-foreground">
               An approval waits. Rewarm shows it; Continue and Blank drop it.
             </div>
           )}
           {typed && (
-            <div className="text-muted-foreground truncate text-xs">
+            <div className="truncate text-xs text-muted-foreground">
               Your message goes with the choice: {draft}
             </div>
           )}
@@ -271,10 +276,10 @@ export function ColdPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => (confirms(choice) ? setConfirmingRewarm(true) : onChoose(choice))}
-                className={`voice-ui flex flex-col items-start gap-0.5 rounded-[5px] border-2 px-3 py-2 text-left disabled:opacity-50 ${tone}`}
+                className={`flex flex-col items-start gap-0.5 rounded-[5px] border-2 px-3 py-2 text-left voice-ui disabled:opacity-50 ${tone}`}
               >
                 <span className="text-sm">{label}</span>
-                <span className="text-muted-foreground text-xs">{explain}</span>
+                <span className="text-xs text-muted-foreground">{explain}</span>
               </button>
             ))}
           </div>
@@ -284,12 +289,12 @@ export function ColdPanel({
             type="button"
             disabled={busy}
             onClick={settings.onCancel}
-            className="bg-background voice-ui rounded-[5px] border px-4 py-2 text-sm disabled:opacity-50"
+            className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui disabled:opacity-50"
           >
             Cancel
           </button>
         )}
-        {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+        {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
       </div>
     </section>
   );

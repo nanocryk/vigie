@@ -210,7 +210,10 @@ describe("transcript from recordings", () => {
         kind: "line",
         payload: {
           type: "user",
-          message: { role: "user", content: "look\n\nAttachments:\n- C:\\up\\0a1b2c3d4e5f-shot.png" },
+          message: {
+            role: "user",
+            content: "look\n\nAttachments:\n- C:\\up\\0a1b2c3d4e5f-shot.png",
+          },
           parent_tool_use_id: null,
           session_id: "s",
           isReplay: true,
@@ -314,7 +317,10 @@ describe("transcript from recordings", () => {
       ]);
     const first = attach("aa");
     const second = attach("bb");
-    expect(first.items.at(-1)).toMatchObject({ kind: "claude", attachmentHashes: { [file]: "aa" } });
+    expect(first.items.at(-1)).toMatchObject({
+      kind: "claude",
+      attachmentHashes: { [file]: "aa" },
+    });
     expect(second.items.at(-1)).toMatchObject({
       kind: "claude",
       attachmentHashes: { [file]: "bb" },
@@ -391,7 +397,8 @@ describe("transcript from recordings", () => {
       },
     ]);
     const firstResult = events.findIndex(
-      (event) => event.kind === "line" && isRecord(event.payload) && event.payload["type"] === "result",
+      (event) =>
+        event.kind === "line" && isRecord(event.payload) && event.payload["type"] === "result",
     );
     const shifted = events
       .slice(echo + 1, firstResult + 1)
@@ -408,9 +415,9 @@ describe("transcript from recordings", () => {
         payload: { type: "user", message: { role: "user", content: "queued" }, isReplay: true },
       },
     ]);
-    expect(echoed.items.find((item) => item.kind === "user" && item.clientId === "q")).toMatchObject(
-      { delivery: "received" },
-    );
+    expect(
+      echoed.items.find((item) => item.kind === "user" && item.clientId === "q"),
+    ).toMatchObject({ delivery: "received" });
   });
 
   it("permissions: tool rows paired with their results, asks queued then resolved", () => {
@@ -556,7 +563,10 @@ describe("permission mode", () => {
 
   it("follows permission_mode host events", () => {
     expect(emptyTranscript.permissionMode).toBeNull();
-    const state = applyEvents(emptyTranscript, [hostMode(1, "default"), hostMode(2, "acceptEdits")]);
+    const state = applyEvents(emptyTranscript, [
+      hostMode(1, "default"),
+      hostMode(2, "acceptEdits"),
+    ]);
     expect(state.permissionMode).toBe("acceptEdits");
   });
 
@@ -569,7 +579,9 @@ describe("permission mode", () => {
         event.payload["type"] === "system" &&
         event.payload["subtype"] === "init",
     );
-    expect(applyEvents(emptyTranscript, events.slice(0, firstInit + 1)).permissionMode).toBe("plan");
+    expect(applyEvents(emptyTranscript, events.slice(0, firstInit + 1)).permissionMode).toBe(
+      "plan",
+    );
     // Approving the plan puts the CLI back in default mode, reported by a status line.
     expect(applyEvents(emptyTranscript, events).permissionMode).toBe("default");
   });
@@ -648,7 +660,8 @@ describe("synthetic user lines", () => {
 });
 
 describe("restarts", () => {
-  const SEED = "This is a new session. The previous vigie session in /p.\n\n## Exchange 1\nUser: hi";
+  const SEED =
+    "This is a new session. The previous vigie session in /p.\n\n## Exchange 1\nUser: hi";
   const event = (seq: number, kind: "host" | "line", payload: unknown): WireEvent =>
     kind === "host"
       ? { session: SESSION, seq, time: "t", kind, payload: parseHostEvent(payload) }
@@ -690,7 +703,10 @@ describe("restarts", () => {
   it("a continue without a typed message shows no bubble for its closing line", () => {
     const state = applyEvents(emptyTranscript, [
       restarted(1, SEED),
-      echo(2, `${SEED}\n\nThe user has not typed a request yet: summarize where things stand and ask what to do next.`),
+      echo(
+        2,
+        `${SEED}\n\nThe user has not typed a request yet: summarize where things stand and ask what to do next.`,
+      ),
       echo(3, "later"),
     ]);
     expect(state.items.map(shape)).toEqual([
@@ -718,11 +734,7 @@ describe("restarts", () => {
         stderr_tail: [],
         ...(reason === undefined ? {} : { reason }),
       });
-    const state = applyEvents(emptyTranscript, [
-      exited(1, "revoke"),
-      exited(2, "kill"),
-      exited(3),
-    ]);
+    const state = applyEvents(emptyTranscript, [exited(1, "revoke"), exited(2, "kill"), exited(3)]);
     expect(state.items.map(shape)).toEqual([
       ["notice", "Grants revoked"],
       ["notice", "Stopped from Home"],
@@ -958,7 +970,9 @@ describe("paged history", () => {
     const all = discussion();
     const sent = all.find(
       (event) =>
-        event.kind === "host" && event.payload.event === "user_sent" && event.payload.text === "go on",
+        event.kind === "host" &&
+        event.payload.event === "user_sent" &&
+        event.payload.text === "go on",
     );
     const firstSeq = sent?.seq ?? 0;
     // The message and its echo, carrying the seed of the restart before them.
@@ -1108,7 +1122,10 @@ describe("subagents", () => {
           ],
         },
       }),
-      line(5, { type: "assistant", message: { id: "m2", content: [{ type: "text", text: reply }] } }),
+      line(5, {
+        type: "assistant",
+        message: { id: "m2", content: [{ type: "text", text: reply }] },
+      }),
       line(6, { type: "result", subtype: "success", is_error: false }),
       host(7, {
         event: "relay_checked",
@@ -1323,7 +1340,9 @@ describe("plan asks", () => {
         text: "(Note attached to my approval of your plan) then test",
       }),
     ]);
-    const call = state.items.find((item) => item.kind === "tool" && item.toolUseId === ask.toolUseId);
+    const call = state.items.find(
+      (item) => item.kind === "tool" && item.toolUseId === ask.toolUseId,
+    );
     expect(call?.kind === "tool" ? call.note : null).toBe("then test");
     expect(state.items.at(-1)?.hidden).toBe(true);
     // A plan's note rides in the approved plan: a later message is the user's own.
@@ -1348,7 +1367,9 @@ describe("plan asks", () => {
 describe("toolDisplayName", () => {
   it("titles an MCP tool and names its server", () => {
     expect(toolDisplayName("mcp__vigie__bash_asks")).toBe("Bash Asks (vigie)");
-    expect(toolDisplayName("mcp__claude-in-chrome__read_page")).toBe("Read Page (claude-in-chrome)");
+    expect(toolDisplayName("mcp__claude-in-chrome__read_page")).toBe(
+      "Read Page (claude-in-chrome)",
+    );
   });
 
   it("leaves built-in and malformed names unchanged", () => {
@@ -1374,7 +1395,9 @@ describe("toolSummary", () => {
     expect(toolSummary("ToolSearch", { query: "select:A,B", max_results: 2 })).toBe("select:A,B");
     expect(toolSummary("ExitPlanMode", { plan: "# Dummy plan\n\n## Context" })).toBe("Dummy plan");
     expect(
-      toolSummary("AskUserQuestion", { questions: [{ question: "Color?" }, { question: "Fruits?" }] }),
+      toolSummary("AskUserQuestion", {
+        questions: [{ question: "Color?" }, { question: "Fruits?" }],
+      }),
     ).toBe("2 questions");
     expect(toolSummary("AskUserQuestion", { questions: [{ question: "Color?" }] })).toBe(
       "1 question",
@@ -1497,9 +1520,9 @@ describe("quietWork", () => {
 
   it("hides behind a running tool, live thinking or streaming text", () => {
     expect(quietWork([user, tool("running")], true)).toBe(false);
-    expect(quietWork([user, { kind: "thinking", key: "k", text: "", time: null, seq: 0 }], true)).toBe(
-      false,
-    );
+    expect(
+      quietWork([user, { kind: "thinking", key: "k", text: "", time: null, seq: 0 }], true),
+    ).toBe(false);
     expect(quietWork([user, claude(true)], true)).toBe(false);
   });
 });
@@ -1592,7 +1615,8 @@ describe("turn changes", () => {
   });
   const echo = (seq: number) =>
     line(seq, { type: "user", message: { role: "user", content: "go" }, parent_tool_use_id: null });
-  const result = (seq: number) => line(seq, { type: "result", subtype: "success", is_error: false });
+  const result = (seq: number) =>
+    line(seq, { type: "result", subtype: "success", is_error: false });
 
   it("closes a turn with its edits and its subagents', failed calls left out", () => {
     const state = applyEvents(emptyTranscript, [
@@ -1602,7 +1626,12 @@ describe("turn changes", () => {
       call(4, { type: "tool_use", id: "a1", name: "Agent", input: { description: "help" } }),
       call(
         5,
-        { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/p/b.ts", content: "q\n" } },
+        {
+          type: "tool_use",
+          id: "w1",
+          name: "Write",
+          input: { file_path: "/p/b.ts", content: "q\n" },
+        },
         "a1",
       ),
       done(6, "w1", false, "a1"),
@@ -1623,7 +1652,9 @@ describe("turn changes", () => {
       call(4, { type: "text", text: "Done." }),
       result(5),
     ]);
-    expect(turnEndBubble(state.items)).toBe(state.items.find((item) => item.kind === "claude")?.key);
+    expect(turnEndBubble(state.items)).toBe(
+      state.items.find((item) => item.kind === "claude")?.key,
+    );
   });
 
   it("a turn ending on a tool call or an interrupt names no bubble", () => {

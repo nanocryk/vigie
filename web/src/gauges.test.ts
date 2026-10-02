@@ -16,13 +16,7 @@ import {
   tween,
   windowBar,
 } from "@/gauges";
-import type {
-  ContextView,
-  RestartMeasure,
-  SessionView,
-  UsageSnapshot,
-  WindowReport,
-} from "@/wire";
+import type { ContextView, RestartMeasure, SessionView, UsageSnapshot, WindowReport } from "@/wire";
 
 const session = (patch: Partial<SessionView>): SessionView => ({
   id: "s",

@@ -13,7 +13,7 @@ export function Banner({ client }: { client: Client }) {
   const stale = useNewVersion();
   if (problem !== null) {
     return (
-      <div className="bg-destructive text-card voice-ui w-full shrink-0 px-3 py-1.5 text-center text-sm">
+      <div className="w-full shrink-0 bg-destructive px-3 py-1.5 text-center text-sm voice-ui text-card">
         {problem}
       </div>
     );
@@ -23,7 +23,7 @@ export function Banner({ client }: { client: Client }) {
     <button
       type="button"
       onClick={reload}
-      className="bg-primary text-primary-foreground voice-ui w-full shrink-0 px-3 py-1.5 text-sm"
+      className="w-full shrink-0 bg-primary px-3 py-1.5 text-sm voice-ui text-primary-foreground"
     >
       New version available: tap to reload
     </button>

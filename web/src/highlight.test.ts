@@ -34,7 +34,7 @@ describe("languages", () => {
 
 describe("highlight", () => {
   it("wraps tokens and escapes text", () => {
-    const html = highlight("let a = \"<b>\";", "rust");
+    const html = highlight('let a = "<b>";', "rust");
     expect(html).toContain('<span class="hljs-keyword">let</span>');
     expect(html).toContain("&lt;b&gt;");
   });

@@ -21,7 +21,7 @@ export function attachmentsField(attachments: readonly string[]): { attachments?
   return attachments.length === 0 ? {} : { attachments: [...attachments] };
 }
 
-const IMAGE =/\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i;
+const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i;
 
 export function isImagePath(path: string): boolean {
   return IMAGE.test(path);

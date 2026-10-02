@@ -131,9 +131,7 @@ export const PlanBody = memo(function PlanBody({
     };
     return { plugins: [remarkPlanChanges(text, changes)], components };
   }, [text, previous]);
-  return (
-    <Markdown text={text} plugins={extras?.plugins} components={extras?.components} />
-  );
+  return <Markdown text={text} plugins={extras?.plugins} components={extras?.components} />;
 });
 
 function fileName(path: string): string {
@@ -154,33 +152,37 @@ export function PlanView({ plan }: { plan: PlanReview | null }) {
   }, [full]);
 
   if (plan === null) {
-    return <p className="text-muted-foreground voice-ui text-sm">No plan file found.</p>;
+    return <p className="text-sm voice-ui text-muted-foreground">No plan file found.</p>;
   }
   const name = plan.path === null ? "Plan" : fileName(plan.path);
   const note = plan.previous === null ? null : "changes since the last review are marked";
   return (
     <div className="flex min-h-0 flex-col gap-1">
       <div className="flex items-baseline gap-2">
-        <span className="voice-code text-muted-foreground min-w-0 truncate text-xs">{name}</span>
+        <span className="min-w-0 truncate text-xs voice-code text-muted-foreground">{name}</span>
         {note !== null && (
-          <span className="text-muted-foreground voice-ui shrink-0 text-xs">{note}</span>
+          <span className="shrink-0 text-xs voice-ui text-muted-foreground">{note}</span>
         )}
-        <button type="button" onClick={() => setFull(true)} className={`${BUTTON} ml-auto shrink-0`}>
+        <button
+          type="button"
+          onClick={() => setFull(true)}
+          className={`${BUTTON} ml-auto shrink-0`}
+        >
           Full screen
         </button>
       </div>
       {/* Shrinks to what the card leaves, the one scroll area of a plan approval. */}
-      <div className="bg-background min-h-0 overflow-y-auto overscroll-contain rounded-[5px] border p-2 text-sm">
+      <div className="min-h-0 overflow-y-auto overscroll-contain rounded-[5px] border bg-background p-2 text-sm">
         <PlanBody text={plan.text} previous={plan.previous} />
       </div>
       {full &&
         // Outside the card's DOM, so its swipe never sees the reader's gestures.
         createPortal(
-          <div className="bg-background fixed inset-0 z-40 flex flex-col">
+          <div className="fixed inset-0 z-40 flex flex-col bg-background">
             <div className="flex items-baseline gap-2 border-b px-3 py-2">
-              <span className="voice-code min-w-0 truncate text-sm">{name}</span>
+              <span className="min-w-0 truncate text-sm voice-code">{name}</span>
               {note !== null && (
-                <span className="text-muted-foreground voice-ui shrink-0 text-xs">{note}</span>
+                <span className="shrink-0 text-xs voice-ui text-muted-foreground">{note}</span>
               )}
               <button
                 type="button"

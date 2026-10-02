@@ -125,7 +125,10 @@ describe("tabs", () => {
   });
 
   it("opens a file in the free tab used last, its folder behind it", () => {
-    const state = openFileInLastFree(openSessionTab(initialState(), "s1", "C:\\p"), "C:\\t\\b1.output");
+    const state = openFileInLastFree(
+      openSessionTab(initialState(), "s1", "C:\\p"),
+      "C:\\t\\b1.output",
+    );
     expect(activeTab(state)).toMatchObject({
       owner: { kind: "free" },
       folder: "C:\\t",
@@ -153,7 +156,11 @@ describe("tabs", () => {
     const session = openSessionFile(initialState(), "s1", "C:\\p", "C:\\p\\a.ts", 12);
     expect(activeTab(session)).toMatchObject({ file: "C:\\p\\a.ts", line: 12 });
     const free = openFileInLastFree(initialState(), "C:\\p\\a.ts", 7);
-    expect(activeTab(free)).toMatchObject({ owner: { kind: "free" }, file: "C:\\p\\a.ts", line: 7 });
+    expect(activeTab(free)).toMatchObject({
+      owner: { kind: "free" },
+      file: "C:\\p\\a.ts",
+      line: 7,
+    });
   });
 
   it("opens a folder, any file and diff closed, in the session's tab or the last free one", () => {
@@ -192,7 +199,11 @@ describe("tabs", () => {
 
   it("closes the file, then the diff, before leaving the folder", () => {
     const start = initialState();
-    let state = updateTab(start, start.active, { folder: "C:\\a", diff: "C:\\a", file: "C:\\a\\f" });
+    let state = updateTab(start, start.active, {
+      folder: "C:\\a",
+      diff: "C:\\a",
+      file: "C:\\a\\f",
+    });
     expect(upSteps(state)).toBe(4);
     state = goUp(state);
     expect(activeTab(state)).toMatchObject({ file: null, diff: "C:\\a", folder: "C:\\a" });

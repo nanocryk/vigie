@@ -1,10 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 export type Route =
-  | { kind: "list" }
-  | { kind: "session"; id: string }
-  | { kind: "settings" }
-  | { kind: "files" };
+  { kind: "list" } | { kind: "session"; id: string } | { kind: "settings" } | { kind: "files" };
 
 const SESSION_HASH = /^#\/s\/([^/?#]+)$/;
 const SETTINGS_HASH = "#/settings";

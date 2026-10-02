@@ -137,7 +137,8 @@ export function useSwipe(rules: SwipeRules, onConfirm: (side: Side) => void) {
     const finish = (event: PointerEvent, input: SwipeInput) => {
       if (event.pointerId !== active) return;
       active = null;
-      if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
+      if (element.hasPointerCapture(event.pointerId))
+        element.releasePointerCapture(event.pointerId);
       dispatch(input);
     };
     const up = (event: PointerEvent) =>
@@ -217,7 +218,7 @@ export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: S
         </div>
         {view.armed !== null && (
           <span
-            className={`bg-card voice-heading pointer-events-none absolute top-1.5 rounded-[5px] px-2 py-0.5 text-sm shadow-sm ${view.armed.side === "right" ? "right-2" : "left-2"} ${view.armed.ready ? TEXT[view.armed.side] : "text-muted-foreground opacity-60"}`}
+            className={`pointer-events-none absolute top-1.5 rounded-[5px] bg-card px-2 py-0.5 text-sm voice-heading shadow-sm ${view.armed.side === "right" ? "right-2" : "left-2"} ${view.armed.ready ? TEXT[view.armed.side] : "text-muted-foreground opacity-60"}`}
           >
             {view.armed.label}
           </span>
@@ -226,7 +227,7 @@ export function Swipe({ labels, dangerous, onConfirm, beforeRight, children }: S
 
       <div className="flex items-center justify-between gap-2">
         {sideButton("left")}
-        <span className="text-muted-foreground voice-ui text-xs">
+        <span className="text-xs voice-ui text-muted-foreground">
           {swipes === 1 ? "swipe once" : "swipe twice"}
         </span>
         <div className="flex items-center gap-2">

@@ -73,7 +73,7 @@ export function HomeButton({
       aria-label="Home"
       title="Home"
       style={highlight === null ? undefined : pulseStyle(PULSE[highlight])}
-      className={`text-primary hover:bg-muted shrink-0 rounded-[5px] p-1.5 ${highlight === null ? "" : "row-pulse"}`}
+      className={`shrink-0 rounded-[5px] p-1.5 text-primary hover:bg-muted ${highlight === null ? "" : "row-pulse"}`}
     >
       <svg
         viewBox="0 0 24 24"
@@ -104,7 +104,7 @@ function tickStyle(percent: number): Record<string, string> {
   return { "--tick-step": `${percent}%` };
 }
 
-const CONTEXT_TEXT ={ ok: "", high: "text-gauge-glow", full: "text-destructive" };
+const CONTEXT_TEXT = { ok: "", high: "text-gauge-glow", full: "text-destructive" };
 const TONE_FILL: Record<Tone, string> = {
   ok: "bg-gauge-ok",
   warning: "bg-gauge-glow",
@@ -154,7 +154,7 @@ function useTweened(target: number): number {
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex h-4 items-center gap-2">
-      <span className="text-muted-foreground w-[8ch] shrink-0 text-right tabular-nums">
+      <span className="w-[8ch] shrink-0 text-right text-muted-foreground tabular-nums">
         {label}
       </span>
       {children}
@@ -332,7 +332,9 @@ export function NeedsYouColumn({ sessions }: { sessions: readonly SessionView[] 
     <div className="min-w-0">
       <div className="flex h-4 items-center gap-4">
         <span className={`tabular-nums ${asksTone}`}>asks {counts?.asks ?? "--"}</span>
-        <span className="text-muted-foreground tabular-nums">working {counts?.working ?? "--"}</span>
+        <span className="text-muted-foreground tabular-nums">
+          working {counts?.working ?? "--"}
+        </span>
       </div>
       <div className="h-4" />
     </div>
@@ -373,7 +375,7 @@ export function Header({
         <div className="flex items-center self-center whitespace-nowrap">{left}</div>
         <div
           aria-label="Usage, context and cache"
-          className="voice-code grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[0.6875rem] leading-4 select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
+          className="grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[0.6875rem] leading-4 voice-code select-none min-[600px]:grid-cols-2 min-[600px]:self-center"
         >
           <AccountColumn usage={usage} now={now} />
           {column}
@@ -385,13 +387,13 @@ export function Header({
             aria-label="Device settings"
             title="Device settings"
             onClick={() => navigate({ kind: "settings" })}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-10 shrink-0 items-center justify-center rounded-[5px] text-3xl leading-none"
+            className="flex size-10 shrink-0 items-center justify-center rounded-[5px] text-3xl leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             ⚙
           </button>
         </div>
       </div>
-      <div className="voice-ui flex h-7 items-center gap-2 border-b pr-1 pl-3 text-xs">
+      <div className="flex h-7 items-center gap-2 border-b pr-1 pl-3 text-xs voice-ui">
         <div className="min-w-0 truncate">{info}</div>
         {pills}
         <div className="flex-1" />

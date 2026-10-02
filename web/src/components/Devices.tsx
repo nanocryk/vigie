@@ -63,8 +63,8 @@ function StatusLine({ device, now }: { device: Device; now: number }) {
   if (device.revoked) return <span className="text-muted-foreground">Revoked</span>;
   if (device.isConnected) {
     return (
-      <span className="text-gauge-ok flex items-center gap-1.5">
-        <span className="bg-gauge-ok inline-block size-2 rounded-full" />
+      <span className="flex items-center gap-1.5 text-gauge-ok">
+        <span className="inline-block size-2 rounded-full bg-gauge-ok" />
         Connected
       </span>
     );
@@ -104,12 +104,12 @@ function RenameForm({ device, done }: { device: Device; done: () => void }) {
             if (event.key === "Escape") done();
           }}
           aria-label="Device name"
-          className="voice-ui bg-background min-w-0 flex-1 rounded-[5px] border px-2 py-1 text-sm"
+          className="min-w-0 flex-1 rounded-[5px] border bg-background px-2 py-1 text-sm voice-ui"
         />
         <button
           type="submit"
           disabled={busy || label.trim() === ""}
-          className={`${SMALL} bg-primary text-primary-foreground border-primary`}
+          className={`${SMALL} border-primary bg-primary text-primary-foreground`}
         >
           Save
         </button>
@@ -117,7 +117,7 @@ function RenameForm({ device, done }: { device: Device; done: () => void }) {
           Cancel
         </button>
       </div>
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </form>
   );
 }
@@ -140,21 +140,21 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
 
   return (
     <li
-      className={`bg-card rounded-[5px] border p-3 ${device.revoked ? "border-long-dash" : ""} ${device.isYou ? "border-primary/60" : ""}`}
+      className={`rounded-[5px] border bg-card p-3 ${device.revoked ? "border-long-dash" : ""} ${device.isYou ? "border-primary/60" : ""}`}
     >
       <div className={`space-y-1 ${device.revoked ? "opacity-45" : ""}`}>
         <div className="flex items-center gap-2">
-          <span className="voice-heading min-w-0 truncate">{device.label}</span>
+          <span className="min-w-0 truncate voice-heading">{device.label}</span>
           {device.isYou && (
-            <span className="voice-ui bg-primary/15 text-primary shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem]">
+            <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[0.6875rem] voice-ui text-primary">
               this device
             </span>
           )}
-          <span className="voice-ui ml-auto shrink-0 text-xs">
+          <span className="ml-auto shrink-0 text-xs voice-ui">
             <StatusLine device={device} now={now} />
           </span>
         </div>
-        <div className="text-muted-foreground voice-code truncate text-xs">
+        <div className="truncate text-xs voice-code text-muted-foreground">
           {device.lastIp ?? "no address yet"}
         </div>
       </div>
@@ -162,8 +162,8 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
       <div className="mt-3">
         {mode === "rename" && <RenameForm device={device} done={() => setMode("view")} />}
         {mode === "confirm-revoke" && (
-          <div className="border-destructive/40 bg-destructive/5 space-y-2 rounded-[5px] border p-2">
-            <p className="voice-ui text-sm">
+          <div className="space-y-2 rounded-[5px] border border-destructive/40 bg-destructive/5 p-2">
+            <p className="text-sm voice-ui">
               {device.isYou
                 ? "Revoke this device? It loses access right away and needs a new pairing link."
                 : `Revoke ${device.label}? It loses access on its next request.`}
@@ -181,7 +181,7 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
                 type="button"
                 disabled={busy}
                 onClick={() => act(() => revokeDevice(device.id))}
-                className={`${SMALL} bg-destructive border-destructive text-white`}
+                className={`${SMALL} border-destructive bg-destructive text-white`}
               >
                 {busy ? "Revoking..." : "Revoke"}
               </button>
@@ -211,7 +211,7 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
                 <button
                   type="button"
                   onClick={() => setMode("confirm-revoke")}
-                  className={`${SMALL} text-destructive border-destructive/50 hover:bg-destructive/10`}
+                  className={`${SMALL} border-destructive/50 text-destructive hover:bg-destructive/10`}
                 >
                   Revoke
                 </button>
@@ -219,7 +219,7 @@ function DeviceCard({ device, now }: { device: Device; now: number }) {
             )}
           </div>
         )}
-        {error !== null && <p className="text-destructive voice-ui mt-2 text-xs">{error}</p>}
+        {error !== null && <p className="mt-2 text-xs voice-ui text-destructive">{error}</p>}
       </div>
     </li>
   );
@@ -274,7 +274,7 @@ function CopyButton({ text }: { text: string }) {
     );
   };
   return (
-    <button type="button" onClick={copy} className={`${SMALL} hover:bg-muted shrink-0`}>
+    <button type="button" onClick={copy} className={`${SMALL} shrink-0 hover:bg-muted`}>
       {label}
     </button>
   );
@@ -299,24 +299,24 @@ function PairCard({
   const expired = remaining <= 0;
   const url = link.urls[0] ?? "";
   return (
-    <div className="bg-background space-y-3 rounded-[5px] border p-3">
+    <div className="space-y-3 rounded-[5px] border bg-background p-3">
       <div className="flex justify-center">
         <QrCode text={url} faded={expired} />
       </div>
       <div className="flex items-center gap-2">
-        <span className="voice-code text-muted-foreground min-w-0 flex-1 text-xs break-all">
+        <span className="min-w-0 flex-1 text-xs voice-code break-all text-muted-foreground">
           {url}
         </span>
         <CopyButton text={url} />
       </div>
       <div className="space-y-1">
-        <div className="bg-muted h-1 overflow-hidden rounded-full">
+        <div className="h-1 overflow-hidden rounded-full bg-muted">
           <div
-            className="bg-gauge-ok h-full transition-[width] duration-1000 ease-linear"
+            className="h-full bg-gauge-ok transition-[width] duration-1000 ease-linear"
             style={{ width: `${Math.max(0, Math.min(1, remaining / link.lifetime)) * 100}%` }}
           />
         </div>
-        <div className="voice-ui flex items-center justify-between text-xs">
+        <div className="flex items-center justify-between text-xs voice-ui">
           <span className={expired ? "text-destructive" : "text-muted-foreground"}>
             {expired ? "Link expired" : `Waiting for the new device, ${formatRemaining(remaining)}`}
           </span>
@@ -325,7 +325,7 @@ function PairCard({
               <button
                 type="button"
                 onClick={renew}
-                className={`${SMALL} bg-primary text-primary-foreground border-primary`}
+                className={`${SMALL} border-primary bg-primary text-primary-foreground`}
               >
                 New link
               </button>
@@ -392,8 +392,8 @@ function PairSection({ devices }: { devices: Device[] | null }) {
   return (
     <div className="space-y-3 border-t pt-3">
       <div>
-        <h3 className="voice-heading text-sm">Pair a new device</h3>
-        <p className="text-muted-foreground voice-ui text-xs">
+        <h3 className="text-sm voice-heading">Pair a new device</h3>
+        <p className="text-xs voice-ui text-muted-foreground">
           Scan the code or open the link on the new device. Single use, valid 5 minutes.
         </p>
       </div>
@@ -402,13 +402,13 @@ function PairSection({ devices }: { devices: Device[] | null }) {
       ) : (
         <>
           {hosts !== null && hosts.length === 0 && (
-            <p className="text-muted-foreground voice-ui text-sm">
+            <p className="text-sm voice-ui text-muted-foreground">
               No network address to offer: the server only listens locally.
             </p>
           )}
           {hosts !== null && hosts.length > 0 && (
             <div className="space-y-1.5">
-              <p className="voice-ui text-muted-foreground text-xs">The link points at</p>
+              <p className="text-xs voice-ui text-muted-foreground">The link points at</p>
               <div className="flex flex-wrap gap-2" role="radiogroup">
                 {hosts.map((candidate) => {
                   const chosen = candidate.host === host;
@@ -419,18 +419,18 @@ function PairSection({ devices }: { devices: Device[] | null }) {
                       role="radio"
                       aria-checked={chosen}
                       onClick={() => setHost(candidate.host)}
-                      className={`voice-ui flex flex-col items-start rounded-[5px] border px-3 py-1.5 text-left ${chosen ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
+                      className={`flex flex-col items-start rounded-[5px] border px-3 py-1.5 text-left voice-ui ${chosen ? "border-primary bg-primary/10" : "hover:bg-muted"}`}
                     >
                       <span className="text-xs font-medium">
                         {candidate.kind}
                         {candidate.name !== "" && (
-                          <span className="text-muted-foreground font-normal">
+                          <span className="font-normal text-muted-foreground">
                             {" "}
                             {candidate.name}
                           </span>
                         )}
                       </span>
-                      <span className="voice-code text-xs">{candidate.host}</span>
+                      <span className="text-xs voice-code">{candidate.host}</span>
                     </button>
                   );
                 })}
@@ -438,19 +438,19 @@ function PairSection({ devices }: { devices: Device[] | null }) {
             </div>
           )}
           {pairing.kind === "paired" && (
-            <p className="voice-ui text-gauge-ok text-sm">Paired: {pairing.label}</p>
+            <p className="text-sm voice-ui text-gauge-ok">Paired: {pairing.label}</p>
           )}
           <button
             type="button"
             disabled={host === null || pairing.kind === "creating"}
             onClick={create}
-            className={`${BUTTON} bg-primary text-primary-foreground border-primary`}
+            className={`${BUTTON} border-primary bg-primary text-primary-foreground`}
           >
             {pairing.kind === "creating" ? "Creating..." : "Create pairing link"}
           </button>
         </>
       )}
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </div>
   );
 }
@@ -458,7 +458,10 @@ function PairSection({ devices }: { devices: Device[] | null }) {
 export function Devices() {
   const { devices, error } = useDevices();
   const now = useNow();
-  const sorted = useMemo(() => (devices === null ? null : [...devices].sort(byRelevance)), [devices]);
+  const sorted = useMemo(
+    () => (devices === null ? null : [...devices].sort(byRelevance)),
+    [devices],
+  );
   return (
     <SettingsSection
       id="devices"
@@ -471,7 +474,7 @@ export function Devices() {
       forceOpen={error !== null}
     >
       {sorted === null && error === null && (
-        <p className="text-muted-foreground voice-ui text-sm">Loading...</p>
+        <p className="text-sm voice-ui text-muted-foreground">Loading...</p>
       )}
       {sorted !== null && (
         <ul className="space-y-2">
@@ -480,7 +483,7 @@ export function Devices() {
           ))}
         </ul>
       )}
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
       <PairSection devices={devices} />
     </SettingsSection>
   );

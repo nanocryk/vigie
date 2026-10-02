@@ -26,7 +26,10 @@ export function homeSections(sessions: readonly SessionView[]): HomeSections {
 }
 
 /** `sessions` in the order of the ids in `previous`, with ids not in it first, in their given order. */
-export function keepOrder(previous: readonly string[], sessions: readonly SessionView[]): SessionView[] {
+export function keepOrder(
+  previous: readonly string[],
+  sessions: readonly SessionView[],
+): SessionView[] {
   const rank = new Map(previous.map((id, index) => [id, index]));
   const fresh = sessions.filter((session) => !rank.has(session.id));
   const known = sessions
@@ -66,7 +69,13 @@ export function rowHighlight(session: SessionView, now: number): RowHighlight | 
   return highlightOf(session, coolingSpell(session, now) !== null);
 }
 
-const HIGHLIGHT_RANK: readonly RowHighlight[] = ["ask", "stopped", "cooling", "finished", "working"];
+const HIGHLIGHT_RANK: readonly RowHighlight[] = [
+  "ask",
+  "stopped",
+  "cooling",
+  "finished",
+  "working",
+];
 
 /**
  * The strongest highlight among `sessions`, leaving out the one on screen and

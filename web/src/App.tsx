@@ -15,9 +15,9 @@ import { trackVisualViewport } from "@/viewport";
 function Gate({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
-      <div className="bg-card text-card-foreground w-full max-w-sm rounded-xl border p-6 shadow-sm">
-        <h1 className="text-primary voice-heading mb-3 text-xl">vigie</h1>
-        <div className="text-muted-foreground space-y-2 text-sm">{children}</div>
+      <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-card-foreground shadow-sm">
+        <h1 className="mb-3 text-xl voice-heading text-primary">vigie</h1>
+        <div className="space-y-2 text-sm text-muted-foreground">{children}</div>
       </div>
     </div>
   );

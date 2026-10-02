@@ -50,15 +50,13 @@ export function commandCards(
   const hidden = new Set([...terminal, ...OWN_COMMANDS.map((card) => card.name)]);
   const claude = commands
     .filter((command) => !hidden.has(command.name))
-    .map(
-      (command): CommandCard => ({
-        name: command.name,
-        title: null,
-        description: command.description,
-        argumentHint: command.argument_hint,
-        own: null,
-      }),
-    );
+    .map((command): CommandCard => ({
+      name: command.name,
+      title: null,
+      description: command.description,
+      argumentHint: command.argument_hint,
+      own: null,
+    }));
   return [...OWN_COMMANDS, ...claude];
 }
 
@@ -95,9 +93,7 @@ export type PanelEvent =
   | { type: "close" };
 
 export type PanelEffect =
-  | { kind: "none" }
-  | { kind: "send"; text: string }
-  | { kind: "own"; command: OwnCommand };
+  { kind: "none" } | { kind: "send"; text: string } | { kind: "own"; command: OwnCommand };
 
 export const closedPanel: PanelState = { kind: "closed" };
 

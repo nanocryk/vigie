@@ -30,9 +30,7 @@ export interface Places {
 }
 
 export type FileContent =
-  | { kind: "text"; text: string; truncated: boolean }
-  | { kind: "image" }
-  | { kind: "binary" };
+  { kind: "text"; text: string; truncated: boolean } | { kind: "image" } | { kind: "binary" };
 
 export type FileView = { path: string; size: number; modified: string | null } & FileContent;
 
@@ -170,7 +168,9 @@ async function check(response: Response): Promise<void> {
     code = null;
   }
   throw new Error(
-    code === null ? `HTTP ${response.status}` : (ERROR_TEXT[code] ?? `${code} (HTTP ${response.status})`),
+    code === null
+      ? `HTTP ${response.status}`
+      : (ERROR_TEXT[code] ?? `${code} (HTTP ${response.status})`),
   );
 }
 
@@ -277,7 +277,10 @@ export function crumbs(path: string): Crumb[] {
     const unc = /^\\\\([^\\]+)\\([^\\]+)/.exec(path);
     const root = unc === null ? path.slice(0, 2) : unc[0];
     const rootPath = `${root}\\`;
-    const parts = path.slice(root.length).split("\\").filter((part) => part !== "");
+    const parts = path
+      .slice(root.length)
+      .split("\\")
+      .filter((part) => part !== "");
     const result: Crumb[] = [{ label: root, path: rootPath }];
     let current = rootPath;
     for (const part of parts) {
@@ -454,7 +457,13 @@ export function openFileInLastFree(
   line: number | null = null,
 ): ExplorerState {
   const next = selectLastFree(state);
-  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line, scroll: 0 });
+  return updateTab(next, next.active, {
+    folder: parentFolder(file),
+    diff: null,
+    file,
+    line,
+    scroll: 0,
+  });
 }
 
 /** Activates the free tab used last on `folder`. */
@@ -477,7 +486,13 @@ export function openSessionFile(
   line: number | null = null,
 ): ExplorerState {
   const next = openSessionTab(state, session, root);
-  return updateTab(next, next.active, { folder: parentFolder(file), diff: null, file, line, scroll: 0 });
+  return updateTab(next, next.active, {
+    folder: parentFolder(file),
+    diff: null,
+    file,
+    line,
+    scroll: 0,
+  });
 }
 
 /** Activates the session's tab on `folder`. */
@@ -492,7 +507,11 @@ export function openSessionFolderAt(
 }
 
 /** Activates the session's tab on its folder view, the diff and any file closed. */
-export function openSessionFolder(state: ExplorerState, session: string, root: string): ExplorerState {
+export function openSessionFolder(
+  state: ExplorerState,
+  session: string,
+  root: string,
+): ExplorerState {
   const next = openSessionTab(state, session, root);
   return updateTab(next, next.active, { diff: null, file: null, line: null });
 }

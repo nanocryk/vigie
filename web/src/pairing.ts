@@ -33,7 +33,10 @@ function optionalLabel(raw: Record<string, unknown>, label: string): string | nu
   return value;
 }
 
-export function parseWhoami(raw: unknown, label: string): { authed: boolean; label: string | null } {
+export function parseWhoami(
+  raw: unknown,
+  label: string,
+): { authed: boolean; label: string | null } {
   if (!isRecord(raw) || typeof raw["authed"] !== "boolean") {
     throw new Error(`${label}: expected {authed: boolean}: ${JSON.stringify(raw)}`);
   }

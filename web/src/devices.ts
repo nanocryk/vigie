@@ -93,7 +93,9 @@ export function parsePairHosts(raw: unknown, label: string): PairHost[] {
   });
   const configured = list(raw, "public_hosts", label).map((entry, index): PairHost => {
     if (!isString(entry)) {
-      throw new Error(`${label}.public_hosts[${index}]: expected a string: ${JSON.stringify(entry)}`);
+      throw new Error(
+        `${label}.public_hosts[${index}]: expected a string: ${JSON.stringify(entry)}`,
+      );
     }
     return { host: entry, kind: "Configured", name: "" };
   });

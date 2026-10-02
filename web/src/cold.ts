@@ -1,12 +1,6 @@
 import { attachmentsField, sendableText } from "@/attachments";
 import { type CacheGauge, formatPercent, formatTokens } from "@/gauges";
-import {
-  CACHE_COLD,
-  type ContextView,
-  HELD_GONE,
-  type RestartMode,
-  SESSION_LIVE,
-} from "@/wire";
+import { CACHE_COLD, type ContextView, HELD_GONE, type RestartMode, SESSION_LIVE } from "@/wire";
 
 export type ColdChoice = "rewarm" | "continue" | "blank";
 

@@ -123,7 +123,13 @@ describe("parseServerMessage", () => {
         first_seq: 1,
         start_reached: true,
         events: [
-          { session: "s", seq: 1, time: "t", kind: "host", payload: { event: "started", cwd: "/p" } },
+          {
+            session: "s",
+            seq: 1,
+            time: "t",
+            kind: "host",
+            payload: { event: "started", cwd: "/p" },
+          },
           { session: "s", seq: 2, time: "t", kind: "line", payload: "raw" },
         ],
       },

@@ -1,8 +1,6 @@
 /** Upstream commits HEAD lacks, from the last `git fetch`. */
 export type Check =
-  | { state: "unchecked" }
-  | { state: "done"; behind: number }
-  | { state: "failed"; message: string };
+  { state: "unchecked" } | { state: "done"; behind: number } | { state: "failed"; message: string };
 
 export type Step = "clean" | "pull" | "install" | "web" | "server";
 

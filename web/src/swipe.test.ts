@@ -158,10 +158,14 @@ describe("second swipe", () => {
 
   it("times out after the confirmation window", () => {
     const end = 100 + CONFIRM_WINDOW_MS;
-    expect(run([...swipe(150, 0), { type: "tick", t: end - 1 }], SAFE)).toEqual(armed("right", 100));
+    expect(run([...swipe(150, 0), { type: "tick", t: end - 1 }], SAFE)).toEqual(
+      armed("right", 100),
+    );
     expect(run([...swipe(150, 0), { type: "tick", t: end }], SAFE)).toEqual(idle);
     // Released after the window: the second swipe only arms again.
-    expect(run([...swipe(150, 0), ...swipe(150, end - 50)], SAFE)).toEqual(armed("right", end + 50));
+    expect(run([...swipe(150, 0), ...swipe(150, end - 50)], SAFE)).toEqual(
+      armed("right", end + 50),
+    );
   });
 
   it("ignores everything once fired", () => {

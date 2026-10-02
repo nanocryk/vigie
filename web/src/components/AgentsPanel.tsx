@@ -6,8 +6,10 @@ import { formatTokens } from "@/gauges";
 import { type Side, TAP_SLOP_PX } from "@/swipe";
 
 export const SPRING_BACK = "transform 200ms ease-out";
-const ROW = "bg-card relative w-full touch-pan-y rounded-[5px] border px-3 py-2 text-left select-none";
-export const SIDE_BUTTON = "voice-ui shrink-0 rounded-[5px] border px-3 text-xs disabled:opacity-50";
+const ROW =
+  "bg-card relative w-full touch-pan-y rounded-[5px] border px-3 py-2 text-left select-none";
+export const SIDE_BUTTON =
+  "voice-ui shrink-0 rounded-[5px] border px-3 text-xs disabled:opacity-50";
 /** Indent per level of the tree. */
 const INDENT_REM = 1;
 
@@ -60,12 +62,12 @@ function RowBody({
   return (
     <>
       <div className="flex items-baseline gap-2">
-        <span className="voice-heading min-w-0 flex-1 truncate text-sm">{name}</span>
-        {current && <span className="text-primary voice-ui shrink-0 text-xs">on screen</span>}
-        <span className="text-muted-foreground voice-ui shrink-0 text-xs">{status}</span>
+        <span className="min-w-0 flex-1 truncate text-sm voice-heading">{name}</span>
+        {current && <span className="shrink-0 text-xs voice-ui text-primary">on screen</span>}
+        <span className="shrink-0 text-xs voice-ui text-muted-foreground">{status}</span>
       </div>
       {activity !== null && (
-        <div className="text-muted-foreground voice-ui truncate text-xs">{activity}</div>
+        <div className="truncate text-xs voice-ui text-muted-foreground">{activity}</div>
       )}
     </>
   );
@@ -98,7 +100,7 @@ function AgentRow(props: {
           });
         }}
       />
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </li>
   );
 }
@@ -133,15 +135,14 @@ function SwipeRow({
   const armedLeft = view.armed?.side === "left";
   const tap = useSwitchOnTap(view.armed !== null, onSwitch);
   const state = stopping ? "stopping..." : agentStateLabel(entry);
-  const status =
-    entry.promptTokens > 0 ? `${state} · ${formatTokens(entry.promptTokens)}` : state;
+  const status = entry.promptTokens > 0 ? `${state} · ${formatTokens(entry.promptTokens)}` : state;
   return (
     <div className="flex items-stretch gap-2">
       <div className="relative min-w-0 flex-1 overflow-hidden rounded-[5px]">
         {coarse && (
           <div
             aria-hidden
-            className="voice-ui absolute inset-0 flex items-center justify-between rounded-[5px] px-4 text-sm text-black"
+            className="absolute inset-0 flex items-center justify-between rounded-[5px] px-4 text-sm voice-ui text-black"
             style={{ background: reveal(view.lean, armedLeft) }}
           >
             <span>Open</span>
@@ -167,7 +168,7 @@ function SwipeRow({
           <RowBody name={entry.name} status={status} activity={entry.activity} current={current} />
         </div>
         {coarse && armedLeft && (
-          <span className="bg-card voice-heading text-destructive pointer-events-none absolute top-1.5 left-2 rounded-[5px] px-2 py-0.5 text-sm shadow-sm">
+          <span className="pointer-events-none absolute top-1.5 left-2 rounded-[5px] bg-card px-2 py-0.5 text-sm voice-heading text-destructive shadow-sm">
             Stop?
           </span>
         )}
@@ -215,16 +216,16 @@ export function AgentsPanel({
   const coarse = coarsePointer();
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 px-3">
-      <div className="bg-background pointer-events-auto mx-auto flex max-h-[60dvh] max-w-5xl flex-col rounded-[5px] border shadow-lg">
+      <div className="pointer-events-auto mx-auto flex max-h-[60dvh] max-w-5xl flex-col rounded-[5px] border bg-background shadow-lg">
         <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-          <span className="voice-heading text-sm">Agents</span>
-          <span className="text-muted-foreground voice-ui truncate text-xs">
+          <span className="text-sm voice-heading">Agents</span>
+          <span className="truncate text-xs voice-ui text-muted-foreground">
             {coarse ? "‹‹ stop · open ›" : ""}
           </span>
           <button
             type="button"
             onClick={onClose}
-            className="voice-ui hover:bg-muted shrink-0 rounded-[5px] px-2 py-0.5 text-xs"
+            className="shrink-0 rounded-[5px] px-2 py-0.5 text-xs voice-ui hover:bg-muted"
           >
             Close
           </button>
@@ -261,7 +262,7 @@ export function AgentsPanel({
             ))}
           </ul>
           {entries.length === 0 && (
-            <p className="text-muted-foreground voice-ui px-1 py-2 text-sm">No agent yet.</p>
+            <p className="px-1 py-2 text-sm voice-ui text-muted-foreground">No agent yet.</p>
           )}
         </div>
       </div>

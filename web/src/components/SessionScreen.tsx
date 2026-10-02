@@ -443,11 +443,11 @@ function Composer({
         aria-label="Attach files"
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => picker.current?.click()}
-        className="bg-card hover:bg-muted text-muted-foreground flex h-14 w-10 shrink-0 cursor-pointer items-center justify-center rounded-[5px] border"
+        className="flex h-14 w-10 shrink-0 cursor-pointer items-center justify-center rounded-[5px] border bg-card text-muted-foreground hover:bg-muted"
       >
         <PaperclipIcon />
       </button>
-      <div className="bg-card focus-within:ring-ring relative flex min-w-0 flex-1 flex-col rounded-[5px] border focus-within:ring-2">
+      <div className="relative flex min-w-0 flex-1 flex-col rounded-[5px] border bg-card focus-within:ring-2 focus-within:ring-ring">
         {drawer.kind !== "none" && (
           <SlashDrawer drawer={drawer} selected={selected} onPick={pick} onDismiss={dismiss} />
         )}
@@ -586,7 +586,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     [id],
   );
   const entries: AgentEntry[] = agentEntries(view?.agents ?? [], transcript.agents);
-  const agent = viewing === null ? null : (entries.find((entry) => entry.toolUseId === viewing) ?? null);
+  const agent =
+    viewing === null ? null : (entries.find((entry) => entry.toolUseId === viewing) ?? null);
   const shown = viewing === null ? transcript : (transcript.scopes.get(viewing) ?? emptyTranscript);
   const draftSlot = draftKey(id, viewing);
   /** A relay to an agent whose cache went cold, waiting for its confirmation. */
@@ -1048,9 +1049,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const claudeCards = allCards.filter((card) => card.own === null);
   const argumentCard: CommandCard | null =
     panel.kind === "argument"
-      ? (allCards.find(
-          (card) => card.own === null && card.name === commandQuery(panel.text),
-        ) ?? {
+      ? (allCards.find((card) => card.own === null && card.name === commandQuery(panel.text)) ?? {
           name: commandQuery(panel.text),
           title: null,
           description: "",
@@ -1074,7 +1073,12 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     choosingSettings,
     fallbackModel,
   );
-  const effort = shownEffort(view?.applied_effort ?? null, picks.effort, choosingSettings, fallbackEffort);
+  const effort = shownEffort(
+    view?.applied_effort ?? null,
+    picks.effort,
+    choosingSettings,
+    fallbackEffort,
+  );
 
   // Revoking drops the granted folders with the Claude process; the next send
   // resumes the same Claude session with `--resume`, keeping its context.
@@ -1108,7 +1112,12 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   };
   const [bottomRequest, setBottomRequest] = useState(0);
   const stopAgent = (taskId: string) =>
-    client.command({ type: "stop_task", session: id, task_id: taskId, client_id: client.newClientId() });
+    client.command({
+      type: "stop_task",
+      session: id,
+      task_id: taskId,
+      client_id: client.newClientId(),
+    });
   // The call fails and the turn goes on, so nothing to wake.
   const stopTool = useCallback(
     async (taskId: string) => {
@@ -1307,7 +1316,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         column={
           <SessionColumn
             session={view}
-            {...(viewing === null ? {} : {
+            {...(viewing === null
+              ? {}
+              : {
                   agent: { cache: agent?.cache ?? null, promptTokens: agent?.promptTokens ?? 0 },
                 })}
           />
@@ -1318,7 +1329,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               <button
                 type="button"
                 onClick={() => switchTo(null)}
-                className="text-primary hover:bg-muted mr-1 rounded-[5px] px-1"
+                className="mr-1 rounded-[5px] px-1 text-primary hover:bg-muted"
               >
                 &lsaquo; main
               </button>
@@ -1369,7 +1380,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                   title={approvedPlan}
                   className={THIN_BUTTON}
                 >
-                  <FileIcon className="text-mode-plan size-3.5" />
+                  <FileIcon className="size-3.5 text-mode-plan" />
                   <span className="max-sm:hidden">Plan</span>
                 </button>
               )}
@@ -1380,7 +1391,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                   title={`Pending changes in ${folderName(repo)}`}
                   className={THIN_BUTTON}
                 >
-                  <DiffIcon className="text-git-modified size-3.5" />
+                  <DiffIcon className="size-3.5 text-git-modified" />
                   <span className="max-sm:hidden">Diff</span>
                 </button>
               )}
@@ -1402,7 +1413,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       />
 
       {serverError !== null && (
-        <p className="text-destructive border-b px-3 py-2 text-sm">{serverError}</p>
+        <p className="border-b px-3 py-2 text-sm text-destructive">{serverError}</p>
       )}
 
       <TranscriptView
@@ -1523,7 +1534,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                             setMenu(closedMenu);
                             const draft = takeDraft();
                             if (draft !== null) {
-                              send(draft.text, { ...rewarm, ...attachmentsField(draft.attachments) });
+                              send(draft.text, {
+                                ...rewarm,
+                                ...attachmentsField(draft.attachments),
+                              });
                             }
                           }
                         : null,
@@ -1611,62 +1625,64 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               onCancel={cancelAgentCold}
             />
           ) : (
-          <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-            {commandError !== null && (
-              <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">{commandError}</p>
-            )}
-            {stopError !== null && (
-              <p className="text-destructive voice-ui mx-auto max-w-5xl text-xs">
-                Stop failed: {stopError}
-              </p>
-            )}
-            {editing !== null && viewing === null && (
-              <div className="voice-ui mx-auto flex max-w-5xl items-center justify-between gap-2 pb-1 text-xs">
-                <span className="text-muted-foreground">
-                  {(view?.held ?? []).some((held) => held.id === editing.held.id)
-                    ? "Editing queued message"
-                    : "This queued message was sent meanwhile"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => endEdit(editing.stash)}
-                  className="text-primary underline"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-            <Composer
-              key={`${draftSlot}:${composerEpoch}`}
-              session={draftSlot}
-              uploadTo={id}
-              takeFocus={() => {
-                const focus = focusComposer.current;
-                focusComposer.current = false;
-                return client.takeCreated(id) || focus;
-              }}
-              deadline={mainDeadline}
-              placeholder={
-                viewing === null
-                  ? "Message Claude"
-                  : `Message ${agent?.name ?? "the agent"}, relayed by the main agent`
-              }
-              turnOpen={transcript.turnOpen}
-              stopping={stopping}
-              menuOpen={menu.kind === "open"}
-              commands={claudeCards}
-              recentCommands={snapshot.recentCommands}
-              onSuggest={() => void client.refreshRecentCommands()}
-              onSend={composerSend}
-              onStop={stop}
-              onMenu={() => setMenu({ kind: "open", entry: null })}
-              onMenuToggle={() =>
-                setMenu((current) =>
-                  current.kind === "open" ? closedMenu : { kind: "open", entry: null },
-                )
-              }
-            />
-          </footer>
+            <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+              {commandError !== null && (
+                <p className="mx-auto max-w-5xl text-xs voice-ui text-destructive">
+                  {commandError}
+                </p>
+              )}
+              {stopError !== null && (
+                <p className="mx-auto max-w-5xl text-xs voice-ui text-destructive">
+                  Stop failed: {stopError}
+                </p>
+              )}
+              {editing !== null && viewing === null && (
+                <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 pb-1 text-xs voice-ui">
+                  <span className="text-muted-foreground">
+                    {(view?.held ?? []).some((held) => held.id === editing.held.id)
+                      ? "Editing queued message"
+                      : "This queued message was sent meanwhile"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => endEdit(editing.stash)}
+                    className="text-primary underline"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              <Composer
+                key={`${draftSlot}:${composerEpoch}`}
+                session={draftSlot}
+                uploadTo={id}
+                takeFocus={() => {
+                  const focus = focusComposer.current;
+                  focusComposer.current = false;
+                  return client.takeCreated(id) || focus;
+                }}
+                deadline={mainDeadline}
+                placeholder={
+                  viewing === null
+                    ? "Message Claude"
+                    : `Message ${agent?.name ?? "the agent"}, relayed by the main agent`
+                }
+                turnOpen={transcript.turnOpen}
+                stopping={stopping}
+                menuOpen={menu.kind === "open"}
+                commands={claudeCards}
+                recentCommands={snapshot.recentCommands}
+                onSuggest={() => void client.refreshRecentCommands()}
+                onSend={composerSend}
+                onStop={stop}
+                onMenu={() => setMenu({ kind: "open", entry: null })}
+                onMenuToggle={() =>
+                  setMenu((current) =>
+                    current.kind === "open" ? closedMenu : { kind: "open", entry: null },
+                  )
+                }
+              />
+            </footer>
           )}
         </>
       )}

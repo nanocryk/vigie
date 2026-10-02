@@ -11,9 +11,9 @@ describe("swipe preferences", () => {
     expect(
       parseSwipePrefs('{"distance": "long", "confirmWindow": 5000, "safeAsk": "one"}'),
     ).toEqual({ distance: "long", confirmWindow: 5000, safeAsk: "one" });
-    expect(
-      parseSwipePrefs('{"distance": "far", "confirmWindow": 4000, "safeAsk": "one"}'),
-    ).toEqual({ ...DEFAULT_SWIPE_PREFS, safeAsk: "one" });
+    expect(parseSwipePrefs('{"distance": "far", "confirmWindow": 4000, "safeAsk": "one"}')).toEqual(
+      { ...DEFAULT_SWIPE_PREFS, safeAsk: "one" },
+    );
   });
 
   it("tune the gesture as the built-in default when left alone", () => {

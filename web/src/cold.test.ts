@@ -51,9 +51,7 @@ describe("coldPanelShown", () => {
   });
 
   it("holds a choice until the next cold spell", () => {
-    expect(shown({ gauge: cold, asks: 1, chosen: { spell: coldAt, choice: "blank" } })).toBe(
-      false,
-    );
+    expect(shown({ gauge: cold, asks: 1, chosen: { spell: coldAt, choice: "blank" } })).toBe(false);
     const later = cacheGauge(
       { last_request_at: "2026-09-27T12:00:00Z", ttl_secs: 3600 },
       start + 4 * HOUR,
@@ -72,9 +70,9 @@ describe("coldPanelShown", () => {
   it("shows for a model or effort change on a warm cache, until a choice for it", () => {
     const settingsAt = start + 10;
     expect(shown({ gauge: warm, settingsAt })).toBe(true);
-    expect(shown({ gauge: warm, settingsAt, chosen: { spell: settingsAt, choice: "rewarm" } })).toBe(
-      false,
-    );
+    expect(
+      shown({ gauge: warm, settingsAt, chosen: { spell: settingsAt, choice: "rewarm" } }),
+    ).toBe(false);
   });
 });
 

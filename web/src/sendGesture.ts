@@ -10,8 +10,7 @@ export type SendAction = "send" | "stop" | "menu";
 export const SEND_SWIPE_PX = 40;
 
 export type SendGestureState =
-  | { kind: "idle" }
-  | { kind: "dragging"; x0: number; y0: number; dx: number; dy: number };
+  { kind: "idle" } | { kind: "dragging"; x0: number; y0: number; dx: number; dy: number };
 
 export type SendGestureInput =
   | { type: "down"; x: number; y: number }
@@ -28,7 +27,11 @@ export interface SendGestureContext {
 export const idleGesture: SendGestureState = { kind: "idle" };
 
 /** The swipe a movement makes, or null below the threshold, off-axis, or toward a disabled stop. */
-export function swipeAction(dx: number, dy: number, context: SendGestureContext): SendAction | null {
+export function swipeAction(
+  dx: number,
+  dy: number,
+  context: SendGestureContext,
+): SendAction | null {
   const across = Math.abs(dx);
   const up = -dy;
   if (across >= SEND_SWIPE_PX && across >= HORIZONTAL_RATIO * Math.abs(dy)) {

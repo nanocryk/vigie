@@ -81,7 +81,7 @@ export function TouchSend({
       onPointerCancel={(event) => finish(event, { type: "cancel" })}
       onMouseDown={keepFocus}
       onContextMenu={keepFocus}
-      className={`voice-ui border-t-foreground h-14 w-28 shrink-0 touch-none rounded-[5px] border-t-4 text-sm select-none ${LATCHED_STYLE[view.latched ?? "send"]} ${stoppable ? "send-stop-edge border-l-4" : ""}`}
+      className={`h-14 w-28 shrink-0 touch-none rounded-[5px] border-t-4 border-t-foreground text-sm voice-ui select-none ${LATCHED_STYLE[view.latched ?? "send"]} ${stoppable ? "send-stop-edge border-l-4" : ""}`}
       style={{
         transform: `translate(${view.x / 2}px, ${view.y / 2}px)`,
         transition: state.kind === "dragging" ? "none" : "transform 200ms ease-out",
@@ -119,7 +119,7 @@ export function DesktopSend({
         onMouseDown={keepFocus}
         onClick={onStop}
         disabled={!turnOpen || stopping}
-        className={`${DESKTOP_BUTTON} border-destructive w-20 ${turnOpen ? "bg-destructive text-black disabled:opacity-60" : "text-destructive/60 bg-black"}`}
+        className={`${DESKTOP_BUTTON} w-20 border-destructive ${turnOpen ? "bg-destructive text-black disabled:opacity-60" : "bg-black text-destructive/60"}`}
       >
         {stopping ? "Stopping..." : "Stop"}
       </button>
@@ -129,7 +129,7 @@ export function DesktopSend({
         aria-expanded={menuOpen}
         onMouseDown={keepFocus}
         onClick={onMenu}
-        className={`${DESKTOP_BUTTON} border-t-foreground w-20 border-t-4 ${menuOpen ? "bg-muted" : "bg-card hover:bg-muted"}`}
+        className={`${DESKTOP_BUTTON} w-20 border-t-4 border-t-foreground ${menuOpen ? "bg-muted" : "bg-card hover:bg-muted"}`}
       >
         Menu
       </button>
@@ -138,7 +138,7 @@ export function DesktopSend({
         onMouseDown={keepFocus}
         onClick={onSend}
         disabled={!ready}
-        className={`${DESKTOP_BUTTON} bg-primary text-primary-foreground border-primary w-20 disabled:opacity-50`}
+        className={`${DESKTOP_BUTTON} w-20 border-primary bg-primary text-primary-foreground disabled:opacity-50`}
       >
         Send
       </button>

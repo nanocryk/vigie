@@ -103,8 +103,16 @@ describe("sendGestureView", () => {
 
   it("follows the dominant axis up to the threshold", () => {
     expect(sendGestureView(drag(20, 5), RUNNING)).toEqual({ x: 20, y: 0, latched: null });
-    expect(sendGestureView(drag(200, 5), RUNNING)).toEqual({ x: SEND_SWIPE_PX, y: 0, latched: "send" });
-    expect(sendGestureView(drag(3, -200), RUNNING)).toEqual({ x: 0, y: -SEND_SWIPE_PX, latched: "menu" });
+    expect(sendGestureView(drag(200, 5), RUNNING)).toEqual({
+      x: SEND_SWIPE_PX,
+      y: 0,
+      latched: "send",
+    });
+    expect(sendGestureView(drag(3, -200), RUNNING)).toEqual({
+      x: 0,
+      y: -SEND_SWIPE_PX,
+      latched: "menu",
+    });
     expect(sendGestureView(drag(0, 60), RUNNING)).toEqual({ x: 0, y: 0, latched: null });
   });
 

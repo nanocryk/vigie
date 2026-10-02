@@ -3,7 +3,12 @@ import { useEffect, useState } from "react";
 const POLL_MS = 60_000;
 
 export function parseVersion(raw: unknown, label: string): string {
-  if (typeof raw !== "object" || raw === null || !("build" in raw) || typeof raw.build !== "string") {
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    !("build" in raw) ||
+    typeof raw.build !== "string"
+  ) {
     throw new Error(`${label}: expected {build: string}: ${JSON.stringify(raw)}`);
   }
   return raw.build;

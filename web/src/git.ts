@@ -272,7 +272,10 @@ export function folderMarks(status: RepoStatus, folder: string): FolderMarks {
   const fold = (text: string) => (windows ? text.toLowerCase() : text);
   const root = status.root.replace(/[\\/]+$/, "");
   if (!fold(folder).startsWith(fold(root))) return { rows, deleted };
-  const rel = folder.slice(root.length).replace(/^[\\/]+|[\\/]+$/g, "").replaceAll("\\", "/");
+  const rel = folder
+    .slice(root.length)
+    .replace(/^[\\/]+|[\\/]+$/g, "")
+    .replaceAll("\\", "/");
   const prefix = rel === "" ? "" : `${rel}/`;
   const folders = new Map<string, boolean>();
   for (const change of status.changes) {
@@ -326,7 +329,9 @@ export function startsCollapsed(file: ChangedFile): boolean {
 }
 
 /** Files grouped by folder, folders in path order, the root first. */
-export function groupByFolder(files: readonly ChangedFile[]): { folder: string; files: ChangedFile[] }[] {
+export function groupByFolder(
+  files: readonly ChangedFile[],
+): { folder: string; files: ChangedFile[] }[] {
   const groups = new Map<string, ChangedFile[]>();
   for (const file of files) {
     const folder = dirName(file.path);
@@ -342,13 +347,11 @@ export function groupByFolder(files: readonly ChangedFile[]): { folder: string; 
 /** A changed file in the shape `DiffBlock` renders: removed lines by old number, others by new. */
 export function blockDiff(file: ChangedFile): BlockDiff {
   const hunks = file.hunks.map((hunk) =>
-    hunk.map(
-      (line): DiffLine => ({
-        kind: line.kind,
-        text: line.text,
-        number: line.kind === "removed" ? line.old : line.new,
-      }),
-    ),
+    hunk.map((line): DiffLine => ({
+      kind: line.kind,
+      text: line.text,
+      number: line.kind === "removed" ? line.old : line.new,
+    })),
   );
   return {
     verb: file.status === "added" ? "Write" : "Update",

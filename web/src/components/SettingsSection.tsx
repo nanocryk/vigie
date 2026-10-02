@@ -29,12 +29,12 @@ export function SettingsSection({
   const open = hasBody && (forceOpen || stored);
   const heading = (
     <span className="min-w-0">
-      <span className="voice-heading block text-sm">{title}</span>
-      <span className="text-muted-foreground voice-ui block text-xs">{summary}</span>
+      <span className="block text-sm voice-heading">{title}</span>
+      <span className="block text-xs voice-ui text-muted-foreground">{summary}</span>
     </span>
   );
   return (
-    <section className="bg-card rounded-[5px] border">
+    <section className="rounded-[5px] border bg-card">
       <div className="flex items-center justify-between gap-3 px-4 py-2">
         {hasBody ? (
           <h2 className="min-w-0 flex-1">
@@ -47,7 +47,7 @@ export function SettingsSection({
               className="flex w-full items-start gap-2 text-left"
             >
               <ChevronIcon
-                className={`text-muted-foreground mt-px size-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+                className={`mt-px size-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
               />
               {heading}
             </button>

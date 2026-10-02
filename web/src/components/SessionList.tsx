@@ -40,8 +40,8 @@ export function ConnectionDot({ status }: { status: ConnectionStatus }) {
       title={text}
       className={
         status === "connecting"
-          ? "bg-gauge-glow inline-block size-2 shrink-0 animate-pulse rounded-full"
-          : "bg-destructive inline-block size-2 shrink-0 rounded-full"
+          ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-gauge-glow"
+          : "inline-block size-2 shrink-0 rounded-full bg-destructive"
       }
     />
   );
@@ -53,8 +53,8 @@ export function BusyDot({ busy }: { busy: boolean }) {
       aria-label={busy ? "busy" : "idle"}
       className={
         busy
-          ? "bg-primary inline-block size-2 shrink-0 animate-pulse rounded-full"
-          : "bg-muted-foreground/30 inline-block size-2 shrink-0 rounded-full"
+          ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-primary"
+          : "inline-block size-2 shrink-0 rounded-full bg-muted-foreground/30"
       }
     />
   );
@@ -68,7 +68,7 @@ function OpenExplorer() {
         changeExplorer(selectLastFree);
         navigate({ kind: "files" });
       }}
-      className="bg-card hover:bg-muted voice-ui flex w-full items-center gap-3 rounded-[5px] border px-4 py-3 text-left"
+      className="flex w-full items-center gap-3 rounded-[5px] border bg-card px-4 py-3 text-left voice-ui hover:bg-muted"
     >
       <svg
         viewBox="0 0 24 24"
@@ -78,13 +78,13 @@ function OpenExplorer() {
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden
-        className="text-primary size-6 shrink-0"
+        className="size-6 shrink-0 text-primary"
       >
         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       </svg>
       <span className="min-w-0 flex-1">
         <span className="block">File explorer</span>
-        <span className="text-muted-foreground block text-xs">
+        <span className="block text-xs text-muted-foreground">
           Browse files and start a session in a folder
         </span>
       </span>
@@ -148,12 +148,12 @@ function RowBody({
   return (
     <div className={session.live ? "" : "opacity-45"}>
       <div className="flex items-center gap-2">
-        <span className="voice-heading min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
-        <span className="text-muted-foreground voice-ui shrink-0 text-xs">
+        <span className="min-w-0 flex-1 truncate voice-heading">{sessionTitle(session)}</span>
+        <span className="shrink-0 text-xs voice-ui text-muted-foreground">
           {busyLabel ?? formatAgo(session.updated_at, now)}
         </span>
       </div>
-      <div className="text-muted-foreground voice-code truncate text-xs">{session.cwd}</div>
+      <div className="truncate text-xs voice-code text-muted-foreground">{session.cwd}</div>
     </div>
   );
 }
@@ -258,7 +258,7 @@ function ActionRow({
         {coarse && (
           <div
             aria-hidden
-            className={`voice-ui absolute inset-0 flex items-center rounded-[5px] px-4 text-sm text-black ${side === "left" ? "justify-end" : "justify-start"}`}
+            className={`absolute inset-0 flex items-center rounded-[5px] px-4 text-sm voice-ui text-black ${side === "left" ? "justify-end" : "justify-start"}`}
             style={{
               background: slidOut ? REVEAL[action].latched : revealBackground(action, view.lean),
             }}
@@ -269,7 +269,7 @@ function ActionRow({
         <div
           ref={coarse ? surface : undefined}
           {...tap}
-          className={`${ROW} hover:bg-muted relative w-full touch-pan-y select-none ${armed ? "border-destructive" : ""} ${highlight !== null ? "border-transparent" : ""} ${session.live || highlight !== null ? "" : "border-long-dash"}`}
+          className={`${ROW} relative w-full touch-pan-y select-none hover:bg-muted ${armed ? "border-destructive" : ""} ${highlight !== null ? "border-transparent" : ""} ${session.live || highlight !== null ? "" : "border-long-dash"}`}
           style={{
             transform: slidOut
               ? `translateX(${side === "left" ? "-110%" : "110%"})`
@@ -280,7 +280,7 @@ function ActionRow({
           <RowBody session={session} now={now} busyLabel={busyLabel} />
         </div>
         {coarse && armed && (
-          <span className="bg-card voice-heading text-destructive pointer-events-none absolute top-1.5 right-2 rounded-[5px] px-2 py-0.5 text-sm shadow-sm">
+          <span className="pointer-events-none absolute top-1.5 right-2 rounded-[5px] bg-card px-2 py-0.5 text-sm voice-heading text-destructive shadow-sm">
             Kill?
           </span>
         )}
@@ -308,7 +308,7 @@ function Entry({ client, session, now }: { client: Client; session: SessionView;
           setAttempt((count) => count + 1);
         }}
       />
-      {error !== null && <p className="text-destructive voice-ui text-xs">{error}</p>}
+      {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
     </li>
   );
 }
@@ -318,7 +318,7 @@ function SwipeHint({ side, text }: { side: "left" | "right"; text: string }) {
   if (!coarsePointer()) return null;
   return (
     <div
-      className={`text-muted-foreground voice-ui text-xs ${side === "left" ? "text-left" : "text-right"}`}
+      className={`text-xs voice-ui text-muted-foreground ${side === "left" ? "text-left" : "text-right"}`}
     >
       {side === "left" ? `‹ ${text}` : `${text} ›`}
     </div>
@@ -342,11 +342,11 @@ function NewScratch({ client }: { client: Client }) {
         type="button"
         disabled={starting}
         onClick={() => void start()}
-        className="bg-card hover:bg-muted voice-ui rounded-[5px] border px-3 py-1 text-sm disabled:opacity-50"
+        className="rounded-[5px] border bg-card px-3 py-1 text-sm voice-ui hover:bg-muted disabled:opacity-50"
       >
         {starting ? "Starting..." : "New scratch"}
       </button>
-      {error !== null && <p className="text-destructive voice-ui w-full text-xs">{error}</p>}
+      {error !== null && <p className="w-full text-xs voice-ui text-destructive">{error}</p>}
     </>
   );
 }
@@ -389,7 +389,7 @@ function Sessions({
   return (
     <>
       {active.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No active sessions.</p>
+        <p className="text-sm text-muted-foreground">No active sessions.</p>
       ) : (
         <div className="space-y-1">
           <SwipeHint side="left" text="Kill / Archive" />
@@ -402,7 +402,7 @@ function Sessions({
       )}
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-muted-foreground voice-ui px-2 text-sm">Scratch</h2>
+          <h2 className="px-2 text-sm voice-ui text-muted-foreground">Scratch</h2>
           <NewScratch client={client} />
         </div>
         {scratch.length > 0 && (
@@ -422,7 +422,7 @@ function Sessions({
             type="button"
             aria-expanded={showArchived}
             onClick={() => setShowArchived((shown) => !shown)}
-            className="text-muted-foreground voice-ui hover:bg-muted rounded-[5px] px-2 py-1 text-sm"
+            className="rounded-[5px] px-2 py-1 text-sm voice-ui text-muted-foreground hover:bg-muted"
           >
             {showArchived ? "▾" : "▸"} Archived ({archived.length})
           </button>
@@ -453,7 +453,7 @@ export function SessionList({ client }: { client: Client }) {
   return (
     <>
       <Header
-        left={<span className="text-primary voice-heading px-2 text-lg">vigie</span>}
+        left={<span className="px-2 text-lg voice-heading text-primary">vigie</span>}
         right={<ConnectionDot status={snapshot.status} />}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
@@ -463,10 +463,10 @@ export function SessionList({ client }: { client: Client }) {
         <div className="mx-auto max-w-3xl space-y-6 p-4">
           <OpenExplorer />
           {snapshot.sessionsError !== null && (
-            <p className="text-destructive text-sm">{snapshot.sessionsError}</p>
+            <p className="text-sm text-destructive">{snapshot.sessionsError}</p>
           )}
           {snapshot.sessions === null ? (
-            <p className="text-muted-foreground text-sm">Loading sessions...</p>
+            <p className="text-sm text-muted-foreground">Loading sessions...</p>
           ) : (
             <Sessions client={client} sessions={snapshot.sessions} now={now} />
           )}
