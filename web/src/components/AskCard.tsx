@@ -303,7 +303,10 @@ function CardFrame({
     <section
       className={`bg-card border-primary/40 flex max-h-[50%] shrink-0 flex-col border-t-2 px-3 py-3 ${scroll === "frame" ? "overflow-y-auto" : "overflow-hidden"}`}
     >
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col gap-3">
+      {/* Shrinking only for `content`: in `frame` it would clip the bottom instead of scrolling. */}
+      <div
+        className={`mx-auto flex w-full max-w-5xl flex-col gap-3 ${scroll === "content" ? "min-h-0" : ""}`}
+      >
         {deadline !== null && holdsInput && <CacheLowBanner deadline={deadline} subject="ask" />}
         {goTo !== null && (
           <button
