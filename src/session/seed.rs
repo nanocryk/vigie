@@ -26,7 +26,7 @@ const TOOL_LIMIT: usize = 100;
 /// Ends a seed sent without a typed message.
 pub const CLOSING: &str =
     "The user has not typed a request yet: summarize where things stand and ask what to do next.";
-const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
+pub const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
 /// Tools whose file a fresh session reads again when it picks the work back up.
 const FILE_TOOLS: [&str; 5] = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
 /// Input keys tried in order for the argument shown on a tool line.
@@ -323,7 +323,7 @@ pub fn first_message(seed: &str, text: &str) -> String {
 
 /// The CLI echoes a typed slash command as tags: `<command-name>/x</command-name>`
 /// and, when given, `<command-args>`. Returns the command as typed.
-fn typed_command(text: &str) -> Option<String> {
+pub fn typed_command(text: &str) -> Option<String> {
     if !text.starts_with("<command-") {
         return None;
     }

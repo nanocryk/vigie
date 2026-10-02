@@ -10,6 +10,7 @@ mod catalog;
 mod commands;
 mod events;
 mod held;
+mod messages;
 mod plans;
 pub mod prune;
 mod push;
@@ -29,13 +30,14 @@ pub use bash_asks::{BashAnswer, BashAsk, BashAskFilter, Denial};
 pub use catalog::SharedCatalog;
 pub use events::{EventKind, PageStart, StoredEvent};
 pub use held::{HeldEdit, HeldMessage, HeldMode};
+pub use messages::{MessageQuery, Role, StoredMessage};
 pub use samples::UsageSample;
 pub use sessions::{SessionRow, SessionState, Unread};
 
 use crate::{state_dir, usage};
 
 /// Applied in order; `PRAGMA user_version` counts the ones already applied.
-const MIGRATIONS: [&str; 21] = [
+const MIGRATIONS: [&str; 22] = [
     r#"
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -182,6 +184,7 @@ CREATE INDEX held_messages_by_session ON held_messages (session_id, position);
 "#,
     bash_asks::MIGRATION,
     bash_asks::FILTERS_MIGRATION,
+    messages::MIGRATION,
 ];
 
 /// Jobs the writer thread folds into one transaction at most.
@@ -306,6 +309,9 @@ pub fn migrate(connection: &Connection) -> Result<()> {
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(version) {
         let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(sql)?;
+        if *sql == messages::MIGRATION {
+            messages::backfill(&transaction)?;
+        }
         transaction.pragma_update(None, "user_version", index + 1)?;
         transaction.commit()?;
     }
@@ -420,6 +426,7 @@ mod tests {
                 "cli_catalog",
                 "events",
                 "held_messages",
+                "history_messages",
                 "plans",
                 "push_subscriptions",
                 "sessions",

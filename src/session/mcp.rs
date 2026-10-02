@@ -1,13 +1,15 @@
 //! vigie's MCP server, hosted in each session actor and reached through `mcp_message`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::session::server_restart::ServerRestart;
-use crate::store::{BashAsk, BashAskFilter, Store};
+use crate::store::{BashAsk, BashAskFilter, MessageQuery, SessionRow, Store, StoredMessage};
 
 pub const SERVER_NAME: &str = "vigie";
 /// The CLI's name for `set_attachments`, allowed without asking. The other tools ask.
@@ -18,6 +20,8 @@ const BASH_ASKS: &str = "bash_asks";
 const BASH_ASKS_CLEAR: &str = "bash_asks_clear";
 const BASH_ASKS_FILTER: &str = "bash_asks_filter";
 const RESTART_SERVER: &str = "restart_server";
+const HISTORY_SEARCH: &str = "history_search";
+const HISTORY_READ: &str = "history_read";
 /// Answered when the client asks for none.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -32,6 +36,10 @@ const BASH_ASKS_FILTER_DESCRIPTION: &str = "Manage the rules hiding rows from `b
 const BASH_ASKS_CLEAR_DESCRIPTION: &str = "Delete rows from the list `bash_asks` returns, for instance the ones a canif script now covers, so later reviews show only new commands. Session transcripts are not touched. Rows matching every given filter are deleted; at least one filter is required.";
 
 const RESTART_SERVER_DESCRIPTION: &str = "Restart the vigie server on the last built binary, for instance after `server/build` built a server change. The restart waits until no turn runs in any session, this one included, so end the turn after calling it. Messages the user sends meanwhile are held and show in their discussion. Only works when the server was started by `serve.sh`. It never builds.";
+
+const HISTORY_SEARCH_DESCRIPTION: &str = "Search earlier vigie discussions for what was said: decisions, past fixes, the user's wording. Only message text is searched: the user's messages and Claude's text replies, never tool calls or their output. A message matches when it contains every word of `query`, ignoring case; no regex. Searches this session's folder and below it unless `project` or `all_projects` says otherwise. Hits come newest first, grouped by session, each with its seq and a snippet; `history_read` gives the exchanges around one. Results come in pages: the last line names the offset of the next one.";
+
+const HISTORY_READ_DESCRIPTION: &str = "Read the exchanges around a message `history_search` found: the exchange holding it (a user message and the replies until the next one), with `before` exchanges before it and `after` exchanges after it. Messages past 2000 characters are cut; the hit is marked.";
 
 const RESTART_SCHEDULED: &str =
     "Restart scheduled: it happens once no turn runs in any session, so end this turn now.";
@@ -94,6 +102,8 @@ pub async fn handle(
             bash_asks_clear_tool(),
             bash_asks_filter_tool(),
             restart_server_tool(),
+            history_search_tool(),
+            history_read_tool(),
         ]}))),
         Some("tools/call") => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -115,6 +125,12 @@ pub async fn handle(
                     bash_asks_filter(arguments, cwd, store).await,
                 ))),
                 Some(RESTART_SERVER) => Handled::reply(success(outcome(restart_server(restart)))),
+                Some(HISTORY_SEARCH) => Handled::reply(success(outcome(
+                    history_search(arguments, cwd, store).await,
+                ))),
+                Some(HISTORY_READ) => {
+                    Handled::reply(success(outcome(history_read(arguments, store).await)))
+                }
                 name => Handled::reply(failure(
                     INVALID_PARAMS,
                     format!("unknown tool {}", name.unwrap_or("(none)")),
@@ -258,6 +274,267 @@ fn restart_server(restart: Option<&ServerRestart>) -> Result<String, String> {
     Ok(RESTART_SCHEDULED.to_string())
 }
 
+fn history_search_tool() -> Value {
+    json!({
+        "name": HISTORY_SEARCH,
+        "description": HISTORY_SEARCH_DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Words a message must all contain, in any order, ignoring case.",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "Search the discussions started in this folder or below it instead, absolute or relative to the working directory.",
+                },
+                "all_projects": {
+                    "type": "boolean",
+                    "description": "Search the discussions of every project.",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Only messages at or after this date (YYYY-MM-DD, UTC) or RFC 3339 time.",
+                },
+                "before": {
+                    "type": "string",
+                    "description": "Only messages before this date (YYYY-MM-DD, UTC) or RFC 3339 time.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Hits to skip, from the previous page's last line. Default 0.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Hits per page. Default 20.",
+                },
+            },
+            "required": ["query"],
+        },
+    })
+}
+
+fn history_read_tool() -> Value {
+    json!({
+        "name": HISTORY_READ,
+        "description": HISTORY_READ_DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {
+                    "type": "string",
+                    "description": "The session id `history_search` gave.",
+                },
+                "seq": {
+                    "type": "integer",
+                    "description": "The hit's seq.",
+                },
+                "before": {
+                    "type": "integer",
+                    "description": "Exchanges before the hit's one. Default 1, at most 5.",
+                },
+                "after": {
+                    "type": "integer",
+                    "description": "Exchanges after the hit's one. Default 1, at most 5.",
+                },
+            },
+            "required": ["session", "seq"],
+        },
+    })
+}
+
+const SEARCH_LIMIT: usize = 20;
+const SNIPPET_CHARS: usize = 200;
+/// Characters a snippet shows before the first matched word.
+const SNIPPET_LEAD: usize = 60;
+const READ_EXCHANGES: u32 = 1;
+const READ_MAX_EXCHANGES: u32 = 5;
+const READ_CHARS: usize = 2000;
+
+async fn history_search(
+    arguments: &Value,
+    cwd: &Path,
+    store: Option<&Store>,
+) -> Result<String, String> {
+    let history = store.ok_or(NO_HISTORY)?;
+    let query = string_argument(arguments, "query")?.ok_or("`query` is required.")?;
+    let words: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
+    if words.is_empty() {
+        return Err("`query` has no word.".into());
+    }
+    let query = words.join(" ");
+    let folder = match (
+        bool_argument(arguments, "all_projects")?,
+        project_argument(arguments, cwd)?,
+    ) {
+        (true, Some(_)) => return Err("Give `project` or `all_projects`, not both.".into()),
+        (true, None) => None,
+        (false, project) => Some(project.unwrap_or_else(|| cwd.to_path_buf())),
+    };
+    let scope = folder
+        .as_ref()
+        .map_or("all projects".into(), |folder| folder.display().to_string());
+    let sessions: HashMap<Uuid, SessionRow> = history
+        .sessions()
+        .await
+        .map_err(|err| format!("{err:#}"))?
+        .into_iter()
+        .filter(|row| {
+            folder
+                .as_ref()
+                .is_none_or(|folder| row.cwd.starts_with(folder))
+        })
+        .map(|row| (row.id, row))
+        .collect();
+    let message_query = MessageQuery {
+        sessions: sessions.keys().copied().collect(),
+        words: words.clone(),
+        since: time_argument(arguments, "since")?,
+        before: time_argument(arguments, "before")?,
+    };
+    let offset = count_argument(arguments, "offset")?.unwrap_or(0);
+    let limit = count_argument(arguments, "limit")?.unwrap_or(SEARCH_LIMIT);
+    let (total, hits) = history
+        .search_messages(message_query, offset, limit)
+        .await
+        .map_err(|err| format!("{err:#}"))?;
+    if total == 0 {
+        return Ok(format!("No message matches {query:?} in {scope}."));
+    }
+    if hits.is_empty() {
+        return Ok(format!("No hits past offset {offset}: {total} match."));
+    }
+    let end = offset + hits.len();
+    let mut groups: Vec<(Uuid, Vec<&StoredMessage>)> = Vec::new();
+    for hit in &hits {
+        match groups
+            .iter_mut()
+            .find(|(session, _)| *session == hit.session)
+        {
+            Some((_, group)) => group.push(hit),
+            None => groups.push((hit.session, vec![hit])),
+        }
+    }
+    let mut lines = vec![format!(
+        "Hits {}-{end} of {total} for {query:?} in {scope}, newest first, grouped by session. \
+         A hit: seq, date, who spoke, snippet. `history_read` gives the exchanges around one.",
+        offset + 1
+    )];
+    for (session, group) in groups {
+        if let Some(row) = sessions.get(&session) {
+            lines.push(session_line(row));
+        }
+        for hit in group {
+            lines.push(format!(
+                "  {} {} {}: {}",
+                hit.seq,
+                hit.time.format(DAY),
+                hit.role.as_str(),
+                snippet(&hit.text, &words)
+            ));
+        }
+    }
+    if end < total {
+        lines.push(format!("More hits: call again with offset {end}."));
+    }
+    Ok(lines.join("\n"))
+}
+
+async fn history_read(arguments: &Value, store: Option<&Store>) -> Result<String, String> {
+    let history = store.ok_or(NO_HISTORY)?;
+    let session: Uuid = string_argument(arguments, "session")?
+        .ok_or("`session` is required.")?
+        .parse()
+        .map_err(|_| "`session` must be a session id `history_search` gave.")?;
+    let seq = count_argument(arguments, "seq")?.ok_or("`seq` is required.")? as u64;
+    let before = exchanges_argument(arguments, "before")?;
+    let after = exchanges_argument(arguments, "after")?;
+    let row = history
+        .session(session)
+        .await
+        .map_err(|err| format!("{err:#}"))?
+        .ok_or_else(|| format!("No session {session}."))?;
+    let messages = history
+        .messages_around(session, seq, before, after)
+        .await
+        .map_err(|err| format!("{err:#}"))?;
+    if !messages.iter().any(|message| message.seq == seq) {
+        return Err(format!("Session {session} has no message {seq}."));
+    }
+    let mut text = format!(
+        "{}\n{} messages, oldest first, the hit marked. A message: seq, time (UTC), who spoke, \
+         then its text, cut past {READ_CHARS} characters.",
+        session_line(&row),
+        messages.len()
+    );
+    for message in &messages {
+        let mark = if message.seq == seq { " (hit)" } else { "" };
+        text.push_str(&format!(
+            "\n\n--- {} {} {}{mark}\n{}",
+            message.seq,
+            message.time.format("%Y-%m-%d %H:%M"),
+            message.role.as_str(),
+            cut(&message.text, READ_CHARS)
+        ));
+    }
+    Ok(text)
+}
+
+/// `session <id> "<name>" <folder>`; the name defaults to the folder's.
+fn session_line(row: &SessionRow) -> String {
+    let name = row.name.clone().unwrap_or_else(|| {
+        row.cwd
+            .file_name()
+            .map_or(row.cwd.display().to_string(), |name| {
+                name.to_string_lossy().into_owned()
+            })
+    });
+    format!("session {} {name:?} {}", row.id, row.cwd.display())
+}
+
+/// About `SNIPPET_CHARS` characters of `text` on one line, from a little before
+/// the first of `words` it contains.
+fn snippet(text: &str, words: &[String]) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let folded = flat.to_lowercase();
+    let first = words
+        .iter()
+        .filter_map(|word| folded.find(&word.to_lowercase()))
+        .min()
+        .unwrap_or(0);
+    let start = folded[..first].chars().count().saturating_sub(SNIPPET_LEAD);
+    let shown: String = flat.chars().skip(start).take(SNIPPET_CHARS).collect();
+    let more = flat.chars().count() > start + SNIPPET_CHARS;
+    format!(
+        "{}{shown}{}",
+        if start > 0 { "…" } else { "" },
+        if more { "…" } else { "" }
+    )
+}
+
+/// `text` cut to `limit` characters, followed by how many were cut.
+fn cut(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!(
+            "{} [{} more characters]",
+            &text[..end],
+            text[end..].chars().count()
+        ),
+        None => text.to_string(),
+    }
+}
+
+fn exchanges_argument(arguments: &Value, key: &str) -> Result<u32, String> {
+    match count_argument(arguments, key)? {
+        None => Ok(READ_EXCHANGES),
+        Some(count) => u32::try_from(count)
+            .ok()
+            .filter(|count| *count <= READ_MAX_EXCHANGES)
+            .ok_or_else(|| format!("`{key}` is at most {READ_MAX_EXCHANGES}.")),
+    }
+}
+
 fn tool_result(text: &str, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
@@ -325,11 +602,7 @@ async fn bash_asks(arguments: &Value, cwd: &Path, store: Option<&Store>) -> Resu
         },
         ..AskFilter::default()
     };
-    let filtered = match arguments.get("filtered") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(filtered)) => *filtered,
-        Some(_) => return Err("`filtered` must be a boolean.".into()),
-    };
+    let filtered = bool_argument(arguments, "filtered")?;
     let offset = count_argument(arguments, "offset")?.unwrap_or(0);
     let limit = count_argument(arguments, "limit")?.unwrap_or(DEFAULT_LIMIT);
     let rules = rules(store).await?;
@@ -403,12 +676,7 @@ fn ask_line(ask: &BashAsk) -> String {
     } else {
         format!("{first}..{last}")
     };
-    let mut command = one_line(&ask.command);
-    if let Some((cut, _)) = command.char_indices().nth(COMMAND_CHARS) {
-        let rest = command[cut..].chars().count();
-        command.truncate(cut);
-        command.push_str(&format!(" [{rest} more characters]"));
-    }
+    let command = cut(&one_line(&ask.command), COMMAND_CHARS);
     let description = ask
         .description
         .as_deref()
@@ -597,6 +865,15 @@ fn string_argument<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text)),
         Some(_) => Err(format!("`{key}` must be a string.")),
+    }
+}
+
+/// Absent means false.
+fn bool_argument(arguments: &Value, key: &str) -> Result<bool, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(format!("`{key}` must be a boolean.")),
     }
 }
 
@@ -866,6 +1143,134 @@ mod tests {
         assert_eq!(text, "Removed 1 filters.");
         let (text, _) = run(BASH_ASKS, json!({})).await;
         assert!(text.starts_with("Rows 1-4 of 4,"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn history_tools_search_this_project_and_read_around_a_hit() {
+        use crate::session::{Event, EventBody, Line};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("history.db")).unwrap();
+        let (vigie, other) = (dir.path().join("vigie"), dir.path().join("other"));
+        let (here, there) = (Uuid::new_v4(), Uuid::new_v4());
+        store.session_started(here, &vigie, Utc::now(), None);
+        store.session_started(there, &other, Utc::now(), None);
+        let say = |session: Uuid, seq: u64, day: u32, user: bool, text: &str| {
+            let raw = if user {
+                json!({"type": "user", "message": {"role": "user", "content": text},
+                    "parent_tool_use_id": null, "session_id": "s"})
+            } else {
+                json!({"type": "assistant", "parent_tool_use_id": null, "session_id": "s",
+                    "uuid": "u", "message": {"id": "m", "content": [{"type": "text", "text": text}]}})
+            }
+            .to_string();
+            let body = EventBody::Line(Box::new(Line {
+                parsed: serde_json::from_str(&raw).ok(),
+                raw,
+            }));
+            let time = format!("2026-09-{day:02}T10:00:00Z").parse().unwrap();
+            store.record_event(session, &Event { seq, time, body });
+        };
+        say(here, 1, 1, true, "Set up prettier");
+        say(here, 2, 1, false, "Prettier is set up.");
+        say(
+            here,
+            3,
+            2,
+            true,
+            &format!(
+                "{} the prettier config {}",
+                "a ".repeat(100),
+                "b".repeat(300)
+            ),
+        );
+        say(here, 4, 2, false, &"c".repeat(READ_CHARS + 5));
+        say(there, 1, 3, true, "prettier elsewhere");
+        let run = async |name: &str, arguments: Value| {
+            let handled =
+                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
+            let result = &handled.reply["result"];
+            (
+                result["content"][0]["text"].as_str().unwrap().to_owned(),
+                result["isError"].as_bool().unwrap(),
+            )
+        };
+
+        let (text, failed) = run(HISTORY_SEARCH, json!({"query": " PRETTIER "})).await;
+        assert!(!failed, "{text}");
+        // The 60 characters before the word are 28 a's and " the ".
+        let snippet = format!(
+            "…{} the prettier config {}…",
+            "a ".repeat(28).trim_end(),
+            "b".repeat(SNIPPET_CHARS - 76)
+        );
+        assert_eq!(
+            text.lines().skip(1).collect::<Vec<_>>(),
+            [
+                format!("session {here} \"vigie\" {}", vigie.display()).as_str(),
+                &format!("  3 2026-09-02 user: {snippet}"),
+                "  2 2026-09-01 claude: Prettier is set up.",
+                "  1 2026-09-01 user: Set up prettier",
+            ]
+        );
+        assert!(text.starts_with("Hits 1-3 of 3 for \"PRETTIER\""), "{text}");
+        let (text, _) = run(
+            HISTORY_SEARCH,
+            json!({"query": "prettier", "all_projects": true, "limit": 1}),
+        )
+        .await;
+        assert!(
+            text.starts_with("Hits 1-1 of 4 for \"prettier\" in all projects"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("session {there} \"other\"")),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("More hits: call again with offset 1."),
+            "{text}"
+        );
+        let (text, _) = run(HISTORY_SEARCH, json!({"query": "elsewhere"})).await;
+        assert!(text.starts_with("No message matches"), "{text}");
+        for bad in [
+            json!({}),
+            json!({"query": "  "}),
+            json!({"query": "x", "project": ".", "all_projects": true}),
+        ] {
+            let (text, failed) = run(HISTORY_SEARCH, bad).await;
+            assert!(failed, "{text}");
+        }
+
+        let (text, failed) = run(
+            HISTORY_READ,
+            json!({"session": here.to_string(), "seq": 2, "before": 0}),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        let headers: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("--- "))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                "--- 1 2026-09-01 10:00 user",
+                "--- 2 2026-09-01 10:00 claude (hit)",
+                "--- 3 2026-09-02 10:00 user",
+                "--- 4 2026-09-02 10:00 claude",
+            ]
+        );
+        assert!(text.ends_with(&format!("{} [5 more characters]", "c".repeat(READ_CHARS))));
+        for bad in [
+            json!({"session": here.to_string(), "seq": 9}),
+            json!({"session": "nope", "seq": 1}),
+            json!({"session": Uuid::new_v4().to_string(), "seq": 1}),
+            json!({"session": here.to_string(), "seq": 1, "after": 6}),
+        ] {
+            let (text, failed) = run(HISTORY_READ, bad).await;
+            assert!(failed, "{text}");
+        }
     }
 
     #[test]

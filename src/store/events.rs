@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Store, format_time, parse_time};
+use super::{Store, format_time, messages, parse_time};
 use crate::claude::protocol::Inbound;
 use crate::session::gauges::{MainRequest, Windows};
 use crate::session::{Event, EventBody, HostEvent, StopReason};
@@ -160,9 +160,11 @@ impl Store {
         let mut readings = Vec::new();
         let mut message = None;
         let mut gauge = None;
+        let mut history_message = None;
         let (kind, payload) = match &event.body {
             EventBody::Line(line) => {
                 if let Some(parsed) = &line.parsed {
+                    history_message = messages::message_of(parsed);
                     match parsed {
                         Inbound::RateLimitEvent(limits) => {
                             readings = inputs::from_rate_limit_event(&limits.rate_limit_info);
@@ -203,6 +205,9 @@ impl Store {
                  WHERE id = ?1",
                 params![id, seq, time, permission_mode],
             )?;
+            if let Some((role, text)) = history_message {
+                messages::record(connection, &id, seq, &time, role, text)?;
+            }
             if let Some(gauge) = gauge {
                 gauge.apply(connection, &id, &time)?;
             }
