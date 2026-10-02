@@ -217,6 +217,8 @@ impl Store {
         }
         connection.pragma_update(None, "synchronous", "normal")?;
         connection.pragma_update(None, "foreign_keys", true)?;
+        // A checkpoint keeps the WAL file at its peak size (a VACUUM writes the whole db into it).
+        connection.pragma_update(None, "journal_size_limit", 32 * 1024 * 1024)?;
         migrate(&connection).with_context(|| format!("migrate {}", path.display()))?;
         // Nothing is pruned unless the backup succeeds; the next launch tries again.
         if let Err(err) = prune::first_prune(&connection, path) {
