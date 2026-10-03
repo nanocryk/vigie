@@ -2,7 +2,6 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { Client } from "@/client";
 import { Markdown } from "@/components/Markdown";
-import { ConnectionDot } from "@/components/SessionList";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
 import { useNow } from "@/components/useNow";
@@ -211,7 +210,7 @@ export function SearchScreen({
     <>
       <Header
         left={<HomeButton sessions={snapshot.sessions} />}
-        right={<ConnectionDot status={snapshot.status} />}
+        status={snapshot.status}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={
@@ -373,7 +372,7 @@ export function AroundScreen({
     <>
       <Header
         left={<HomeButton sessions={snapshot.sessions} />}
-        right={<ConnectionDot status={snapshot.status} />}
+        status={snapshot.status}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={

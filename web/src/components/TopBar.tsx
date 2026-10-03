@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import type { ConnectionStatus } from "@/client";
 import { useClock } from "@/components/useNow";
 import { useCoolingSeen } from "@/coolingSeen";
 import {
@@ -341,6 +342,27 @@ export function NeedsYouColumn({ sessions }: { sessions: readonly SessionView[] 
   );
 }
 
+const DOT = "inline-block size-2 shrink-0 rounded-full";
+
+/**
+ * The connection while it is down, else the discussion's busy state when there is
+ * one, else nothing.
+ */
+function StatusDot({ status, busy }: { status: ConnectionStatus; busy: boolean | undefined }) {
+  const [text, color] =
+    status === "connecting"
+      ? ["connecting...", "animate-pulse bg-gauge-glow"]
+      : status === "closed"
+        ? ["offline, retrying", "bg-destructive"]
+        : busy === undefined
+          ? [null, ""]
+          : busy
+            ? ["busy", "animate-pulse bg-primary"]
+            : ["idle", "bg-muted-foreground/30"];
+  if (text === null) return null;
+  return <span role="status" aria-label={text} title={text} className={`${DOT} ${color}`} />;
+}
+
 /**
  * The top bar, then a thin bar. The gauges grow to the discussion's width first,
  * then the side slots share what is left equally, keeping the gauges centered.
@@ -348,6 +370,8 @@ export function NeedsYouColumn({ sessions }: { sessions: readonly SessionView[] 
  */
 export function Header({
   left,
+  status,
+  busy,
   right,
   usage,
   column,
@@ -356,7 +380,11 @@ export function Header({
   end,
 }: {
   left: ReactNode;
-  right: ReactNode;
+  /** With `busy`, the dot right of `left`. */
+  status: ConnectionStatus;
+  /** In a session: whether a turn is running. */
+  busy?: boolean;
+  right?: ReactNode;
   usage: UsageSnapshot | null;
   /** Second gauge column, beside or under the account column. */
   column: ReactNode;
@@ -372,7 +400,10 @@ export function Header({
     <header className="shrink-0">
       <div className="grid grid-cols-[minmax(6rem,1fr)_minmax(0,64rem)_minmax(3.5rem,1fr)] items-start gap-4 border-b px-2 py-1.5">
         {/* Not clipped: the Home button's pulse glows past it. */}
-        <div className="flex items-center self-center whitespace-nowrap">{left}</div>
+        <div className="flex items-center gap-2 self-center whitespace-nowrap">
+          {left}
+          <StatusDot status={status} busy={busy} />
+        </div>
         <div
           aria-label="Usage, context and cache"
           className="grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 text-[0.6875rem] leading-4 voice-code select-none min-[600px]:grid-cols-2 min-[600px]:self-center"

@@ -11,7 +11,6 @@ import {
 import type { Client } from "@/client";
 import { type DiffFocus, DiffView, PANEL } from "@/components/DiffView";
 import { Markdown } from "@/components/Markdown";
-import { ConnectionDot } from "@/components/SessionList";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useNow } from "@/components/useNow";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -1206,7 +1205,7 @@ export function Explorer({ client }: { client: Client }) {
     <>
       <Header
         left={<HomeButton sessions={snapshot.sessions} onClick={leave} />}
-        right={<ConnectionDot status={snapshot.status} />}
+        status={snapshot.status}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={<span className="voice-heading">File explorer</span>}

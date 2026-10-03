@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import type { Client } from "@/client";
 import { Devices } from "@/components/Devices";
-import { ConnectionDot } from "@/components/SessionList";
 import { SettingsSection } from "@/components/SettingsSection";
 import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -525,7 +524,7 @@ export function DeviceSettings({ client }: { client: Client }) {
     <>
       <Header
         left={<HomeButton sessions={snapshot.sessions} />}
-        right={<ConnectionDot status={snapshot.status} />}
+        status={snapshot.status}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={<span className="voice-heading">Device settings</span>}

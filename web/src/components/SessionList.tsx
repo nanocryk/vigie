@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 
-import type { Client, ConnectionStatus } from "@/client";
+import type { Client } from "@/client";
 import { SearchField } from "@/components/HistorySearch";
 import { useSwipe } from "@/components/Swipe";
 import { useSeeCooling } from "@/coolingSeen";
@@ -29,37 +29,6 @@ import { TAP_SLOP_PX } from "@/swipe";
 import type { SessionView } from "@/wire";
 
 const CLOCK_TICK_MS = 30_000;
-
-/** Nothing while connected; a dot named after the status otherwise. */
-export function ConnectionDot({ status }: { status: ConnectionStatus }) {
-  if (status === "open") return null;
-  const text = status === "connecting" ? "connecting..." : "offline, retrying";
-  return (
-    <span
-      role="status"
-      aria-label={text}
-      title={text}
-      className={
-        status === "connecting"
-          ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-gauge-glow"
-          : "inline-block size-2 shrink-0 rounded-full bg-destructive"
-      }
-    />
-  );
-}
-
-export function BusyDot({ busy }: { busy: boolean }) {
-  return (
-    <span
-      aria-label={busy ? "busy" : "idle"}
-      className={
-        busy
-          ? "inline-block size-2 shrink-0 animate-pulse rounded-full bg-primary"
-          : "inline-block size-2 shrink-0 rounded-full bg-muted-foreground/30"
-      }
-    />
-  );
-}
 
 function OpenExplorer() {
   return (
@@ -455,7 +424,7 @@ export function SessionList({ client }: { client: Client }) {
     <>
       <Header
         left={<span className="px-2 text-lg voice-heading text-primary">vigie</span>}
-        right={<ConnectionDot status={snapshot.status} />}
+        status={snapshot.status}
         usage={snapshot.usage}
         column={<NeedsYouColumn sessions={snapshot.sessions} />}
         info={null}

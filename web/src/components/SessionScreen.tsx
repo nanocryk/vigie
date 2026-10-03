@@ -59,7 +59,6 @@ import { CommandField, CommandsPanel } from "@/components/CommandsPanel";
 import { usePermissionMode } from "@/components/PermissionMode";
 import { type FileLinks, FileLinksContext } from "@/components/Markdown";
 import { DesktopSend, TouchSend } from "@/components/SendControls";
-import { BusyDot, ConnectionDot } from "@/components/SessionList";
 import { SlashDrawer } from "@/components/SlashDrawer";
 import {
   type MenuEntry,
@@ -1307,13 +1306,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     <FileLinksContext.Provider value={fileLinks}>
       <Header
         left={<HomeButton sessions={snapshot.sessions} onScreen={id} />}
-        right={
-          <>
-            <ConnectionDot status={snapshot.status} />
-            <BusyDot busy={busy} />
-            <SearchButton discussion={id} />
-          </>
-        }
+        status={snapshot.status}
+        busy={busy}
+        right={<SearchButton discussion={id} />}
         usage={snapshot.usage}
         column={
           <SessionColumn
