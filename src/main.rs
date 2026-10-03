@@ -17,7 +17,7 @@ use vigie::http::auth::{Auth, Registry};
 use vigie::http::net;
 use vigie::http::push::{self, Pusher};
 use vigie::http::server::{AppState, build_app};
-use vigie::http::update::{self, Updater};
+use vigie::http::update::Updater;
 use vigie::session::manager::{Probe, SessionManager};
 use vigie::session::server_restart::{
     self, RestartState, RunningBuild, ServerRestart, Supervision,
@@ -439,7 +439,6 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         std::env::current_dir()?,
         dir.join("last-update"),
     ));
-    update::spawn_checks(Arc::clone(&updater));
 
     let state = AppState {
         pusher,

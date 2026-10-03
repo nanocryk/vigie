@@ -7,14 +7,14 @@ describe("parseUpdateStatus", () => {
     expect(
       parseUpdateStatus(
         {
-          check: { state: "done", behind: 3 },
+          check: { state: "done", behind: 3, local: null },
           run: { state: "running", step: "web" },
           changelog: [{ sha: "592a350", title: "Keep the transcript at the bottom" }],
         },
         "u",
       ),
     ).toEqual({
-      check: { state: "done", behind: 3 },
+      check: { state: "done", behind: 3, local: null },
       run: { state: "running", step: "web" },
       changelog: [{ sha: "592a350", title: "Keep the transcript at the bottom" }],
     });
@@ -37,10 +37,20 @@ describe("parseUpdateStatus", () => {
   it("names the bad field", () => {
     expect(() =>
       parseUpdateStatus(
-        { check: { state: "done", behind: -1 }, run: { state: "idle" }, changelog: [] },
+        {
+          check: { state: "done", behind: -1, local: null },
+          run: { state: "idle" },
+          changelog: [],
+        },
         "u",
       ),
     ).toThrow("u.check.behind: expected a count: -1");
+    expect(() =>
+      parseUpdateStatus(
+        { check: { state: "done", behind: 0 }, run: { state: "idle" }, changelog: [] },
+        "u",
+      ),
+    ).toThrow("u.check.local: expected a string or null: undefined");
     expect(() =>
       parseUpdateStatus(
         { check: { state: "unchecked" }, run: { state: "running", step: "deploy" }, changelog: [] },

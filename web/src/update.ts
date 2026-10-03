@@ -1,6 +1,11 @@
-/** Upstream commits HEAD lacks, from the last `git fetch`. */
+/**
+ * Upstream commits HEAD lacks, from the last `git fetch`, and the local changes or
+ * commits that would stop an update.
+ */
 export type Check =
-  { state: "unchecked" } | { state: "done"; behind: number } | { state: "failed"; message: string };
+  | { state: "unchecked" }
+  | { state: "done"; behind: number; local: string | null }
+  | { state: "failed"; message: string };
 
 export type Step = "clean" | "pull" | "install" | "web" | "server";
 
@@ -59,7 +64,11 @@ function parseCheck(raw: unknown, label: string): Check {
       if (typeof behind !== "number" || !Number.isInteger(behind) || behind < 0) {
         throw new Error(`${label}.behind: expected a count: ${JSON.stringify(behind)}`);
       }
-      return { state, behind };
+      const local: unknown = Reflect.get(check, "local");
+      if (local !== null && typeof local !== "string") {
+        throw new Error(`${label}.local: expected a string or null: ${JSON.stringify(local)}`);
+      }
+      return { state, behind, local };
     }
     case "failed":
       return { state, message: string(check, "message", label) };

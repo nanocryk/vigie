@@ -302,10 +302,19 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
         : behind === 0
           ? "Up to date."
           : `${behind} new ${behind === 1 ? "commit" : "commits"} upstream.`;
-  const summary = changelog.length > 0 ? `${checked} Open to see the changelog.` : checked;
-  const offered = supervised === true && !running && (behind > 0 || run.state === "failed");
+  const local = check.state === "done" ? check.local : null;
+  const summary = [
+    checked,
+    local !== null && "Local changes block updating.",
+    changelog.length > 0 && "Open to see the changelog.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const offered =
+    supervised === true && local === null && !running && (behind > 0 || run.state === "failed");
   const manual = supervised === false && behind > 0;
-  const body = manual || run.state !== "idle" || changelog.length > 0 || error !== null;
+  const body =
+    manual || local !== null || run.state !== "idle" || changelog.length > 0 || error !== null;
   return (
     <SettingsSection
       id="updates"
@@ -336,6 +345,17 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
               <code className="voice-code">serve.sh</code> or{" "}
               <code className="voice-code">serve.bat</code>, which also let it update itself.
             </p>
+          )}
+          {local !== null && (
+            <div className="space-y-2">
+              <p className="text-sm voice-ui">
+                The repository has changes or commits that are not upstream, so updating from here
+                is off. Commit, push or discard them, or update by hand.
+              </p>
+              <pre className="max-h-60 overflow-auto rounded-[5px] border bg-background p-2 text-xs voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
+                {local}
+              </pre>
+            </div>
           )}
           {run.state === "running" && (
             <p className="text-sm voice-ui">{STEP_LABELS[run.step]}...</p>

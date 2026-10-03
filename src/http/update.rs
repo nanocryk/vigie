@@ -21,7 +21,6 @@ use crate::AppState;
 use crate::http::api::ApiError;
 use crate::session::server_restart::Supervision;
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const GIT_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Output lines kept from a failed step.
@@ -31,9 +30,11 @@ const OUTPUT_LINES: usize = 40;
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Check {
     Unchecked,
-    /// HEAD lacks `behind` commits of its upstream branch.
+    /// HEAD lacks `behind` commits of its upstream branch; `local` names the
+    /// changes or commits that would stop an update.
     Done {
         behind: u32,
+        local: Option<String>,
     },
     Failed {
         message: String,
@@ -287,23 +288,16 @@ impl Updater {
     }
 }
 
-/// Checks at launch, then every `CHECK_INTERVAL`.
-pub fn spawn_checks(updater: Arc<Updater>) {
-    tokio::spawn(async move {
-        loop {
-            updater.check().await;
-            tokio::time::sleep(CHECK_INTERVAL).await;
-        }
-    });
-}
-
 async fn check(repo: &Path) -> Check {
     let counted = async {
         run("git", &["fetch", "--quiet"], repo, GIT_TIMEOUT).await?;
         count(repo, "HEAD..@{upstream}").await
     };
     match counted.await {
-        Ok(behind) => Check::Done { behind },
+        Ok(behind) => Check::Done {
+            behind,
+            local: clean(repo).await.err(),
+        },
         Err(message) => Check::Failed { message },
     }
 }
@@ -494,16 +488,35 @@ mod tests {
         git(&local, &["pull", "-q", "origin", "main"]);
         git(&local, &["branch", "-q", "--set-upstream-to=origin/main"]);
 
-        assert_eq!(check(&local).await, Check::Done { behind: 0 });
+        assert_eq!(
+            check(&local).await,
+            Check::Done {
+                behind: 0,
+                local: None
+            }
+        );
         commit(&other, "second.txt");
         commit(&other, "third.txt");
         git(&other, &["push", "-q", "origin", "HEAD:main"]);
-        assert_eq!(check(&local).await, Check::Done { behind: 2 });
+        assert_eq!(
+            check(&local).await,
+            Check::Done {
+                behind: 2,
+                local: None
+            }
+        );
         assert_eq!(clean(&local).await, Ok(()));
 
         std::fs::write(local.join("stray.txt"), "x").expect("write");
         let dirty = clean(&local).await.expect_err("untracked file");
         assert!(dirty.contains("stray.txt"), "{dirty}");
+        assert_eq!(
+            check(&local).await,
+            Check::Done {
+                behind: 2,
+                local: Some(dirty)
+            }
+        );
         std::fs::remove_file(local.join("stray.txt")).expect("remove");
 
         commit(&local, "mine.txt");
