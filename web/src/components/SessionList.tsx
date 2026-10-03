@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import type { Client, ConnectionStatus } from "@/client";
+import { SearchField } from "@/components/HistorySearch";
 import { useSwipe } from "@/components/Swipe";
 import { useSeeCooling } from "@/coolingSeen";
 import { changeExplorer, selectLastFree } from "@/files";
@@ -461,6 +462,11 @@ export function SessionList({ client }: { client: Client }) {
       />
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl space-y-6 p-4">
+          <SearchField
+            initial=""
+            placeholder="Search every discussion"
+            onSearch={(query) => navigate({ kind: "search", discussion: null, query })}
+          />
           <OpenExplorer />
           {snapshot.sessionsError !== null && (
             <p className="text-sm text-destructive">{snapshot.sessionsError}</p>

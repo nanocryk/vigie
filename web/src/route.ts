@@ -1,15 +1,38 @@
 import { useSyncExternalStore } from "react";
 
 export type Route =
-  { kind: "list" } | { kind: "session"; id: string } | { kind: "settings" } | { kind: "files" };
+  | { kind: "list" }
+  | { kind: "session"; id: string }
+  | { kind: "settings" }
+  | { kind: "files" }
+  /** The history search, in one discussion or in all of them for null. */
+  | { kind: "search"; discussion: string | null; query: string }
+  /** The exchanges around a message of the history. */
+  | { kind: "around"; discussion: string; seq: number };
 
 const SESSION_HASH = /^#\/s\/([^/?#]+)$/;
 const SETTINGS_HASH = "#/settings";
 const FILES_HASH = "#/files";
+const SEARCH_HASH = /^#\/search(?:\/([^/?#]+))?(?:\?q=([^#]*))?$/;
+const AROUND_HASH = /^#\/around\/([^/?#]+)\/(\d+)$/;
 
 export function parseRoute(hash: string): Route {
   if (hash === SETTINGS_HASH) return { kind: "settings" };
   if (hash === FILES_HASH) return { kind: "files" };
+  const search = SEARCH_HASH.exec(hash);
+  if (search !== null) {
+    const [, discussion, query] = search;
+    return {
+      kind: "search",
+      discussion: discussion === undefined ? null : decodeURIComponent(discussion),
+      query: query === undefined ? "" : decodeURIComponent(query),
+    };
+  }
+  const around = AROUND_HASH.exec(hash);
+  if (around !== null) {
+    const [, discussion = "", seq = ""] = around;
+    return { kind: "around", discussion: decodeURIComponent(discussion), seq: Number(seq) };
+  }
   const id = SESSION_HASH.exec(hash)?.[1];
   return id === undefined ? { kind: "list" } : { kind: "session", id: decodeURIComponent(id) };
 }
@@ -24,6 +47,13 @@ export function routeHash(route: Route): string {
       return SETTINGS_HASH;
     case "files":
       return FILES_HASH;
+    case "search": {
+      const scope = route.discussion === null ? "" : `/${encodeURIComponent(route.discussion)}`;
+      const query = route.query === "" ? "" : `?q=${encodeURIComponent(route.query)}`;
+      return `#/search${scope}${query}`;
+    }
+    case "around":
+      return `#/around/${encodeURIComponent(route.discussion)}/${route.seq}`;
   }
 }
 
@@ -68,6 +98,12 @@ function homeDistance(): number | null {
 export function pushEntry(extra: Record<string, unknown>, hash?: string): void {
   const distance = homeDistance();
   history.pushState({ ...extra, [DEPTH]: distance === null ? null : distance + 1 }, "", hash);
+  for (const listener of pushListeners) listener();
+}
+
+/** Shows `route` in place of the current entry, keeping its place in the history. */
+export function replaceRoute(route: Route): void {
+  history.replaceState(history.state, "", routeHash(route));
   for (const listener of pushListeners) listener();
 }
 

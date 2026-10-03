@@ -349,6 +349,30 @@ fn read_messages(
     .collect()
 }
 
+pub const SNIPPET_CHARS: usize = 200;
+/// Characters a snippet shows before the first matched word.
+const SNIPPET_LEAD: usize = 60;
+
+/// About `SNIPPET_CHARS` characters of `text` on one line, from a little before
+/// the first of `words` it contains.
+pub fn snippet(text: &str, words: &[String]) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let folded = flat.to_lowercase();
+    let first = words
+        .iter()
+        .filter_map(|word| folded.find(&word.to_lowercase()))
+        .min()
+        .unwrap_or(0);
+    let start = folded[..first].chars().count().saturating_sub(SNIPPET_LEAD);
+    let shown: String = flat.chars().skip(start).take(SNIPPET_CHARS).collect();
+    let more = flat.chars().count() > start + SNIPPET_CHARS;
+    format!(
+        "{}{shown}{}",
+        if start > 0 { "…" } else { "" },
+        if more { "…" } else { "" }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

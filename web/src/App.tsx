@@ -3,6 +3,7 @@ import { type ReactNode, use, useEffect, useState } from "react";
 import { getClient } from "@/client";
 import { DeviceSettings } from "@/components/DeviceSettings";
 import { Explorer } from "@/components/Explorer";
+import { AroundScreen, SearchScreen } from "@/components/HistorySearch";
 import { Banner } from "@/components/Reload";
 import { SessionList } from "@/components/SessionList";
 import { SessionScreen } from "@/components/SessionScreen";
@@ -50,6 +51,20 @@ function Shell() {
         <DeviceSettings client={client} />
       ) : route.kind === "files" ? (
         <Explorer client={client} />
+      ) : route.kind === "search" ? (
+        <SearchScreen
+          key={route.discussion ?? ""}
+          client={client}
+          discussion={route.discussion}
+          query={route.query}
+        />
+      ) : route.kind === "around" ? (
+        <AroundScreen
+          key={`${route.discussion}/${route.seq}`}
+          client={client}
+          discussion={route.discussion}
+          seq={route.seq}
+        />
       ) : (
         <SessionList client={client} />
       )}

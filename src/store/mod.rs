@@ -30,7 +30,7 @@ pub use bash_asks::{BashAnswer, BashAsk, BashAskFilter, Denial};
 pub use catalog::SharedCatalog;
 pub use events::{EventKind, PageStart, StoredEvent};
 pub use held::{HeldEdit, HeldMessage, HeldMode};
-pub use messages::{MessageQuery, Role, StoredMessage};
+pub use messages::{MessageQuery, Role, SNIPPET_CHARS, StoredMessage, snippet};
 pub use samples::UsageSample;
 pub use sessions::{SessionRow, SessionState, Unread};
 

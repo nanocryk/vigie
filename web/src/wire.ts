@@ -809,17 +809,95 @@ export function parseHistoryHit(raw: unknown, label: string): HistoryHit {
   let parsed: HistoryMessage | null = null;
   if (message !== null && message !== undefined) {
     const fields = record(message, `${label}.message`);
-    const role = fields["role"];
-    if (role !== "user" && role !== "claude") {
-      fail(`${label}.message.role`, "expected user or claude", role);
-    }
     parsed = {
-      role,
+      role: role(fields, `${label}.message`),
       time: str(fields, "time", `${label}.message`),
       text: str(fields, "text", `${label}.message`),
     };
   }
   return { name: optStr(hit, "name", label), cwd: str(hit, "cwd", label), message: parsed };
+}
+
+function role(raw: Record<string, unknown>, label: string): "user" | "claude" {
+  const value = raw["role"];
+  if (value !== "user" && value !== "claude")
+    fail(`${label}.role`, "expected user or claude", value);
+  return value;
+}
+
+/** A message holding every searched word. */
+export interface SearchHit {
+  discussion: string;
+  name: string | null;
+  cwd: string;
+  seq: number;
+  time: string;
+  role: "user" | "claude";
+  /** One line of the message, from a little before the first word. */
+  snippet: string;
+}
+
+/** `GET api/history/search`: how many messages match, and one page of them, newest first. */
+export interface SearchPage {
+  total: number;
+  hits: SearchHit[];
+}
+
+export function parseSearchPage(raw: unknown, label: string): SearchPage {
+  const page = record(raw, label);
+  const hits = page["hits"];
+  if (!Array.isArray(hits)) fail(`${label}.hits`, "expected an array", hits);
+  return {
+    total: num(page, "total", label),
+    hits: hits.map((entry: unknown, index) => {
+      const hitLabel = `${label}.hits[${index}]`;
+      const hit = record(entry, hitLabel);
+      return {
+        discussion: str(hit, "discussion", hitLabel),
+        name: optStr(hit, "name", hitLabel),
+        cwd: str(hit, "cwd", hitLabel),
+        seq: num(hit, "seq", hitLabel),
+        time: str(hit, "time", hitLabel),
+        role: role(hit, hitLabel),
+        snippet: str(hit, "snippet", hitLabel),
+      };
+    }),
+  };
+}
+
+export interface AroundMessage extends HistoryMessage {
+  seq: number;
+}
+
+/** `GET api/history/around`: the exchanges around a message, and whether more lie past either end. */
+export interface Around {
+  name: string | null;
+  cwd: string;
+  messages: AroundMessage[];
+  earlier: boolean;
+  later: boolean;
+}
+
+export function parseAround(raw: unknown, label: string): Around {
+  const around = record(raw, label);
+  const messages = around["messages"];
+  if (!Array.isArray(messages)) fail(`${label}.messages`, "expected an array", messages);
+  return {
+    name: optStr(around, "name", label),
+    cwd: str(around, "cwd", label),
+    messages: messages.map((entry: unknown, index) => {
+      const messageLabel = `${label}.messages[${index}]`;
+      const message = record(entry, messageLabel);
+      return {
+        seq: num(message, "seq", messageLabel),
+        time: str(message, "time", messageLabel),
+        role: role(message, messageLabel),
+        text: str(message, "text", messageLabel),
+      };
+    }),
+    earlier: bool(around, "earlier", label),
+    later: bool(around, "later", label),
+  };
 }
 
 /** `GET api/commands/recent`: command names, newest first. */

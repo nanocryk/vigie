@@ -69,6 +69,7 @@ import {
   closedMenu,
 } from "@/components/SessionMenu";
 import { RestartBanner } from "@/components/RestartBanner";
+import { SearchButton } from "@/components/HistorySearch";
 import { Header, HomeButton, SessionColumn } from "@/components/TopBar";
 import { type HeldActions, type PendingSend, TranscriptView } from "@/components/TranscriptView";
 import { useSnapshot } from "@/components/useSnapshot";
@@ -1310,6 +1311,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           <>
             <ConnectionDot status={snapshot.status} />
             <BusyDot busy={busy} />
+            <SearchButton discussion={id} />
           </>
         }
         usage={snapshot.usage}

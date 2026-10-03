@@ -107,6 +107,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/catalog", get(api::catalog))
         .route("/api/commands/recent", get(api::recent_commands))
         .route("/api/history/message", get(api::history_message))
+        .route("/api/history/search", get(api::history_search))
+        .route("/api/history/around", get(api::history_around))
         .route("/api/fs/list", get(files::list_route))
         .route("/api/fs/places", get(files::places_route))
         .route("/api/fs/file", get(files::file_route))
@@ -200,6 +202,8 @@ mod auth_gate_tests {
             (Method::GET, "/api/usage"),
             (Method::GET, "/api/catalog"),
             (Method::GET, "/api/commands/recent"),
+            (Method::GET, "/api/history/search"),
+            (Method::GET, "/api/history/around"),
             (Method::GET, "/api/fs/list"),
             (Method::GET, "/api/fs/places"),
             (Method::GET, "/api/fs/file"),

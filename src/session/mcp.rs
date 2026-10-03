@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::session::server_restart::ServerRestart;
-use crate::store::{BashAsk, BashAskFilter, MessageQuery, SessionRow, Store, StoredMessage};
+use crate::store::{
+    BashAsk, BashAskFilter, MessageQuery, SessionRow, Store, StoredMessage, snippet,
+};
 
 pub const SERVER_NAME: &str = "vigie";
 /// The CLI's name for `set_attachments`, allowed without asking. The other tools ask.
@@ -345,9 +347,6 @@ fn history_read_tool() -> Value {
 }
 
 const SEARCH_LIMIT: usize = 20;
-const SNIPPET_CHARS: usize = 200;
-/// Characters a snippet shows before the first matched word.
-const SNIPPET_LEAD: usize = 60;
 const READ_EXCHANGES: u32 = 1;
 const READ_MAX_EXCHANGES: u32 = 5;
 const READ_CHARS: usize = 2000;
@@ -491,26 +490,6 @@ fn session_line(row: &SessionRow) -> String {
             })
     });
     format!("session {} {name:?} {}", row.id, row.cwd.display())
-}
-
-/// About `SNIPPET_CHARS` characters of `text` on one line, from a little before
-/// the first of `words` it contains.
-fn snippet(text: &str, words: &[String]) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let folded = flat.to_lowercase();
-    let first = words
-        .iter()
-        .filter_map(|word| folded.find(&word.to_lowercase()))
-        .min()
-        .unwrap_or(0);
-    let start = folded[..first].chars().count().saturating_sub(SNIPPET_LEAD);
-    let shown: String = flat.chars().skip(start).take(SNIPPET_CHARS).collect();
-    let more = flat.chars().count() > start + SNIPPET_CHARS;
-    format!(
-        "{}{shown}{}",
-        if start > 0 { "…" } else { "" },
-        if more { "…" } else { "" }
-    )
 }
 
 /// `text` cut to `limit` characters, followed by how many were cut.
@@ -957,7 +936,7 @@ fn set_attachments(arguments: &Value, cwd: &Path) -> Result<Vec<String>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::BashAnswer;
+    use crate::store::{BashAnswer, SNIPPET_CHARS};
 
     /// `super::handle` with no history, which the tools that need none never reach.
     fn handle(message: &Value, cwd: &Path) -> Handled {

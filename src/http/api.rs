@@ -10,6 +10,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::LazyLock;
@@ -21,6 +22,7 @@ use crate::AppState;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
 use crate::session::manager::SessionManager;
 use crate::session::server_restart::{RestartState, RunningBuild, Supervision};
+use crate::store::{MessageQuery, SessionRow, snippet};
 
 /// A failed request, answered `{"error": code}` with its status.
 #[derive(Debug)]
@@ -143,6 +145,132 @@ pub async fn history_message(
             "time": message.time,
             "text": message.text,
         })),
+    }))
+    .into_response())
+}
+
+/// Hits per page of `api/history/search`.
+const SEARCH_PAGE: usize = 20;
+
+#[derive(Debug, Deserialize)]
+pub struct HistorySearchQuery {
+    q: String,
+    /// Searches every discussion when absent.
+    discussion: Option<Uuid>,
+    #[serde(default)]
+    offset: usize,
+}
+
+/// `api/history/search`: the messages holding every word of `q`, newest first.
+pub async fn history_search(
+    State(state): State<AppState>,
+    Query(query): Query<HistorySearchQuery>,
+) -> Result<Response, ApiError> {
+    let words: Vec<String> = query.q.split_whitespace().map(str::to_owned).collect();
+    if words.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "no_words"));
+    }
+    let store = state.manager.store();
+    let discussions: HashMap<Uuid, SessionRow> = store
+        .sessions()
+        .await
+        .map_err(|err| ApiError::internal("history discussions", err))?
+        .into_iter()
+        .filter(|row| query.discussion.is_none_or(|id| row.id == id))
+        .map(|row| (row.id, row))
+        .collect();
+    let message_query = MessageQuery {
+        sessions: discussions.keys().copied().collect(),
+        words: words.clone(),
+        ..MessageQuery::default()
+    };
+    let (total, hits) = store
+        .search_messages(message_query, query.offset, SEARCH_PAGE)
+        .await
+        .map_err(|err| ApiError::internal("history search", err))?;
+    let hits: Vec<_> = hits
+        .iter()
+        .filter_map(|hit| {
+            let row = discussions.get(&hit.session)?;
+            Some(json!({
+                "discussion": hit.session,
+                "name": row.name,
+                "cwd": row.cwd,
+                "seq": hit.seq,
+                "time": hit.time,
+                "role": hit.role.as_str(),
+                "snippet": snippet(&hit.text, &words),
+            }))
+        })
+        .collect();
+    Ok(Json(json!({ "total": total, "hits": hits })).into_response())
+}
+
+/// Exchanges `api/history/around` gives at most on either side of the hit.
+const AROUND_MAX_EXCHANGES: u32 = 50;
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryAroundQuery {
+    discussion: Uuid,
+    seq: u64,
+    before: u32,
+    after: u32,
+}
+
+/// `api/history/around`: the messages of the exchanges around `seq`, and whether
+/// the discussion has messages past either end.
+pub async fn history_around(
+    State(state): State<AppState>,
+    Query(query): Query<HistoryAroundQuery>,
+) -> Result<Response, ApiError> {
+    if query.before > AROUND_MAX_EXCHANGES || query.after > AROUND_MAX_EXCHANGES {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "too_many_exchanges"));
+    }
+    let store = state.manager.store();
+    let row = store
+        .session(query.discussion)
+        .await
+        .map_err(|err| ApiError::internal("history discussion", err))?
+        .ok_or(ApiError::new(StatusCode::NOT_FOUND, "no_discussion"))?;
+    let around = async {
+        let messages = store
+            .messages_around(query.discussion, query.seq, query.before, query.after)
+            .await?;
+        let (Some(first), Some(last)) = (messages.first(), messages.last()) else {
+            return anyhow::Ok((messages, false, false));
+        };
+        let earlier = store
+            .messages_around(query.discussion, first.seq, 1, 0)
+            .await?
+            .first()
+            .is_some_and(|message| message.seq < first.seq);
+        let later = store
+            .messages_around(query.discussion, last.seq, 0, 1)
+            .await?
+            .last()
+            .is_some_and(|message| message.seq > last.seq);
+        Ok((messages, earlier, later))
+    };
+    let (messages, earlier, later) = around
+        .await
+        .map_err(|err| ApiError::internal("history around", err))?;
+    let messages: Vec<_> = messages
+        .iter()
+        .map(|message| {
+            json!({
+                "seq": message.seq,
+                "time": message.time,
+                "role": message.role.as_str(),
+                "text": message.text,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "name": row.name,
+        "cwd": row.cwd,
+        "messages": messages,
+        "earlier": earlier,
+        "later": later,
     }))
     .into_response())
 }
