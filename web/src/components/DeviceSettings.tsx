@@ -292,9 +292,9 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
   if (status === null) {
     return error === null ? null : <p className="text-xs voice-ui text-destructive">{error}</p>;
   }
-  const { check, run } = status;
+  const { check, run, changelog } = status;
   const behind = check.state === "done" ? check.behind : 0;
-  const summary =
+  const checked =
     check.state === "unchecked"
       ? "Not checked yet."
       : check.state === "failed"
@@ -302,9 +302,10 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
         : behind === 0
           ? "Up to date."
           : `${behind} new ${behind === 1 ? "commit" : "commits"} upstream.`;
+  const summary = changelog.length > 0 ? `${checked} Open to see the changelog.` : checked;
   const offered = supervised === true && !running && (behind > 0 || run.state === "failed");
   const manual = supervised === false && behind > 0;
-  const body = manual || run.state !== "idle" || error !== null;
+  const body = manual || run.state !== "idle" || changelog.length > 0 || error !== null;
   return (
     <SettingsSection
       id="updates"
@@ -348,6 +349,24 @@ function Update({ onBuilt }: { onBuilt: (built: boolean) => void }) {
               <pre className="max-h-60 overflow-auto rounded-[5px] border bg-background p-2 text-xs voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
                 {run.output}
               </pre>
+            </div>
+          )}
+          {changelog.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-sm voice-ui">
+                {run.state === "running" ? "Pulled" : "Latest update"}: {changelog.length}{" "}
+                {changelog.length === 1 ? "commit" : "commits"}
+              </p>
+              <ul className="max-h-60 space-y-0.5 overflow-auto text-sm voice-ui">
+                {changelog.map((commit) => (
+                  <li key={commit.sha} className="flex gap-2">
+                    <code className="shrink-0 text-xs voice-code text-muted-foreground">
+                      {commit.sha}
+                    </code>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{commit.title}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}

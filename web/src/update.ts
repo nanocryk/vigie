@@ -10,9 +10,16 @@ export type Run =
   | { state: "built" }
   | { state: "failed"; step: Step; output: string };
 
+export interface Commit {
+  sha: string;
+  title: string;
+}
+
 export interface UpdateStatus {
   check: Check;
   run: Run;
+  /** Commits the latest update pulled, newest first; empty while there is none to show. */
+  changelog: Commit[];
 }
 
 const STEPS: readonly Step[] = ["clean", "pull", "install", "web", "server"];
@@ -77,11 +84,25 @@ function parseRun(raw: unknown, label: string): Run {
   }
 }
 
+function parseChangelog(raw: unknown, label: string): Commit[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`${label}: expected an array: ${JSON.stringify(raw)}`);
+  }
+  return raw.map((item: unknown, index) => {
+    const commit = object(item, `${label}[${index}]`);
+    return {
+      sha: string(commit, "sha", `${label}[${index}]`),
+      title: string(commit, "title", `${label}[${index}]`),
+    };
+  });
+}
+
 export function parseUpdateStatus(raw: unknown, label: string): UpdateStatus {
   const status = object(raw, label);
   return {
     check: parseCheck(Reflect.get(status, "check"), `${label}.check`),
     run: parseRun(Reflect.get(status, "run"), `${label}.run`),
+    changelog: parseChangelog(Reflect.get(status, "changelog"), `${label}.changelog`),
   };
 }
 

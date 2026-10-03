@@ -66,26 +66,87 @@ pub enum Run {
     },
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Commit {
+    pub sha: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
     pub check: Check,
     pub run: Run,
+    /// Commits the latest update pulled, newest first; empty while there is none to show.
+    pub changelog: Vec<Commit>,
+}
+
+/// The commits an update pulled, `from..to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pulled {
+    from: String,
+    to: String,
+}
+
+impl Pulled {
+    /// The range recorded at `path`; None when no update was recorded.
+    fn load(path: &Path) -> Result<Option<Self>, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(format!("read {}: {err}", path.display())),
+        };
+        let mut shas = text.split_whitespace();
+        match (shas.next(), shas.next(), shas.next()) {
+            (Some(from), Some(to), None) => Ok(Some(Self {
+                from: from.to_owned(),
+                to: to.to_owned(),
+            })),
+            _ => Err(format!("{} holds {text:?}", path.display())),
+        }
+    }
+
+    fn save(&self, path: &Path) -> io::Result<()> {
+        std::fs::write(path, format!("{} {}\n", self.from, self.to))
+    }
+
+    async fn commits(&self, repo: &Path) -> Result<Vec<Commit>, String> {
+        let range = format!("{}..{}", self.from, self.to);
+        let output = run(
+            "git",
+            &["log", "--format=%h%x09%s", &range],
+            repo,
+            GIT_TIMEOUT,
+        )
+        .await?;
+        Ok(output
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(sha, title)| Commit {
+                sha: sha.to_owned(),
+                title: title.to_owned(),
+            })
+            .collect())
+    }
 }
 
 pub struct Updater {
     repo: PathBuf,
+    /// Where the range of the latest built update is kept.
+    record: PathBuf,
     status: Mutex<Status>,
     /// Held by a check or a run: a fetch must not race a pull.
     git: tokio::sync::Mutex<()>,
 }
 
 impl Updater {
-    pub fn new(repo: PathBuf) -> Self {
+    pub fn new(repo: PathBuf, record: PathBuf) -> Self {
         Self {
             repo,
+            record,
             status: Mutex::new(Status {
                 check: Check::Unchecked,
                 run: Run::Idle,
+                changelog: Vec::new(),
             }),
             git: tokio::sync::Mutex::new(()),
         }
@@ -95,13 +156,42 @@ impl Updater {
         self.status.lock().clone()
     }
 
-    /// Fetches and counts the upstream commits HEAD lacks; skipped while an update runs.
+    /// Fetches and counts the upstream commits HEAD lacks, and reads the recorded
+    /// changelog while no update ran; skipped while an update runs.
     pub async fn check(&self) {
         let Ok(_git) = self.git.try_lock() else {
             return;
         };
         let check = check(&self.repo).await;
-        self.status.lock().check = check;
+        let idle = matches!(self.status.lock().run, Run::Idle);
+        let changelog = if idle {
+            Some(self.recorded_changelog().await)
+        } else {
+            None
+        };
+        let mut status = self.status.lock();
+        status.check = check;
+        if let Some(changelog) = changelog
+            && matches!(status.run, Run::Idle)
+        {
+            status.changelog = changelog;
+        }
+    }
+
+    /// The commits of the latest built update; empty, with a warning, when unreadable.
+    async fn recorded_changelog(&self) -> Vec<Commit> {
+        let pulled = match Pulled::load(&self.record) {
+            Ok(Some(pulled)) => pulled,
+            Ok(None) => return Vec::new(),
+            Err(err) => {
+                warn!("update changelog: {err}");
+                return Vec::new();
+            }
+        };
+        pulled.commits(&self.repo).await.unwrap_or_else(|err| {
+            warn!("update changelog: {err}");
+            Vec::new()
+        })
     }
 
     /// Starts an update in the background; false when one runs already.
@@ -112,6 +202,7 @@ impl Updater {
                 return false;
             }
             status.run = Run::Running { step: Step::Clean };
+            status.changelog.clear();
         }
         let updater = Arc::clone(self);
         tokio::spawn(async move { updater.run().await });
@@ -121,12 +212,18 @@ impl Updater {
     async fn run(&self) {
         let _git = self.git.lock().await;
         let run = match self.steps().await {
-            Ok(()) => {
+            Ok(pulled) => {
                 info!("update built");
+                if let Some(pulled) = pulled
+                    && let Err(err) = pulled.save(&self.record)
+                {
+                    warn!("write {}: {err}", self.record.display());
+                }
                 Run::Built
             }
             Err((step, output)) => {
                 warn!(?step, "update failed: {output}");
+                self.status.lock().changelog.clear();
                 Run::Failed { step, output }
             }
         };
@@ -136,20 +233,15 @@ impl Updater {
         status.check = check;
     }
 
-    async fn steps(&self) -> Result<(), (Step, String)> {
+    /// Runs every step; the range pulled, None when the pull left HEAD in place.
+    async fn steps(&self) -> Result<Option<Pulled>, (Step, String)> {
         let repo = self.repo.as_path();
         let web = repo.join("web");
         self.enter(Step::Clean);
         clean(repo).await.map_err(|output| (Step::Clean, output))?;
         let npm = npm().map_err(|output| (Step::Install, output))?;
-        let steps: [(Step, &Path, &[&str], &Path, Duration); 4] = [
-            (
-                Step::Pull,
-                Path::new("git"),
-                &["pull", "--ff-only"],
-                repo,
-                GIT_TIMEOUT,
-            ),
+        let pulled = self.pull().await.map_err(|output| (Step::Pull, output))?;
+        let steps: [(Step, &Path, &[&str], &Path, Duration); 3] = [
             (Step::Install, &npm, &["ci"], &web, BUILD_TIMEOUT),
             (Step::Web, &npm, &["run", "build"], &web, BUILD_TIMEOUT),
             (
@@ -167,7 +259,27 @@ impl Updater {
                 .await
                 .map_err(|output| (step, output))?;
         }
-        Ok(())
+        Ok(pulled)
+    }
+
+    /// Pulls and shows what it brought, or the recorded changelog when HEAD stays.
+    async fn pull(&self) -> Result<Option<Pulled>, String> {
+        let repo = self.repo.as_path();
+        self.enter(Step::Pull);
+        info!(step = ?Step::Pull, "update step");
+        let from = head(repo).await?;
+        run("git", &["pull", "--ff-only"], repo, GIT_TIMEOUT).await?;
+        let to = head(repo).await?;
+        let pulled = (from != to).then_some(Pulled { from, to });
+        let changelog = match &pulled {
+            Some(pulled) => pulled.commits(repo).await.unwrap_or_else(|err| {
+                warn!("update changelog: {err}");
+                Vec::new()
+            }),
+            None => self.recorded_changelog().await,
+        };
+        self.status.lock().changelog = changelog;
+        Ok(pulled)
     }
 
     fn enter(&self, step: Step) {
@@ -215,6 +327,11 @@ async fn clean(repo: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+async fn head(repo: &Path) -> Result<String, String> {
+    let output = run("git", &["rev-parse", "HEAD"], repo, GIT_TIMEOUT).await?;
+    Ok(output.trim().to_owned())
 }
 
 async fn count(repo: &Path, range: &str) -> Result<u32, String> {
@@ -392,6 +509,38 @@ mod tests {
         commit(&local, "mine.txt");
         let ahead = clean(&local).await.expect_err("local commit");
         assert!(ahead.starts_with("1 local commits"), "{ahead}");
+    }
+
+    #[tokio::test]
+    async fn lists_the_recorded_changelog() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        commit(&repo, "first.txt");
+        let from = head(&repo).await.expect("head");
+        commit(&repo, "second.txt");
+        commit(&repo, "third.txt");
+        let to = head(&repo).await.expect("head");
+        let record = tmp.path().join("last-update");
+        let updater = Updater::new(repo, record.clone());
+
+        updater.check().await;
+        assert_eq!(updater.status().changelog, Vec::new());
+
+        Pulled { from, to }.save(&record).expect("save");
+        updater.check().await;
+        let titles: Vec<String> = updater
+            .status()
+            .changelog
+            .into_iter()
+            .map(|commit| commit.title)
+            .collect();
+        assert_eq!(titles, ["third.txt", "second.txt"]);
+
+        std::fs::write(&record, "garbage").expect("write");
+        updater.check().await;
+        assert_eq!(updater.status().changelog, Vec::new());
     }
 
     #[cfg(windows)]

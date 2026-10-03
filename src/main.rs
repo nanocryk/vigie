@@ -435,7 +435,10 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         Arc::clone(&auth),
     )?);
     push::spawn_dispatcher(&manager, Arc::clone(&pusher));
-    let updater = Arc::new(Updater::new(std::env::current_dir()?));
+    let updater = Arc::new(Updater::new(
+        std::env::current_dir()?,
+        dir.join("last-update"),
+    ));
     update::spawn_checks(Arc::clone(&updater));
 
     let state = AppState {

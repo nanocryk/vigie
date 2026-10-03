@@ -78,7 +78,7 @@ impl AppState {
             manager,
             allowed_origins: Arc::new(BTreeSet::from([format!("http://127.0.0.1:{port}")])),
             pusher,
-            updater: Arc::new(Updater::new(dir.to_path_buf())),
+            updater: Arc::new(Updater::new(dir.to_path_buf(), dir.join("last-update"))),
         })
     }
 }
