@@ -1112,6 +1112,9 @@ export function TranscriptView({
     checkTop();
   }, [checkTop, updateJump]);
 
+  // The jump button's room is bottom padding: re-stick once it changes.
+  useLayoutEffect(stick, [jumpButton, stick]);
+
   // Opening or closing a panel never moves the view, even at the bottom: the
   // following content is pushed down instead. Position is re-read once it settles.
   const onSummaryClick = (event: ReactMouseEvent) => {
@@ -1151,7 +1154,8 @@ export function TranscriptView({
   useEffect(() => {
     const observer = new ResizeObserver(stick);
     if (scroller.current !== null) observer.observe(scroller.current);
-    if (content.current !== null) observer.observe(content.current);
+    // Border box: the room for the jump button is padding, and must re-stick too.
+    if (content.current !== null) observer.observe(content.current, { box: "border-box" });
     return () => observer.disconnect();
   }, [stick]);
 
