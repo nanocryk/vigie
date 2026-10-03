@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   type AgentEntry,
-  agentCold,
+  agentColdAt,
   agentEntries,
   agentStateLabel,
   agentTree,
@@ -10,6 +10,7 @@ import {
   recentAgents,
   workingLabel,
 } from "@/agents";
+import { cacheGauge } from "@/gauges";
 import type { AgentInfo, PendingAsk } from "@/transcript";
 import type { AgentView } from "@/wire";
 
@@ -154,13 +155,16 @@ describe("go to agent", () => {
 });
 
 describe("agent cache", () => {
-  it("goes cold after its own TTL from its last request", () => {
-    const [entry] = agentEntries(
-      [view("a1", "t1", { cache: { last_request_at: "2026-09-28T11:56:00Z", ttl_secs: 300 } })],
-      new Map(),
-    ) as [AgentEntry];
-    expect(agentCold(entry, NOW)).toBe(false);
-    expect(agentCold(entry, NOW + 60_000)).toBe(true);
-    expect(agentCold({ ...entry, cache: null }, NOW)).toBe(false);
+  it("goes cold after its own TTL from its last request, unless running", () => {
+    const cache = { last_request_at: "2026-09-28T11:56:00Z", ttl_secs: 300 };
+    const [entry] = agentEntries([view("a1", "t1", { cache, state: "completed" })], new Map()) as [
+      AgentEntry,
+    ];
+    const coldAt = Date.parse("2026-09-28T12:01:00Z");
+    expect(agentColdAt(entry, cacheGauge(cache, NOW))).toBeNull();
+    expect(agentColdAt(entry, cacheGauge(cache, NOW + 60_000))).toBe(coldAt);
+    expect(agentColdAt({ ...entry, state: "running" }, cacheGauge(cache, NOW + 60_000))).toBeNull();
+    expect(agentColdAt({ ...entry, live: false }, cacheGauge(cache, NOW + 60_000))).toBeNull();
+    expect(agentColdAt(entry, cacheGauge(null, NOW))).toBeNull();
   });
 });

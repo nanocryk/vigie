@@ -13,12 +13,14 @@ use serde_json::Value;
 
 use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, System};
 use crate::claude::tools::{AGENT_TOOLS, SEND_MESSAGE};
-use crate::session::gauges::{Cache, FIVE_MINUTE_TTL_SECS, MainRequest};
+use crate::session::gauges::{Cache, FIVE_MINUTE_TTL_SECS, MainRequest, is_cold};
 
 /// `task_type` of a subagent's task.
 pub const LOCAL_AGENT: &str = "local_agent";
 /// The main agent's whole reply once it forwarded a relayed message.
 pub const RELAY_ACK: &str = "[Relay acknowledged]";
+/// Callback id of the `PreToolUse` hook on SendMessage, see `cold_send`.
+pub const SEND_MESSAGE_HOOK: &str = "vigie_send_message";
 
 /// The Agent call id of the agent a line belongs to; `None` for the main agent.
 pub fn scope(line: &Inbound) -> Option<&str> {
@@ -106,6 +108,14 @@ impl AgentTracker {
 
     pub fn find(&self, task_id: &str) -> Option<&AgentView> {
         self.agents.iter().find(|agent| agent.task_id == task_id)
+    }
+
+    /// The agent a SendMessage `to` names: its task id, else its name when only one has it.
+    fn recipient(&self, to: &str) -> Option<&AgentView> {
+        self.find(to).or_else(|| {
+            let mut named = self.agents.iter().filter(|agent| agent.name == to);
+            named.next().filter(|_| named.next().is_none())
+        })
     }
 
     fn by_task(&mut self, task_id: &str) -> Option<&mut AgentView> {
@@ -396,6 +406,14 @@ impl RelayFilter {
         }
     }
 
+    /// A relay not settled yet carries `text` to `task_id`.
+    fn carries(&self, task_id: &str, text: &str) -> bool {
+        self.sent
+            .iter()
+            .chain(self.watching.iter().map(|watch| &watch.relay))
+            .any(|relay| relay.task_id == task_id && relay.text == text)
+    }
+
     /// The child stopped: every relay not settled failed.
     pub fn end(&mut self) -> Vec<RelayVerdict> {
         let ended = || RelayOutcome::Failed {
@@ -407,6 +425,51 @@ impl RelayFilter {
             .map(|relay| verdict(relay, ended()))
             .collect()
     }
+}
+
+/// A SendMessage that resumes an agent whose cache went cold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColdSend {
+    pub name: String,
+    pub idle_minutes: i64,
+    /// The agent's last prompt: what it caches again.
+    pub prompt_tokens: u64,
+}
+
+impl ColdSend {
+    /// The warning the user approves the SendMessage against.
+    pub fn warning(&self) -> String {
+        format!(
+            "Resumes agent \"{}\", idle for {} min: its cache expired, so it re-sends its \
+             whole context ({} tokens) at full price",
+            self.name, self.idle_minutes, self.prompt_tokens
+        )
+    }
+}
+
+/// The SendMessage with `input` resumes an agent whose cache went cold, outside a
+/// relay the user sent, so the user approves it first. `None` lets it run.
+pub fn cold_send(
+    agents: &AgentTracker,
+    relays: &RelayFilter,
+    input: &Value,
+    now: DateTime<Utc>,
+) -> Option<ColdSend> {
+    let agent = agents.recipient(input["to"].as_str()?)?;
+    let cache = agent.cache.as_ref()?;
+    if agent.state == AgentState::Running
+        || !is_cold(Some(cache), cache.last_request_at, now)
+        || input["message"]
+            .as_str()
+            .is_some_and(|text| relays.carries(&agent.task_id, text))
+    {
+        return None;
+    }
+    Some(ColdSend {
+        name: agent.name.clone(),
+        idle_minutes: (now - cache.last_request_at).num_minutes(),
+        prompt_tokens: agent.prompt_tokens,
+    })
 }
 
 fn message_text(content: &MessageContent) -> Option<String> {
@@ -702,6 +765,65 @@ mod tests {
         let verdicts = filter.on_line(&result());
         assert_eq!(verdicts.len(), 1);
         assert!(matches!(verdicts[0].outcome, RelayOutcome::Faithful { .. }));
+    }
+
+    #[test]
+    fn a_send_message_to_a_cold_finished_agent_is_asked_unless_relayed() {
+        let agent = |name: &str, task_id: &str, state| AgentView {
+            task_id: task_id.into(),
+            tool_use_id: format!("t-{task_id}"),
+            name: name.into(),
+            subagent_type: None,
+            parent_tool_use_id: None,
+            state,
+            activity: None,
+            cache: Some(Cache {
+                last_request_at: at(0),
+                ttl_secs: FIVE_MINUTE_TTL_SECS,
+            }),
+            prompt_tokens: 42_000,
+            started_at: at(0),
+        };
+        let tracker = AgentTracker {
+            agents: vec![
+                agent("sleeper", "a1", AgentState::Completed),
+                agent("busy", "a2", AgentState::Running),
+                agent("twin", "a3", AgentState::Completed),
+                agent("twin", "a4", AgentState::Completed),
+            ],
+            ..Default::default()
+        };
+        let mut relays = RelayFilter::default();
+        let asked = |relays: &RelayFilter, to: &str, secs| {
+            let input = serde_json::json!({"to": to, "message": "hello", "summary": "s"});
+            cold_send(&tracker, relays, &input, at(secs))
+        };
+        assert_eq!(asked(&relays, "a1", 299), None, "still warm");
+        let cold = asked(&relays, "a1", 600).expect("cold");
+        assert_eq!(
+            cold,
+            ColdSend {
+                name: "sleeper".into(),
+                idle_minutes: 10,
+                prompt_tokens: 42_000
+            }
+        );
+        let warning = cold.warning();
+        assert!(
+            warning.contains("\"sleeper\", idle for 10 min"),
+            "{warning}"
+        );
+        assert!(warning.contains("42000 tokens"), "{warning}");
+        assert!(asked(&relays, "sleeper", 600).is_some(), "named");
+        assert_eq!(asked(&relays, "a2", 600), None, "running");
+        assert_eq!(asked(&relays, "twin", 600), None, "ambiguous name");
+        assert_eq!(asked(&relays, "nobody", 600), None);
+        relays.sent(hello("wrapped"));
+        assert_eq!(asked(&relays, "a1", 600), None, "the user's relay");
+        relays.on_line(&user("wrapped"));
+        assert_eq!(asked(&relays, "a1", 600), None, "echoed, not settled");
+        relays.on_line(&result());
+        assert!(asked(&relays, "a1", 600).is_some(), "settled");
     }
 
     #[test]

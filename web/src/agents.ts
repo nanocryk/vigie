@@ -1,4 +1,4 @@
-import { type CacheGauge, cacheGauge } from "@/gauges";
+import type { CacheGauge } from "@/gauges";
 import type { AgentInfo, PendingAsk } from "@/transcript";
 import type { AgentState, AgentView, CacheView } from "@/wire";
 
@@ -137,14 +137,13 @@ export function goToAgent(
   return owner.toolUseId === viewing ? null : owner;
 }
 
-/** An agent's cache over its own TTL, from its last request. */
-export function agentGauge(entry: AgentEntry | null, now: number): CacheGauge {
-  return cacheGauge(entry?.cache ?? null, now);
-}
-
-/** A relay to this agent reloads its cache: its last request's TTL has passed. */
-export function agentCold(entry: AgentEntry, now: number): boolean {
-  return agentGauge(entry, now).kind === "cold";
+/**
+ * When a relay to this agent started reloading its cache, given its cache `gauge`:
+ * the TTL of its last request passed while it is not running. Null while a relay
+ * costs nothing extra, a running agent's included: its next request reads it anyway.
+ */
+export function agentColdAt(entry: AgentEntry, gauge: CacheGauge): number | null {
+  return entry.live && entry.state !== "running" && gauge.kind === "cold" ? gauge.coldAt : null;
 }
 
 const STATE_LABEL: Record<AgentState, string> = {

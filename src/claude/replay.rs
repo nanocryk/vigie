@@ -22,7 +22,7 @@ use crate::claude::protocol::Inbound;
 /// Keys whose values legitimately differ between a recorded run and a replay.
 const RUN_SPECIFIC_KEYS: [&str; 3] = ["session_id", "uuid", "timestamp"];
 /// Keys the host sends that older recordings predate; compared only when recorded.
-const LATER_HOST_KEYS: [&str; 1] = ["sdkMcpServers"];
+const LATER_HOST_KEYS: [&str; 2] = ["sdkMcpServers", "hooks"];
 /// Longest rendering of a line inside an error message.
 const SHOWN_CHARS: usize = 600;
 

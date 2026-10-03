@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::activity::{ActivityTracker, LiveStatus};
 use super::agents::{self, AgentTracker, AgentView, Relay, RelayFilter};
 use super::background::{BackgroundTracker, BackgroundView};
+use super::danger::Danger;
 use super::events::{
     Answer, CommandInfo, Event, EventBody, GateFailure, HostEvent, Line, ModelChoice, Resolution,
     StopReason,
@@ -28,11 +29,11 @@ use super::server_restart::ServerRestart;
 use super::{attachments, danger, mcp, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
-    CanUseTool, CliRequest, ControlRequest, ControlResponse, HostRequest, Inbound,
+    CanUseTool, CliRequest, ControlRequest, ControlResponse, HookOutput, HostRequest, Inbound,
     InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
     SetPermissionModeResponse, System, UserMessage,
 };
-use crate::claude::tools::{self, ASK_USER_QUESTION, EXIT_PLAN_MODE};
+use crate::claude::tools::{self, ASK_USER_QUESTION, EXIT_PLAN_MODE, SEND_MESSAGE};
 use crate::store::{BashAnswer, SessionState, Store};
 
 const STDERR_TAIL: usize = 50;
@@ -160,6 +161,8 @@ pub struct Actor {
     asks: Vec<PendingAsk>,
     /// Subagents whose ask timed out, with the message denying their later asks.
     wrapping_up: HashMap<String, String>,
+    /// SendMessage calls to a cold agent the hook sent to an ask, by tool use id.
+    cold_sends: HashMap<String, agents::ColdSend>,
     /// Files allowed with `always_for_file`; their later asks are answered here.
     file_grants: Vec<FileOffer>,
     /// Reads of files in it are answered here.
@@ -203,6 +206,7 @@ impl Actor {
             plans: PlanTracker::from_env(),
             asks: Vec::new(),
             wrapping_up: HashMap::new(),
+            cold_sends: HashMap::new(),
             file_grants: Vec::new(),
             uploads: config.uploads,
             turn_attachments: Vec::new(),
@@ -223,7 +227,10 @@ impl Actor {
         let request_id = self.next_request_id();
         let initialize = ControlRequest::new(
             request_id.clone(),
-            HostRequest::initialize(vec![mcp::SERVER_NAME.into()]),
+            HostRequest::initialize(
+                vec![mcp::SERVER_NAME.into()],
+                &[(SEND_MESSAGE, agents::SEND_MESSAGE_HOOK)],
+            ),
         );
         self.state = State::Initializing { request_id };
         if let Err(err) = self.write(Outbound::ControlRequest(initialize)).await {
@@ -416,11 +423,15 @@ impl Actor {
                     plan_text: plan.as_ref().map(|plan| plan.text.clone()),
                     timeout,
                 });
+                let danger = match self.cold_sends.remove(&ask.tool_use_id) {
+                    Some(cold) => Danger::from_reasons(vec![cold.warning()]),
+                    None => danger::classify(ask, &self.cwd),
+                };
                 self.emit_host(HostEvent::AskQueued {
                     request_id: request.request_id.clone(),
                     tool_name: ask.tool_name.clone(),
                     tool_use_id: ask.tool_use_id.clone(),
-                    danger: danger::classify(ask, &self.cwd),
+                    danger,
                     accept_edits: grant::offers_accept_edits(ask),
                     folder: grant::folder_offer(ask, dirs::home_dir().as_deref()).map(Box::new),
                     file,
@@ -451,6 +462,33 @@ impl Actor {
                 };
                 if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
                     tracing::warn!("answer mcp_message: {err:#}");
+                }
+            }
+            CliRequest::HookCallback(hook) => {
+                let cold = (hook.callback_id == agents::SEND_MESSAGE_HOOK)
+                    .then(|| {
+                        agents::cold_send(
+                            &self.agents,
+                            &self.relays,
+                            &hook.input["tool_input"],
+                            Utc::now(),
+                        )
+                    })
+                    .flatten();
+                let output = match cold {
+                    Some(cold) => {
+                        let output = HookOutput::ask(cold.warning());
+                        if let Some(tool_use_id) = &hook.tool_use_id {
+                            self.cold_sends.insert(tool_use_id.clone(), cold);
+                        }
+                        output
+                    }
+                    None => HookOutput::default(),
+                };
+                let response = ControlResponse::success(request.request_id.clone(), output)
+                    .expect("hook output serializes");
+                if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
+                    tracing::warn!("answer hook_callback: {err:#}");
                 }
             }
             CliRequest::Other(fields) => {

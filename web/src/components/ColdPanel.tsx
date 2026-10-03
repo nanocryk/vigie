@@ -140,25 +140,23 @@ function RewarmWarning({
 }
 
 /**
- * Replaces the composer when a message for an agent whose own cache went cold
- * waits: relaying it makes the agent write its whole context to the cache again.
+ * Replaces the composer of an agent's view while the agent's own cache is cold:
+ * a relay would make it write its whole context to the cache again.
  */
 export function AgentColdPanel({
   name,
   promptTokens,
-  text,
-  busy,
-  onRelay,
-  onCancel,
+  draft,
+  onRewarm,
+  onBack,
 }: {
   name: string;
   /** The agent's last prompt: what it caches again; 0 when unknown. */
   promptTokens: number;
-  /** The message waiting. */
-  text: string;
-  busy: boolean;
-  onRelay: () => void;
-  onCancel: () => void;
+  /** The composer's draft, kept for after the choice. */
+  draft: string;
+  onRewarm: () => void;
+  onBack: () => void;
 }) {
   const size =
     promptTokens > 0 ? `about ${formatTokens(promptTokens)} tokens` : "its whole context";
@@ -170,26 +168,26 @@ export function AgentColdPanel({
             The cache of agent {name} is cold
           </p>
           <p className="text-sm voice-ui">
-            An agent's cache lasts 5 minutes after its last request. Relaying this message makes it
+            An agent's cache lasts 5 minutes after its last request. A message to it now makes it
             read {size} again at full price, charged against your 5h and 7d windows.
           </p>
-          <p className="truncate text-xs voice-ui text-muted-foreground">Your message: {text}</p>
+          {draft.trim() !== "" && (
+            <p className="truncate text-xs voice-ui text-muted-foreground">Your draft: {draft}</p>
+          )}
           <div className="flex gap-2">
             <button
               type="button"
-              disabled={busy}
-              onClick={onRelay}
-              className="rounded-[5px] bg-destructive px-4 py-2 text-sm voice-ui text-black disabled:opacity-50"
+              onClick={onRewarm}
+              className="rounded-[5px] bg-destructive px-4 py-2 text-sm voice-ui text-black"
             >
-              Relay anyway
+              Rewarm anyway
             </button>
             <button
               type="button"
-              disabled={busy}
-              onClick={onCancel}
-              className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui disabled:opacity-50"
+              onClick={onBack}
+              className="rounded-[5px] border bg-background px-4 py-2 text-sm voice-ui"
             >
-              Cancel
+              Back to main
             </button>
           </div>
         </div>

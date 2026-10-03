@@ -661,8 +661,54 @@ pub struct ControlCancelRequest {
 pub enum CliRequest {
     CanUseTool(Box<CanUseTool>),
     McpMessage(McpMessage),
+    HookCallback(HookCallback),
     #[serde(untagged)]
     Other(Extra),
+}
+
+/// A hook registered in `initialize` fired; answered by `HookOutput`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookCallback {
+    pub callback_id: String,
+    /// The hook's input, such as `tool_name` and `tool_input` for `PreToolUse`.
+    pub input: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Answer to a `hook_callback`; empty lets the tool call go on as without the hook.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HookOutput {
+    #[serde(
+        rename = "hookSpecificOutput",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hook_specific_output: Option<PreToolUseOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreToolUseOutput {
+    /// Always `PreToolUse`.
+    pub hook_event_name: String,
+    pub permission_decision: String,
+    pub permission_decision_reason: String,
+}
+
+impl HookOutput {
+    /// Sends the tool call to the permission prompt.
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self {
+            hook_specific_output: Some(PreToolUseOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: "ask".into(),
+                permission_decision_reason: reason.into(),
+            }),
+        }
+    }
 }
 
 /// One MCP JSON-RPC message for the SDK-hosted server `server_name`, answered by `McpResponse`.
@@ -728,6 +774,9 @@ pub enum HostRequest {
             skip_serializing_if = "Vec::is_empty"
         )]
         sdk_mcp_servers: Vec<String>,
+        /// Hook event name to matchers, each with the `hookCallbackIds` a firing sends back.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hooks: Option<Value>,
         #[serde(flatten)]
         extra: Extra,
     },
@@ -780,9 +829,17 @@ pub enum HostRequest {
 }
 
 impl HostRequest {
-    pub fn initialize(sdk_mcp_servers: Vec<String>) -> Self {
+    /// `pre_tool_use` maps a tool name matcher to the callback id its `PreToolUse` hook sends.
+    pub fn initialize(sdk_mcp_servers: Vec<String>, pre_tool_use: &[(&str, &str)]) -> Self {
+        let matchers: Vec<Value> = pre_tool_use
+            .iter()
+            .map(|(matcher, callback_id)| {
+                serde_json::json!({"matcher": matcher, "hookCallbackIds": [callback_id]})
+            })
+            .collect();
         Self::Initialize {
             sdk_mcp_servers,
+            hooks: (!matchers.is_empty()).then(|| serde_json::json!({"PreToolUse": matchers})),
             extra: Extra::new(),
         }
     }
@@ -1548,6 +1605,37 @@ mod tests {
         assert_eq!(ask.tool_name, "Bash");
         assert_eq!(ask.decision_reason.as_ref().unwrap()["type"], "rule");
         assert_eq!(serde_json::to_value(&typed).unwrap(), line);
+    }
+
+    #[test]
+    fn hooks_match_the_wire() {
+        let initialize = HostRequest::initialize(vec!["v".into()], &[("SendMessage", "h1")]);
+        assert_eq!(
+            serde_json::to_value(&initialize).unwrap(),
+            serde_json::json!({"subtype": "initialize", "sdkMcpServers": ["v"], "hooks":
+                {"PreToolUse": [{"matcher": "SendMessage", "hookCallbackIds": ["h1"]}]}}),
+        );
+        let line = serde_json::json!({"type": "control_request", "request_id": "r1",
+            "request": {"subtype": "hook_callback", "callback_id": "h1",
+                "input": {"tool_name": "SendMessage", "tool_input": {"to": "a1"}},
+                "tool_use_id": "toolu_1"}});
+        let Inbound::ControlRequest(request) = serde_json::from_value(line).unwrap() else {
+            panic!("not a control request");
+        };
+        let CliRequest::HookCallback(hook) = request.request else {
+            panic!("not a hook callback: {:?}", request.request);
+        };
+        assert_eq!(hook.callback_id, "h1");
+        assert_eq!(hook.input["tool_input"]["to"], "a1");
+        assert_eq!(
+            serde_json::to_value(HookOutput::ask("cold")).unwrap(),
+            serde_json::json!({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                "permissionDecision": "ask", "permissionDecisionReason": "cold"}}),
+        );
+        assert_eq!(
+            serde_json::to_value(HookOutput::default()).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     #[test]

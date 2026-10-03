@@ -12,7 +12,7 @@ import {
 
 import {
   type AgentEntry,
-  agentCold,
+  agentColdAt,
   agentEntries,
   goToAgent,
   recentAgents,
@@ -590,13 +590,14 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     viewing === null ? null : (entries.find((entry) => entry.toolUseId === viewing) ?? null);
   const shown = viewing === null ? transcript : (transcript.scopes.get(viewing) ?? emptyTranscript);
   const draftSlot = draftKey(id, viewing);
-  /** A relay to an agent whose cache went cold, waiting for its confirmation. */
-  const [agentColdSend, setAgentColdSend] = useState<{
-    text: string;
-    attachments: string[];
-    rewarm: boolean;
-  } | null>(null);
-  useEffect(() => setAgentColdSend(null), [viewing]);
+  const agentGauge = useCacheGauge(agent?.cache ?? null, null);
+  const agentCold = agent === null ? null : agentColdAt(agent, agentGauge);
+  /** The agent and cold spell a rewarm was confirmed for; relays go straight until the next spell. */
+  const [agentRewarmed, setAgentRewarmed] = useState<{ agent: string; coldAt: number } | null>(
+    null,
+  );
+  const agentColdPanel =
+    agentCold !== null && !(agentRewarmed?.agent === viewing && agentRewarmed.coldAt === agentCold);
 
   // A pending message leaves once the server's `user_sent` or `relay_sent` for one of its attempts is in.
   const sent = sentClientIds(transcript);
@@ -694,18 +695,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     deliver(entry.id, scope, text, clientId, fields);
   };
 
-  /** In an agent's view, a relay; one to an agent whose cache went cold waits for a confirmation. */
-  const send = (text: string, fields: SendFields = rewarm) => {
-    if (agent !== null && agent.live && agentCold(agent, Date.now())) {
-      setAgentColdSend({
-        text,
-        attachments: fields.attachments ?? [],
-        rewarm: fields.rewarm === true,
-      });
-      return;
-    }
-    sendTo(viewing, text, fields);
-  };
+  /** In an agent's view, a relay. */
+  const send = (text: string, fields: SendFields = rewarm) => sendTo(viewing, text, fields);
 
   const retry = (entry: PendingSend) => {
     const clientId = client.newClientId();
@@ -1169,33 +1160,6 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     setPanel(closedPanel);
     setAgentsOpen(true);
   };
-  const cancelAgentCold = () => {
-    if (agentColdSend !== null) {
-      drafts.set(draftSlot, agentColdSend.text);
-      updateDraftFiles(draftSlot, (files) => [
-        ...files,
-        ...agentColdSend.attachments.map((path): ComposerFile => {
-          nextFileKey += 1;
-          return {
-            key: String(nextFileKey),
-            name: attachmentName(path),
-            status: "ready",
-            path,
-            error: null,
-          };
-        }),
-      ]);
-    }
-    setAgentColdSend(null);
-  };
-  const confirmAgentCold = () => {
-    if (agentColdSend === null) return;
-    sendTo(viewing, agentColdSend.text, {
-      ...(agentColdSend.rewarm ? { rewarm: true } : {}),
-      ...attachmentsField(agentColdSend.attachments),
-    });
-    setAgentColdSend(null);
-  };
   const askGoTo = ask === undefined ? null : goToAgent(ask, viewing, entries);
 
   // Escape closes the menu, else the commands panel, else the agents panel, else stops a running turn.
@@ -1612,14 +1576,13 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
             />
           )}
 
-          {agentColdSend !== null && agent !== null ? (
+          {agentColdPanel && agent !== null && agentCold !== null ? (
             <AgentColdPanel
               name={agent.name}
               promptTokens={agent.promptTokens}
-              text={agentColdSend.text}
-              busy={false}
-              onRelay={confirmAgentCold}
-              onCancel={cancelAgentCold}
+              draft={drafts.get(draftSlot) ?? ""}
+              onRewarm={() => setAgentRewarmed({ agent: agent.toolUseId, coldAt: agentCold })}
+              onBack={() => switchTo(null)}
             />
           ) : (
             <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
