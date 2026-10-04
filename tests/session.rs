@@ -315,6 +315,7 @@ async fn permissions_deny_and_question_answer() {
     assert_eq!(tool_name, "Write");
     let deny = Answer::Deny {
         message: "Refused by the spike driver.".into(),
+        for_session: false,
     };
     harness
         .session
@@ -342,6 +343,7 @@ async fn permissions_deny_and_question_answer() {
                     folder: None,
                     note: None,
                     always_for_file: false,
+                    for_session: false,
                 }
             )
             .await
@@ -412,6 +414,7 @@ async fn interrupt_while_streaming_and_during_a_tool() {
                 folder: None,
                 note: None,
                 always_for_file: false,
+                for_session: false,
             },
         )
         .await
@@ -473,6 +476,7 @@ async fn permission_mode_changes_are_announced_once_each() {
         folder: None,
         note: None,
         always_for_file: false,
+        for_session: false,
     };
     for expected in ["ExitPlanMode", "Write"] {
         let (request_id, tool_name) = harness.until_ask().await;
@@ -498,6 +502,7 @@ async fn folder_grants_and_accept_edits_reach_the_cli() {
     let mut harness = Harness::start(&Recording::path("grants"));
     let deny = Answer::Deny {
         message: "Refused by the spike driver.".into(),
+        for_session: false,
     };
     let read = |name: &str| {
         format!(
@@ -526,6 +531,7 @@ async fn folder_grants_and_accept_edits_reach_the_cli() {
         accept_edits,
         folder,
         always_for_file: false,
+        for_session: false,
     };
     let script = vec![
         (
@@ -755,6 +761,7 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
         folder: None,
         note: None,
         always_for_file: false,
+        for_session: false,
     };
     assert!(
         harness
@@ -765,6 +772,52 @@ async fn unknown_requests_are_refused_and_cancelled_asks_resolve() {
     );
     harness.session.answer("cli-3", allow).await.unwrap();
     assert_eq!(harness.session.status().borrow().asks, 0);
+    harness.finish().await;
+}
+
+/// An Agent call the fanout hook sends to an ask, allowed for the session; the
+/// next one of the same type is allowed by the hook, and one from a subagent denied.
+const FANOUT_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "hook_callback", "callback_id": "vigie_fanout", "tool_use_id": "t1", "input": {"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_input": {"subagent_type": "Explore", "model": "haiku", "prompt": "p"}, "tool_use_id": "t1"}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "Starts agents or unattended work"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Agent", "input": {"subagent_type": "Explore", "model": "haiku", "prompt": "p"}, "tool_use_id": "t1"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"subagent_type": "Explore", "model": "haiku", "prompt": "p"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "hook_callback", "callback_id": "vigie_fanout", "tool_use_id": "t2", "input": {"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_input": {"subagent_type": "Explore", "prompt": "q"}, "tool_use_id": "t2"}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "Allowed by the user for this session"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-4", "request": {"subtype": "hook_callback", "callback_id": "vigie_fanout", "tool_use_id": "t3", "input": {"hook_event_name": "PreToolUse", "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "Explore", "prompt": "r"}, "tool_use_id": "t3"}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-4", "response": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Nested agents and unattended work are disabled inside a subagent. Finish the task yourself, or report back to the agent that started you."}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "result", "subtype": "success", "is_error": false, "result": "done", "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn", "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": "r1"}}
+"#;
+
+#[tokio::test]
+async fn agent_calls_ask_until_allowed_for_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fanout.ndjson");
+    std::fs::write(&path, FANOUT_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let HostEvent::AskQueued { fanout, .. } = harness
+        .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    let fanout = fanout.expect("the hook's call carries its offer");
+    assert_eq!(fanout.key.tool, "Agent");
+    assert_eq!(fanout.key.agent_type.as_deref(), Some("Explore"));
+    assert_eq!(fanout.model.as_deref(), Some("haiku"));
+    let allow = Answer::Allow {
+        updated_input: None,
+        accept_edits: false,
+        folder: None,
+        note: None,
+        always_for_file: false,
+        for_session: true,
+    };
+    harness.session.answer("cli-2", allow).await.unwrap();
+    // The fake sends the result once vigie answered both later hooks as scripted.
+    harness.until_result().await;
     harness.finish().await;
 }
 
@@ -802,6 +855,7 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         folder: None,
         note: Some("Then run the tests.".into()),
         always_for_file: false,
+        for_session: false,
     };
     harness
         .session
@@ -844,6 +898,7 @@ async fn an_allow_note_follows_as_a_queued_user_message() {
         folder: None,
         note: Some("  ".into()),
         always_for_file: false,
+        for_session: false,
     };
     harness.session.answer("cli-2", blank).await.unwrap();
     harness.finish().await;
@@ -927,6 +982,7 @@ async fn a_subagent_asks_through_the_parent_and_takes_a_faithful_relay() {
         accept_edits: false,
         folder: None,
         always_for_file: false,
+        for_session: false,
     };
     harness.session.answer(request_id, allow).await.unwrap();
     let mut agents_view = harness.session.agents();
@@ -1044,6 +1100,7 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
         accept_edits: false,
         folder: None,
         always_for_file: true,
+        for_session: false,
     };
     async fn queued_file(harness: &mut Harness) -> (String, Option<FileOffer>) {
         match harness
@@ -1106,6 +1163,7 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
         accept_edits: false,
         folder: None,
         always_for_file: false,
+        for_session: false,
     };
     harness.session.answer(request_id, allow).await.unwrap();
     harness.finish().await;
@@ -1183,6 +1241,7 @@ async fn an_unanswered_subagent_ask_times_out_and_the_agent_wraps_up() {
         accept_edits: false,
         folder: None,
         always_for_file: false,
+        for_session: false,
     };
     harness
         .session
@@ -1222,6 +1281,7 @@ async fn reads_in_the_uploads_folder_are_allowed_by_the_host() {
         accept_edits: false,
         folder: None,
         always_for_file: false,
+        for_session: false,
     };
     for expected in ["cli-2", "cli-3"] {
         let HostEvent::AskQueued { request_id, .. } = harness

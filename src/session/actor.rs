@@ -21,6 +21,7 @@ use super::events::{
     Answer, CommandInfo, Event, EventBody, GateFailure, HostEvent, Line, ModelChoice, Resolution,
     StopReason,
 };
+use super::fanout::{self, FanoutGate, FanoutOffer, Remember};
 use super::gauges::FIVE_MINUTE_TTL_SECS;
 use super::grant::{self, FileOffer};
 use super::handle::Config;
@@ -29,8 +30,8 @@ use super::server_restart::ServerRestart;
 use super::{attachments, danger, mcp, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
-    CanUseTool, CliRequest, ControlRequest, ControlResponse, HookOutput, HostRequest, Inbound,
-    InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
+    CanUseTool, CliRequest, ControlRequest, ControlResponse, HookCallback, HookOutput, HostRequest,
+    Inbound, InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
     SetPermissionModeResponse, System, UserMessage,
 };
 use crate::claude::tools::{self, ASK_USER_QUESTION, EXIT_PLAN_MODE, SEND_MESSAGE};
@@ -101,6 +102,8 @@ struct PendingAsk {
     plan_text: Option<String>,
     /// A subagent's ask: when it is denied if still unanswered.
     timeout: Option<AskTimeout>,
+    /// A call the fanout hook sent to this ask.
+    fanout: Option<FanoutOffer>,
 }
 
 struct AskTimeout {
@@ -163,6 +166,7 @@ pub struct Actor {
     wrapping_up: HashMap<String, String>,
     /// SendMessage calls to a cold agent the hook sent to an ask, by tool use id.
     cold_sends: HashMap<String, agents::ColdSend>,
+    fanout: FanoutGate,
     /// Files allowed with `always_for_file`; their later asks are answered here.
     file_grants: Vec<FileOffer>,
     /// Reads of files in it are answered here.
@@ -207,6 +211,7 @@ impl Actor {
             asks: Vec::new(),
             wrapping_up: HashMap::new(),
             cold_sends: HashMap::new(),
+            fanout: FanoutGate::default(),
             file_grants: Vec::new(),
             uploads: config.uploads,
             turn_attachments: Vec::new(),
@@ -225,12 +230,16 @@ impl Actor {
             cwd: self.cwd.clone(),
         });
         let request_id = self.next_request_id();
+        let hooks: Vec<(&str, &str)> = std::iter::once((SEND_MESSAGE, agents::SEND_MESSAGE_HOOK))
+            .chain(
+                fanout::GATED_TOOLS
+                    .iter()
+                    .map(|tool| (*tool, fanout::FANOUT_HOOK)),
+            )
+            .collect();
         let initialize = ControlRequest::new(
             request_id.clone(),
-            HostRequest::initialize(
-                vec![mcp::SERVER_NAME.into()],
-                &[(SEND_MESSAGE, agents::SEND_MESSAGE_HOOK)],
-            ),
+            HostRequest::initialize(vec![mcp::SERVER_NAME.into()], &hooks),
         );
         self.state = State::Initializing { request_id };
         if let Err(err) = self.write(Outbound::ControlRequest(initialize)).await {
@@ -416,13 +425,16 @@ impl Actor {
                 } else {
                     None
                 };
+                let fanout = self.fanout.take(&ask.tool_use_id);
                 self.asks.push(PendingAsk {
                     request_id: request.request_id.clone(),
                     request: (**ask).clone(),
                     plan_path: plan.as_ref().and_then(|plan| plan.path.clone()),
                     plan_text: plan.as_ref().map(|plan| plan.text.clone()),
                     timeout,
+                    fanout: fanout.clone(),
                 });
+                let fanout = fanout.map(Box::new);
                 let danger = match self.cold_sends.remove(&ask.tool_use_id) {
                     Some(cold) => Danger::from_reasons(vec![cold.warning()]),
                     None => danger::classify(ask, &self.cwd),
@@ -436,6 +448,7 @@ impl Actor {
                     folder: grant::folder_offer(ask, dirs::home_dir().as_deref()).map(Box::new),
                     file,
                     plan,
+                    fanout,
                     agent_id,
                     deny_at,
                 });
@@ -465,25 +478,12 @@ impl Actor {
                 }
             }
             CliRequest::HookCallback(hook) => {
-                let cold = (hook.callback_id == agents::SEND_MESSAGE_HOOK)
-                    .then(|| {
-                        agents::cold_send(
-                            &self.agents,
-                            &self.relays,
-                            &hook.input["tool_input"],
-                            Utc::now(),
-                        )
-                    })
-                    .flatten();
-                let output = match cold {
-                    Some(cold) => {
-                        let output = HookOutput::ask(cold.warning());
-                        if let Some(tool_use_id) = &hook.tool_use_id {
-                            self.cold_sends.insert(tool_use_id.clone(), cold);
-                        }
-                        output
+                let output = match hook.callback_id.as_str() {
+                    agents::SEND_MESSAGE_HOOK => self.cold_send_hook(hook),
+                    fanout::FANOUT_HOOK => {
+                        self.fanout.decide(&hook.input, hook.tool_use_id.as_deref())
                     }
-                    None => HookOutput::default(),
+                    _ => HookOutput::default(),
                 };
                 let response = ControlResponse::success(request.request_id.clone(), output)
                     .expect("hook output serializes");
@@ -565,6 +565,23 @@ impl Actor {
                 error: format!("{err:#}"),
             }),
         }
+    }
+
+    /// Sends a SendMessage resuming a cold agent to an ask; lets any other run.
+    fn cold_send_hook(&mut self, hook: &HookCallback) -> HookOutput {
+        let Some(cold) = agents::cold_send(
+            &self.agents,
+            &self.relays,
+            &hook.input["tool_input"],
+            Utc::now(),
+        ) else {
+            return HookOutput::default();
+        };
+        let output = HookOutput::ask(cold.warning());
+        if let Some(tool_use_id) = &hook.tool_use_id {
+            self.cold_sends.insert(tool_use_id.clone(), cold);
+        }
+        output
     }
 
     fn on_cancel(&mut self, request_id: &str) {
@@ -725,6 +742,20 @@ impl Actor {
         {
             self.file_grants.push(file);
         }
+        let remember = match &answer {
+            Answer::Allow {
+                for_session: true, ..
+            } => Some(Remember::Allow),
+            Answer::Deny {
+                for_session: true, ..
+            } => Some(Remember::Deny),
+            _ => None,
+        };
+        if let Some(remember) = remember
+            && let Some(offer) = &ask.fanout
+        {
+            self.fanout.remember(offer.key.clone(), remember);
+        }
         // An approved plan is done with: the next plan in its file is new work.
         if let Answer::Allow { .. } = &answer
             && let Some(path) = ask.plan_path
@@ -743,7 +774,7 @@ impl Actor {
         };
         let bash_answer = match &answer {
             Answer::Allow { .. } => Some(BashAnswer::Allowed),
-            Answer::Deny { message } => Some(BashAnswer::Denied {
+            Answer::Deny { message, .. } => Some(BashAnswer::Denied {
                 message: message.clone(),
             }),
             Answer::Questions { .. } => None,
@@ -1075,7 +1106,7 @@ fn permission_result(
                 grant::updates(ask, *accept_edits, folder.as_deref(), file.as_ref())?,
             )
         }
-        Answer::Deny { message } => PermissionResult::deny(message.clone()),
+        Answer::Deny { message, .. } => PermissionResult::deny(message.clone()),
         Answer::Questions { answers } => {
             if ask.tool_name != ASK_USER_QUESTION {
                 bail!("{} is not {ASK_USER_QUESTION}", ask.tool_name);
@@ -1117,6 +1148,7 @@ mod tests {
                     accept_edits: false,
                     folder: None,
                     always_for_file: false,
+                    for_session: false,
                 },
                 None,
                 &cwd(),
@@ -1130,6 +1162,7 @@ mod tests {
             accept_edits: false,
             folder: Some("C:\\Users".into()),
             always_for_file: false,
+            for_session: false,
         };
         assert!(
             permission_result(&bash, &grant, None, &cwd()).is_err(),
@@ -1141,6 +1174,7 @@ mod tests {
             accept_edits: false,
             folder: None,
             always_for_file: true,
+            for_session: false,
         };
         assert!(
             permission_result(&bash, &always, None, &cwd()).is_err(),
@@ -1184,6 +1218,7 @@ mod tests {
             accept_edits: false,
             folder: None,
             always_for_file: false,
+            for_session: false,
         };
         let noted = plan_with_note(&exit, Some("# Plan\n"), &allow(Some(" check it \n")));
         assert_eq!(

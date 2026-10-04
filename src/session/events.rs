@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::agents::RelayOutcome;
 use super::danger::Danger;
+use super::fanout::FanoutOffer;
 use super::grant::{FileOffer, FolderOffer};
 use super::plan::PlanReview;
 use crate::claude::child::Launch;
@@ -73,6 +74,9 @@ pub enum HostEvent {
         /// The plan an `ExitPlanMode` ask submits, when one was found.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         plan: Option<Box<PlanReview>>,
+        /// A call starting agents or unattended work, which an answer can settle for the session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fanout: Option<Box<FanoutOffer>>,
         /// Task id of the subagent asking; `None` for the main agent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
@@ -266,9 +270,17 @@ pub enum Answer {
         /// Also allows the later asks on the ask's file, until the child stops.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         always_for_file: bool,
+        /// Also allows the later calls the ask's `fanout` key covers, until the child stops.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        for_session: bool,
     },
     /// The message is shown to the model.
-    Deny { message: String },
+    Deny {
+        message: String,
+        /// Also denies the later calls the ask's `fanout` key covers, until the child stops.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        for_session: bool,
+    },
     /// `AskUserQuestion` answers, keyed by question text.
     Questions { answers: BTreeMap<String, String> },
 }
@@ -317,6 +329,7 @@ mod tests {
                 accept_edits: false,
                 folder: None,
                 always_for_file: false,
+                for_session: false,
             }
         );
         let bare: Answer = serde_json::from_value(serde_json::json!({"kind": "allow"})).unwrap();
@@ -335,6 +348,18 @@ mod tests {
                 accept_edits: true,
                 folder: Some("C:\\a".into()),
                 always_for_file: true,
+                for_session: false,
+            }
+        );
+        let session_deny: Answer = serde_json::from_value(
+            serde_json::json!({"kind": "deny", "message": "no", "for_session": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            session_deny,
+            Answer::Deny {
+                message: "no".into(),
+                for_session: true,
             }
         );
 
@@ -347,6 +372,7 @@ mod tests {
             folder: None,
             file: None,
             plan: None,
+            fanout: None,
             agent_id: None,
             deny_at: None,
         };

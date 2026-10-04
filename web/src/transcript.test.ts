@@ -471,6 +471,7 @@ describe("transcript from recordings", () => {
         folder: null,
         file: null,
         plan: null,
+        fanout: null,
         agentId: null,
         denyAt: null,
       },

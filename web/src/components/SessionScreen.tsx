@@ -1568,6 +1568,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               cwd={view?.cwd ?? null}
               context={askContext(transcript, ask.toolUseId)}
               deadline={mainDeadline}
+              sessionModel={modelLabel}
               goTo={
                 askGoTo === null
                   ? null

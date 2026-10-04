@@ -13,6 +13,7 @@ pub mod attachments;
 pub mod background;
 pub mod danger;
 mod events;
+pub mod fanout;
 pub mod gauges;
 pub mod grant;
 mod handle;

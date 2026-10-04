@@ -71,6 +71,14 @@ CLI 2.1.283, Windows, Max subscription, launched with the flags under Launch. Re
 - Allowing a Write with its `setMode acceptEdits` suggestion switches the mode: the next Write does not ask.
 - File rules (spike `filerules`): an allow carrying `{type: "addRules", rules: [{toolName: "Edit" or "Read", ruleContent: "//c/<path to the file>"}], behavior: "allow", destination: "session"}` stops later asks on that file outside the working folder: Edit rules for edits, Read rules for reads.
 - Edits under `~/.claude` (a plan file) ask with `decision_reason_type: "safetyCheck"`, "Claude requested permissions to edit <path> which is a sensitive file.", and ask again whatever rule was sent, in the `//c/` or the `C:\` form. Reads there are plain `workingDir` asks, and a Read rule holds. `suppress_always_allow_rule` was absent throughout.
+- Some tools never ask: `SendMessage` reached `can_use_tool` 0 times across about 345 calls in the history database. A hook (below) is the only way to gate them.
+
+### Hooks
+
+- The host registers SDK hooks in `initialize`: `hooks: {PreToolUse: [{matcher: "<tool name>", hookCallbackIds: ["<id>"]}]}`. The CLI answers `initialize` with success. Older recordings lack the key, so the replay lists it in `LATER_HOST_KEYS`.
+- A firing comes as a control request `{subtype: "hook_callback", callback_id, input, tool_use_id}`; `input` holds `tool_name` and `tool_input`.
+- The answer is a success response. `{}` lets the call go on as without the hook. `{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny" | "ask", permissionDecisionReason}}` decides it.
+- `ask` turns any tool call, one that never asks included, into a normal `can_use_tool` request with the same `tool_use_id`, even in Accept edits mode (tested with SendMessage). The host can match the two by `tool_use_id` to give the ask card its own context. vigie gates SendMessage to cold subagents this way.
 
 ### Interrupt
 

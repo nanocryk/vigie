@@ -5,6 +5,7 @@ import {
   type ContentBlock,
   type ModelChoice,
   type Danger,
+  type FanoutOffer,
   type FileOffer,
   type FolderOffer,
   type GateFailure,
@@ -313,6 +314,8 @@ export interface PendingAsk {
   file: FileOffer | null;
   /** The plan of an `ExitPlanMode` ask, when one was found. */
   plan: PlanReview | null;
+  /** A call starting agents or unattended work, which the answer can settle for the session. */
+  fanout: FanoutOffer | null;
   /** Task id of the subagent asking; null for the main agent. */
   agentId: string | null;
   /** When the server denies it if still unanswered, in ms since the epoch; subagent asks only. */
@@ -1060,6 +1063,7 @@ class Draft {
           folder: event.folder,
           file: event.file,
           plan: askPlan(event.tool_name, event.plan, request?.input),
+          fanout: event.fanout,
           agentId: event.agent_id,
           denyAt: event.deny_at === null ? null : Date.parse(event.deny_at),
         });

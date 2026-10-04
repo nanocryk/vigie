@@ -27,7 +27,14 @@ import {
   toolDisplayName,
   toolSummary,
 } from "@/transcript";
-import { type Answer, type Danger, type GrantKind, isRecord, parseHistoryHit } from "@/wire";
+import {
+  type Answer,
+  type Danger,
+  type FanoutOffer,
+  type GrantKind,
+  isRecord,
+  parseHistoryHit,
+} from "@/wire";
 
 /** Sends the answer to one ask; rejects with the server's refusal. */
 export type SubmitAnswer = (requestId: string, answer: Answer) => Promise<void>;
@@ -515,11 +522,49 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** What each gated tool does, for a user who rarely sees it. */
+const FANOUT_REMINDERS: Record<string, string> = {
+  Agent: "Starts a subagent: it works on one task, then reports back.",
+  Workflow: "Runs a script that starts many agents in the background.",
+  CronCreate: "Schedules a prompt that reruns on a timer in this session, unattended.",
+  ScheduleWakeup: "Lets Claude wake itself up later and keep working alone.",
+};
+
+/** The tool, what it does, and for Agent the agent type and model. */
+function FanoutSummary({ fanout, sessionModel }: { fanout: FanoutOffer; sessionModel: string }) {
+  return (
+    <div className="space-y-1 rounded-[5px] border border-primary/40 bg-background px-3 py-2 text-sm">
+      <p className="voice-heading">{fanout.tool}</p>
+      <p className="voice-prose text-muted-foreground">
+        {FANOUT_REMINDERS[fanout.tool] ?? "Starts agents or unattended work."}
+      </p>
+      {fanout.agentType !== null && (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 voice-ui">
+          <dt className="text-muted-foreground">Type</dt>
+          <dd className="[overflow-wrap:anywhere]">{fanout.agentType}</dd>
+          <dt className="text-muted-foreground">Model</dt>
+          <dd className="[overflow-wrap:anywhere]">
+            {fanout.model ?? `type default, else inherits ${sessionModel}`}
+          </dd>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+/** What a session answer to `fanout` covers. */
+function fanoutScope(fanout: FanoutOffer): string {
+  const calls = fanout.agentType === null ? `${fanout.tool} calls` : `${fanout.agentType} agents`;
+  const from = fanout.parent === null ? "the main agent" : "this agent";
+  return `Also answers later ${calls} from ${from} the same way, until the Claude process stops`;
+}
+
 interface ApprovalInput {
   noteOpen: boolean;
   note: string;
   acceptEdits: boolean;
   alwaysForFile: boolean;
+  forSession: boolean;
   pickedPath: string | null;
 }
 
@@ -528,6 +573,7 @@ const NO_APPROVAL_INPUT: ApprovalInput = {
   note: "",
   acceptEdits: false,
   alwaysForFile: false,
+  forSession: false,
   pickedPath: null,
 };
 
@@ -536,6 +582,7 @@ function approvalHoldsInput(input: ApprovalInput): boolean {
     input.note.trim() !== "" ||
     input.acceptEdits ||
     input.alwaysForFile ||
+    input.forSession ||
     input.pickedPath !== null
   );
 }
@@ -547,16 +594,19 @@ function ApprovalCard({
   queued,
   cwd,
   context,
+  sessionModel,
 }: {
   submit: SubmitAnswer;
   ask: PendingAsk;
   queued: number;
   cwd: string | null;
   context: string | null;
+  sessionModel: string;
 }) {
   const { sending, error, answer } = useAnswer(submit, ask.requestId);
   const [input, update] = useKept(keptApprovals, ask.requestId, NO_APPROVAL_INPUT);
-  const { noteOpen, note, acceptEdits, alwaysForFile, pickedPath } = input;
+  const { noteOpen, note, acceptEdits, alwaysForFile, forSession, pickedPath } = input;
+  const sessionWide = forSession && ask.fanout !== null;
   const set = (patch: Partial<ApprovalInput>) => update((current) => ({ ...current, ...patch }));
   // A failed answer remounts the swipe so it can be done again.
   const [attempt, setAttempt] = useState(0);
@@ -582,8 +632,13 @@ function ApprovalCard({
             ...(acceptEdits && offersAcceptEdits ? { accept_edits: true } : {}),
             ...(picked === null ? {} : { folder: picked.path }),
             ...(alwaysForFile && ask.file !== null ? { always_for_file: true } : {}),
+            ...(sessionWide ? { for_session: true } : {}),
           }
-        : { kind: "deny", message: text === "" ? DEFAULT_DENY : text };
+        : {
+            kind: "deny",
+            message: text === "" ? DEFAULT_DENY : text,
+            ...(sessionWide ? { for_session: true } : {}),
+          };
     void answer(value).then((ok) => {
       if (!ok) setAttempt((count) => count + 1);
     });
@@ -599,7 +654,7 @@ function ApprovalCard({
     >
       {/* Keyed by the ask and the choices: another ask or another grant means a fresh gesture. */}
       <Swipe
-        key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}:${alwaysForFile}`}
+        key={`${ask.requestId}:${attempt}:${pickedPath ?? ""}:${acceptEdits}:${alwaysForFile}:${forSession}`}
         labels={isPlan ? { left: "Reject", right: "Approve" } : { left: "Deny", right: "Allow" }}
         dangerous={danger.dangerous}
         onConfirm={confirm}
@@ -645,10 +700,29 @@ function ApprovalCard({
               </ul>
             </div>
           )}
+          {ask.fanout !== null && <FanoutSummary fanout={ask.fanout} sessionModel={sessionModel} />}
           {isPlan ? (
             <PlanView plan={ask.plan} />
           ) : (
             <InputView ask={ask} cwd={cwd} context={context} />
+          )}
+          {ask.fanout !== null && (
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={sending}
+                aria-pressed={forSession}
+                onClick={() => set({ forSession: !forSession })}
+                className={`rounded-[5px] border px-2 py-1 text-sm voice-ui disabled:opacity-50 ${forSession ? "border-primary bg-primary text-primary-foreground" : "bg-card/60 text-muted-foreground"}`}
+              >
+                {forSession ? "✓ " : ""}For the session
+              </button>
+              {forSession && (
+                <p className="text-xs voice-ui [overflow-wrap:anywhere] text-muted-foreground">
+                  {fanoutScope(ask.fanout)}
+                </p>
+              )}
+            </div>
           )}
           {ask.folder !== null && segments.length > 0 && (
             <FolderPicker
@@ -740,6 +814,7 @@ export function AskCard({
   context,
   goTo,
   deadline,
+  sessionModel,
 }: {
   submit: SubmitAnswer;
   ask: PendingAsk;
@@ -752,13 +827,22 @@ export function AskCard({
   /** Null when the ask belongs to the discussion on screen. */
   goTo: GoTo | null;
   deadline: CacheDeadline | null;
+  /** The discussion's model name, which an Agent call without a model may inherit. */
+  sessionModel: string;
 }) {
   return (
     <GoToAgent.Provider value={goTo}>
       <DenyAt.Provider value={ask.denyAt}>
         <MainDeadline.Provider value={deadline}>
           {ask.toolName !== "AskUserQuestion" ? (
-            <ApprovalCard submit={submit} ask={ask} queued={queued} cwd={cwd} context={context} />
+            <ApprovalCard
+              submit={submit}
+              ask={ask}
+              queued={queued}
+              cwd={cwd}
+              context={context}
+              sessionModel={sessionModel}
+            />
           ) : (
             <DecisionCard submit={submit} ask={ask} queued={queued} />
           )}

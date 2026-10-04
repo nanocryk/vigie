@@ -202,8 +202,15 @@ export type Answer =
       folder?: string;
       /** Also allows the later asks on the ask's file until the Claude process stops. */
       always_for_file?: true;
+      /** Also allows the later calls the ask's fanout key covers until the Claude process stops. */
+      for_session?: true;
     }
-  | { kind: "deny"; message: string }
+  | {
+      kind: "deny";
+      message: string;
+      /** Also denies the later calls the ask's fanout key covers until the Claude process stops. */
+      for_session?: true;
+    }
   | { kind: "questions"; answers: Record<string, string> };
 
 export type ClientMessage =
@@ -337,6 +344,18 @@ export interface FileOffer {
   path: string;
 }
 
+/** A call starting agents or unattended work, which an answer can settle for the session. */
+export interface FanoutOffer {
+  /** `Agent`, `Workflow`, `CronCreate` or `ScheduleWakeup`. */
+  tool: string;
+  /** Agent calls only. */
+  agentType: string | null;
+  /** Task id of the calling subagent; null for the main agent. */
+  parent: string | null;
+  /** The model the call sets; null leaves the agent type's default or the session's. */
+  model: string | null;
+}
+
 /** The plan an `ExitPlanMode` ask submits. */
 export interface PlanReview {
   /** The plan file, when known. */
@@ -387,6 +406,7 @@ export type HostEvent =
       folder: FolderOffer | null;
       file: FileOffer | null;
       plan: PlanReview | null;
+      fanout: FanoutOffer | null;
       /** Task id of the subagent asking; null for the main agent. */
       agent_id: string | null;
       /** When the server denies it if still unanswered (RFC 3339); subagent asks only. */
@@ -972,6 +992,18 @@ export function parseFileOffer(raw: unknown): FileOffer | null {
   return { kind, path };
 }
 
+export function parseFanoutOffer(raw: unknown): FanoutOffer | null {
+  if (!isRecord(raw)) return null;
+  const key = raw["key"];
+  if (!isRecord(key) || typeof key["tool"] !== "string") return null;
+  return {
+    tool: key["tool"],
+    agentType: stringOrNull(key["agent_type"]),
+    parent: stringOrNull(key["parent"]),
+    model: stringOrNull(raw["model"]),
+  };
+}
+
 export function parsePlanReview(raw: unknown): PlanReview | null {
   if (!isRecord(raw)) return null;
   const text = raw["text"];
@@ -1028,6 +1060,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         folder: parseFolderOffer(raw["folder"]),
         file: parseFileOffer(raw["file"]),
         plan: parsePlanReview(raw["plan"]),
+        fanout: parseFanoutOffer(raw["fanout"]),
         agent_id: text("agent_id"),
         deny_at: text("deny_at"),
       };

@@ -701,11 +701,25 @@ pub struct PreToolUseOutput {
 impl HookOutput {
     /// Sends the tool call to the permission prompt.
     pub fn ask(reason: impl Into<String>) -> Self {
+        Self::decision("ask", reason.into())
+    }
+
+    /// Refuses the tool call; the model reads `reason`.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self::decision("deny", reason.into())
+    }
+
+    /// Runs the tool call without a permission prompt.
+    pub fn allow(reason: impl Into<String>) -> Self {
+        Self::decision("allow", reason.into())
+    }
+
+    fn decision(decision: &str, reason: String) -> Self {
         Self {
             hook_specific_output: Some(PreToolUseOutput {
                 hook_event_name: "PreToolUse".into(),
-                permission_decision: "ask".into(),
-                permission_decision_reason: reason.into(),
+                permission_decision: decision.into(),
+                permission_decision_reason: reason,
             }),
         }
     }

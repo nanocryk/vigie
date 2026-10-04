@@ -659,6 +659,7 @@ async fn pending_asks_are_counted_and_announced() {
             "cli-1",
             Answer::Deny {
                 message: "no".into(),
+                for_session: false,
             },
         )
         .await

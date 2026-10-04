@@ -371,6 +371,7 @@ fn allow(session: Uuid, request_id: &str, client_id: &str) -> ClientMessage {
                 accept_edits: false,
                 folder: None,
                 always_for_file: false,
+                for_session: false,
             },
             rewarm: false,
         },
