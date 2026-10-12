@@ -133,7 +133,7 @@ impl Store {
                      claude_session_fresh)
                  VALUES (?1, ?2, ?3, ?3, 'running', ?4, 1)
                  ON CONFLICT (id) DO UPDATE SET
-                     updated_at = excluded.updated_at, state = 'running',
+                     state = 'running',
                      exit_code = NULL, gate_failure = NULL,
                      permission_mode = COALESCE(excluded.permission_mode, permission_mode)",
                 params![id.to_string(), cwd, time, permission_mode],
@@ -155,7 +155,8 @@ impl Store {
     }
 
     /// Points the discussion at `claude_session`, which no child launched yet, run
-    /// in `cwd`, and forgets the gauges of the previous one. Fails for an unknown session.
+    /// in `cwd`, and forgets the gauges of the previous one. Counts as activity, so the
+    /// fresh cache is not judged by the old idle time. Fails for an unknown session.
     pub async fn restart_claude_session(
         &self,
         session: Uuid,
@@ -163,16 +164,18 @@ impl Store {
         cwd: &Path,
     ) -> Result<()> {
         let cwd = cwd.to_string_lossy().into_owned();
+        let now = format_time(Utc::now());
         self.call(move |connection| {
             let changed = connection.execute(
                 "UPDATE sessions SET claude_session_id = ?2, claude_session_fresh = 1, cwd = ?3,
+                     updated_at = ?4,
                      cache_message_id = NULL, cache_request_at = NULL, cache_ttl_secs = NULL,
                      context_model = NULL, context_tokens = NULL, context_window = NULL,
                      context_source = NULL, context_max_tokens = NULL,
                      context_autocompact = NULL, context_categories = NULL,
                      settings_changed_at = NULL
                  WHERE id = ?1",
-                params![session.to_string(), claude_session.to_string(), cwd],
+                params![session.to_string(), claude_session.to_string(), cwd, now],
             )?;
             known_session(changed, session)
         })

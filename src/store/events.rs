@@ -161,10 +161,12 @@ impl Store {
         let mut message = None;
         let mut gauge = None;
         let mut history_message = None;
+        let mut conversation = false;
         let (kind, payload) = match &event.body {
             EventBody::Line(line) => {
                 if let Some(parsed) = &line.parsed {
                     history_message = messages::message_of(parsed);
+                    conversation = matches!(parsed, Inbound::User(_) | Inbound::Assistant(_));
                     match parsed {
                         Inbound::RateLimitEvent(limits) => {
                             readings = inputs::from_rate_limit_event(&limits.rate_limit_info);
@@ -179,6 +181,7 @@ impl Store {
                 (EventKind::Line, line.raw.clone())
             }
             EventBody::Host(host) => {
+                conversation = matches!(host, HostEvent::UserSent { .. });
                 if let HostEvent::PermissionMode { mode } = host {
                     permission_mode = Some(String::from(mode.clone()));
                 }
@@ -199,11 +202,14 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![id, seq, time, kind.as_str(), payload],
             )?;
+            // Only conversation lines count as activity, so a resume or a child exit
+            // leaves the discussion's age alone.
             connection.execute(
-                "UPDATE sessions SET last_seq = ?2, updated_at = ?3,
+                "UPDATE sessions SET last_seq = ?2,
+                     updated_at = CASE WHEN ?5 THEN ?3 ELSE updated_at END,
                      permission_mode = COALESCE(?4, permission_mode)
                  WHERE id = ?1",
-                params![id, seq, time, permission_mode],
+                params![id, seq, time, permission_mode, conversation],
             )?;
             if let Some((role, text)) = history_message {
                 messages::record(connection, &id, seq, &time, role, text)?;
@@ -496,6 +502,56 @@ mod tests {
 
     fn mode(seq: u64, mode: &str) -> Event {
         host(seq, HostEvent::PermissionMode { mode: mode.into() })
+    }
+
+    #[tokio::test]
+    async fn only_conversation_moves_the_last_activity() {
+        let Fixture { dir, store, id, .. } = fixture();
+        let created = store.session(id).await.unwrap().unwrap().updated_at;
+        let later = |minutes| created + chrono::Duration::minutes(minutes);
+        let at = |minutes, event: Event| Event {
+            time: later(minutes),
+            ..event
+        };
+        let updated_at = || async { store.session(id).await.unwrap().unwrap().updated_at };
+
+        store.session_started(id, dir.path(), later(1), None);
+        store.record_event(
+            id,
+            &at(
+                2,
+                host(
+                    1,
+                    HostEvent::Started {
+                        launch: Launch::Resume(Uuid::new_v4()),
+                        cwd: dir.path().into(),
+                    },
+                ),
+            ),
+        );
+        store.record_event(id, &at(3, mode(2, "plan")));
+        store.record_event(id, &at(4, event(3, line("{}"))));
+        store.flush().await.unwrap();
+        assert_eq!(updated_at().await, created);
+
+        store.record_event(id, &at(5, user_sent(4, "hi")));
+        store.flush().await.unwrap();
+        assert_eq!(updated_at().await, later(5));
+
+        let reply = r#"{"type":"assistant","parent_tool_use_id":null,"session_id":"s","uuid":"u",
+            "message":{"id":"msg_x","model":"claude-opus-5-5","content":[{"type":"text","text":"hey"}]}}"#;
+        let reply = Event {
+            seq: 5,
+            time: later(6),
+            body: EventBody::Line(Box::new(Line {
+                raw: reply.into(),
+                parsed: serde_json::from_str(reply).ok(),
+            })),
+        };
+        assert!(matches!(&reply.body, EventBody::Line(line) if line.parsed.is_some()));
+        store.record_event(id, &reply);
+        store.flush().await.unwrap();
+        assert_eq!(updated_at().await, later(6));
     }
 
     #[tokio::test]
