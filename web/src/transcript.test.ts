@@ -727,8 +727,24 @@ describe("restarts", () => {
       ["restart", "Restarted: blank", null],
       ["user", "hello"],
     ]);
-    expect(restartLabel({ mode: "continue", exchanges: 5 })).toBe(
+    expect(restartLabel({ mode: "continue", exchanges: 5, movedTo: null })).toBe(
       "Restarted: 5 exchanges given as context",
+    );
+  });
+
+  it("a move names the new folder", () => {
+    const state = applyEvents(emptyTranscript, [
+      event(1, "host", {
+        event: "restarted",
+        mode: "blank",
+        exchanges: 0,
+        total_exchanges: 2,
+        moved_to: "C:\\work\\other",
+      }),
+    ]);
+    expect(state.items.map(shape)).toEqual([["restart", "Moved to other: blank", null]]);
+    expect(restartLabel({ mode: "continue", exchanges: 1, movedTo: "/q" })).toBe(
+      "Moved to q: 1 exchange given as context",
     );
   });
 

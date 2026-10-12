@@ -154,19 +154,25 @@ impl Store {
         });
     }
 
-    /// Points the discussion at `claude_session`, which no child launched yet, and
-    /// forgets the gauges of the previous one. Fails for an unknown session.
-    pub async fn restart_claude_session(&self, session: Uuid, claude_session: Uuid) -> Result<()> {
+    /// Points the discussion at `claude_session`, which no child launched yet, run
+    /// in `cwd`, and forgets the gauges of the previous one. Fails for an unknown session.
+    pub async fn restart_claude_session(
+        &self,
+        session: Uuid,
+        claude_session: Uuid,
+        cwd: &Path,
+    ) -> Result<()> {
+        let cwd = cwd.to_string_lossy().into_owned();
         self.call(move |connection| {
             let changed = connection.execute(
-                "UPDATE sessions SET claude_session_id = ?2, claude_session_fresh = 1,
+                "UPDATE sessions SET claude_session_id = ?2, claude_session_fresh = 1, cwd = ?3,
                      cache_message_id = NULL, cache_request_at = NULL, cache_ttl_secs = NULL,
                      context_model = NULL, context_tokens = NULL, context_window = NULL,
                      context_source = NULL, context_max_tokens = NULL,
                      context_autocompact = NULL, context_categories = NULL,
                      settings_changed_at = NULL
                  WHERE id = ?1",
-                params![session.to_string(), claude_session.to_string()],
+                params![session.to_string(), claude_session.to_string(), cwd],
             )?;
             known_session(changed, session)
         })
@@ -802,11 +808,12 @@ mod tests {
         };
         assert!(store.set_model_settings(id, effort_only, at).await.unwrap());
         store
-            .restart_claude_session(id, Uuid::new_v4())
+            .restart_claude_session(id, Uuid::new_v4(), Path::new("/moved"))
             .await
             .unwrap();
         let row = store.session(id).await.unwrap().unwrap();
         assert_eq!(row.settings_changed_at, None, "a restart followed");
+        assert_eq!(row.cwd, Path::new("/moved"));
         assert_eq!(row.settings.effort, Some(Effort::Low));
     }
 

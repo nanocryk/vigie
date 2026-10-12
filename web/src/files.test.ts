@@ -115,6 +115,9 @@ describe("tabs", () => {
     state = openSessionTab(state, "s1", "C:\\p");
     expect(state.active).toBe(id);
     expect(activeTab(state).folder).toBe("C:\\other");
+    state = openSessionTab(state, "s1", "C:\\moved");
+    expect(state.active).toBe(id);
+    expect(activeTab(state).owner).toEqual({ kind: "session", session: "s1", root: "C:\\moved" });
   });
 
   it("opens a session's folder view even when its diff was left open", () => {

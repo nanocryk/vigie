@@ -30,6 +30,8 @@ pub const BAD_NAME: &str = "bad_name";
 pub const MAX_NAME_CHARS: usize = 80;
 /// Ack error of an action on a held message no longer queued.
 pub const HELD_GONE: &str = "held_gone";
+/// Ack error of a `restart` moving to a folder that isn't a directory.
+pub const FOLDER_MISSING: &str = "folder_missing";
 
 /// A client frame. Both kinds are tagged by `type`; a `type` naming a
 /// subscription reads as one, any other as a command.
@@ -198,6 +200,9 @@ pub enum Action {
         text: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
+        /// Moves the session to this folder for this and every later launch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
     },
     Kill {
         #[serde(default)]

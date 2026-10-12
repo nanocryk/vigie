@@ -55,6 +55,7 @@ import {
   repoRoot,
 } from "@/git";
 import { highlightLines, languageFromPath } from "@/highlight";
+import { requestMove } from "@/moves";
 import { goHome, navigate, pushEntry, routeHash } from "@/route";
 import type { SessionView } from "@/wire";
 
@@ -1200,6 +1201,16 @@ export function Explorer({ client }: { client: Client }) {
 
   const folder = tab.folder;
   const owner = tab.owner.kind === "session" ? tab.owner : null;
+  const ownerSession = owner === null ? null : owner.session;
+  const ownerRoot =
+    owner === null
+      ? null
+      : (sessions?.find((session) => session.id === owner.session)?.cwd ?? owner.root);
+  const moveHere = () => {
+    if (ownerSession === null || folder === null) return;
+    requestMove(ownerSession, folder);
+    navigate({ kind: "session", id: ownerSession });
+  };
 
   return (
     <>
@@ -1242,7 +1253,7 @@ export function Explorer({ client }: { client: Client }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => go(owner.root)}
+                  onClick={() => go(ownerRoot ?? owner.root)}
                   title="Back to the session's folder"
                   className={TOOL}
                 >
@@ -1314,6 +1325,17 @@ export function Explorer({ client }: { client: Client }) {
               <div className={`${PANEL} space-y-1.5`}>
                 {startError !== null && (
                   <p className="text-xs voice-ui text-destructive">{startError}</p>
+                )}
+                {ownerRoot !== null && folder !== ownerRoot && (
+                  <button
+                    type="button"
+                    onClick={moveHere}
+                    title="Restart the session's discussion in this folder, for every later launch"
+                    className={`${TOOL} w-full justify-center py-2`}
+                  >
+                    <ChatIcon className="size-4 text-mode-plan" />
+                    <span className="truncate">Move session to {folderName(folder)}</span>
+                  </button>
                 )}
                 <div className="flex gap-2">
                   <button

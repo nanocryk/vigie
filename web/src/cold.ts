@@ -1,6 +1,13 @@
 import { attachmentsField, sendableText } from "@/attachments";
 import { type CacheGauge, formatPercent, formatTokens } from "@/gauges";
-import { CACHE_COLD, type ContextView, HELD_GONE, type RestartMode, SESSION_LIVE } from "@/wire";
+import {
+  CACHE_COLD,
+  type ContextView,
+  FOLDER_MISSING,
+  HELD_GONE,
+  type RestartMode,
+  SESSION_LIVE,
+} from "@/wire";
 
 export type ColdChoice = "rewarm" | "continue" | "blank";
 
@@ -30,6 +37,7 @@ export function ackError(error: string | null | undefined): Error {
   if (error === CACHE_COLD) return new CacheColdError();
   if (error === SESSION_LIVE) return new Error("The session is running: kill it first");
   if (error === HELD_GONE) return new HeldGoneError();
+  if (error === FOLDER_MISSING) return new Error("That folder no longer exists");
   return new Error(error ?? "Refused by the server");
 }
 

@@ -243,12 +243,16 @@ impl History {
     }
 
     /// The seed of a discussion started on `started` in `cwd`, without `CLOSING`.
-    pub fn seed(&self, cwd: &Path, started: NaiveDate) -> Seed {
+    /// `moved_to` is the folder the new session runs in when it left `cwd`.
+    pub fn seed(&self, cwd: &Path, moved_to: Option<&Path>, started: NaiveDate) -> Seed {
         let total = self.exchanges.len();
         let shown = &self.exchanges[total.saturating_sub(SEED_EXCHANGES)..];
+        let moved = moved_to.map_or(String::new(), |folder| {
+            format!(", which runs in {}", folder.display())
+        });
         let mut text = format!(
             "This is a new session. The previous vigie session in {} (started {}, {} exchanges) \
-             was restarted into this one. Its last {} exchanges, oldest first:",
+             was restarted into this one{moved}. Its last {} exchanges, oldest first:",
             cwd.display(),
             started.format("%Y-%m-%d"),
             total,
@@ -412,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn seed_of_the_cd_recording() {
         let events = stored_recordings(&["cd"]).await;
-        let seed = History::from_events(&events).seed(Path::new("/work/p"), date());
+        let seed = History::from_events(&events).seed(Path::new("/work/p"), None, date());
         assert_eq!(seed.exchanges, 1);
         assert_eq!(seed.total_exchanges, 1);
         assert_eq!(
@@ -443,7 +447,7 @@ mod tests {
         let history = History::from_events(&events);
         let total = history.total_exchanges();
         assert!(total > SEED_EXCHANGES, "only {total} exchanges");
-        let seed = history.seed(Path::new("/p"), date());
+        let seed = history.seed(Path::new("/p"), None, date());
         assert_eq!(seed.exchanges, SEED_EXCHANGES);
         assert_eq!(seed.total_exchanges, total);
         assert_eq!(seed.text.matches("\n## Exchange ").count(), SEED_EXCHANGES);
@@ -601,7 +605,7 @@ mod tests {
                     "message": {"role": "user", "content": "synthetic"}}),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
         assert_eq!(seed.total_exchanges, 1);
         let lines: Vec<&str> = seed.text.lines().collect();
         let user_line = lines
@@ -635,6 +639,7 @@ mod tests {
                     exchanges: 1,
                     total_exchanges: 1,
                     seed: Some(earlier.clone()),
+                    moved_to: None,
                 },
             ),
             user(4, Value::String(first_message(&earlier, "second"))),
@@ -646,11 +651,12 @@ mod tests {
                     exchanges: 2,
                     total_exchanges: 2,
                     seed: Some(earlier.clone()),
+                    moved_to: None,
                 },
             ),
             user(7, Value::String(first_message(&earlier, ""))),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
         assert_eq!(seed.total_exchanges, 3);
         assert!(
             seed.text
@@ -683,7 +689,7 @@ mod tests {
                 ),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
         assert!(seed.text.contains("User: /canif-suggest\n"));
         assert!(seed.text.contains("User: /review high\n"));
         assert!(!seed.text.contains("<command-"));
@@ -692,7 +698,7 @@ mod tests {
 
     #[test]
     fn an_empty_history_seeds_no_exchange() {
-        let seed = History::from_events(&[]).seed(Path::new("/p"), date());
+        let seed = History::from_events(&[]).seed(Path::new("/p"), None, date());
         assert_eq!((seed.exchanges, seed.total_exchanges), (0, 0));
         assert!(seed.text.ends_with(
             "(started 2026-09-27, 0 exchanges) was restarted into this one. \
@@ -700,5 +706,14 @@ mod tests {
         ));
         assert_eq!(first_message("S", "  "), format!("S\n\n{CLOSING}"));
         assert_eq!(first_message("S", "go on"), "S\n\ngo on");
+    }
+
+    #[test]
+    fn a_moved_seed_names_both_folders() {
+        let seed = History::from_events(&[]).seed(Path::new("/p"), Some(Path::new("/q")), date());
+        assert!(seed.text.starts_with(
+            "This is a new session. The previous vigie session in /p \
+             (started 2026-09-27, 0 exchanges) was restarted into this one, which runs in /q. "
+        ));
     }
 }

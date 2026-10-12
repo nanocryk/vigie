@@ -537,6 +537,7 @@ mod tests {
                     exchanges: 0,
                     total_exchanges: 2,
                     seed: None,
+                    moved_to: None,
                 },
             ),
             started(10),

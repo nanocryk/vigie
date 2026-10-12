@@ -22,7 +22,7 @@ import {
 } from "@/wire";
 import { composeText } from "@/attachments";
 import { toolDiff } from "@/diff";
-import { formatStamp, sessionTitle } from "@/format";
+import { folderName, formatStamp, sessionTitle } from "@/format";
 
 /** The hash of each path's latest attachment by Claude. */
 export function latestHashes(items: readonly Item[]): ReadonlyMap<string, string> {
@@ -155,7 +155,14 @@ type ItemBody =
       note?: string;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
-  | { kind: "restart"; key: string; mode: RestartMode; exchanges: number; seed: string | null }
+  | {
+      kind: "restart";
+      key: string;
+      mode: RestartMode;
+      exchanges: number;
+      seed: string | null;
+      movedTo: string | null;
+    }
   /** An Agent call: the one line its agent shows in the discussion that started it. */
   | { kind: "agent"; key: string; toolUseId: string; name: string }
   /** The prompt an agent was started with, first in its own view. */
@@ -228,10 +235,23 @@ export function relayFailureText(reason: RelayFailure): string {
   return `Relay failed: ${RELAY_FAILURE_TEXT[reason]}. See the main discussion.`;
 }
 
-export function restartLabel(item: { mode: RestartMode; exchanges: number }): string {
+export function restartLabel(item: {
+  mode: RestartMode;
+  exchanges: number;
+  movedTo: string | null;
+}): string {
+  const noun = item.exchanges === 1 ? "exchange" : "exchanges";
+  if (item.movedTo !== null) {
+    const what =
+      item.mode === "clear"
+        ? "cleared"
+        : item.mode === "blank"
+          ? "blank"
+          : `${item.exchanges} ${noun} given as context`;
+    return `Moved to ${folderName(item.movedTo)}: ${what}`;
+  }
   if (item.mode === "clear") return "Cleared";
   if (item.mode === "blank") return "Restarted: blank";
-  const noun = item.exchanges === 1 ? "exchange" : "exchanges";
   return `Restarted: ${item.exchanges} ${noun} given as context`;
 }
 
@@ -1182,6 +1202,7 @@ class Draft {
           mode: event.mode,
           exchanges: event.exchanges,
           seed: event.seed,
+          movedTo: event.moved_to,
         });
         return;
       case "catalog":

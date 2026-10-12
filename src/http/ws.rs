@@ -355,11 +355,12 @@ async fn execute(manager: &SessionManager, command: Command) -> Result<()> {
             mode,
             text,
             attachments: files,
+            cwd,
         } => {
             manager.unarchive(session).await?;
             let message = attachments::Message::new(text.unwrap_or_default(), files);
             manager
-                .restart(session, mode, message, Some(client_id))
+                .restart(session, mode, cwd, message, Some(client_id))
                 .await
         }
         Action::Kill { reason } => manager.kill(session, reason).await,

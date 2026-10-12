@@ -413,6 +413,7 @@ mod tests {
             exchanges: 1,
             total_exchanges: 1,
             seed: Some(seed.into()),
+            moved_to: None,
         })
     }
 

@@ -722,29 +722,43 @@ impl SessionManager {
     /// Moves the discussion to a fresh Claude session: stops its child, records a
     /// `Restarted` event, then launches the new session with the seed and `text`
     /// as its first message (continue) or `text` alone (blank). A blank restart
-    /// without text launches nothing; the next send does.
+    /// without text launches nothing; the next send does. A `moved_to` folder
+    /// replaces the session's folder for this and every later launch.
     pub async fn restart(
         &self,
         id: Uuid,
         mode: RestartMode,
+        moved_to: Option<PathBuf>,
         message: attachments::Message,
         client_id: Option<String>,
     ) -> Result<()> {
+        if let Some(folder) = &moved_to {
+            let folder = folder.clone();
+            if !tokio::task::spawn_blocking(move || folder.is_dir()).await? {
+                bail!(wire::FOLDER_MISSING);
+            }
+        }
         let mut live = self.inner.live.lock().await;
         if let Some(session) = live.remove(&id) {
             session.stop().await;
         }
         let store = &self.inner.store;
         let row = store.require_session(id).await?;
+        let moved_to = moved_to.filter(|folder| *folder != row.cwd);
         let history = seed::History::from_events(&store.events_after(id, 0, u32::MAX).await?);
         let seed = match mode {
-            RestartMode::Continue => {
-                Some(history.seed(&row.cwd, row.created_at.with_timezone(&Local).date_naive()))
-            }
+            RestartMode::Continue => Some(history.seed(
+                &row.cwd,
+                moved_to.as_deref(),
+                row.created_at.with_timezone(&Local).date_naive(),
+            )),
             RestartMode::Blank | RestartMode::Clear => None,
         };
+        let cwd = moved_to.clone().unwrap_or(row.cwd);
         let claude_session = Uuid::new_v4();
-        store.restart_claude_session(id, claude_session).await?;
+        store
+            .restart_claude_session(id, claude_session, &cwd)
+            .await?;
         let seq = row.last_seq + 1;
         store.record_event(
             id,
@@ -756,6 +770,7 @@ impl SessionManager {
                     exchanges: seed.as_ref().map_or(0, |seed| seed.exchanges),
                     total_exchanges: history.total_exchanges(),
                     seed: seed.as_ref().map(|seed| seed.text.clone()),
+                    moved_to,
                 }),
             },
         );
@@ -765,7 +780,7 @@ impl SessionManager {
                 last_seq: seq,
                 permission_mode: row.permission_mode,
                 settings: row.settings,
-                ..self.config(id, row.cwd, Launch::New(claude_session))
+                ..self.config(id, cwd, Launch::New(claude_session))
             })?;
             live.insert(id, session.clone());
             Some(session)
@@ -1192,7 +1207,11 @@ async fn measure_restart(id: Uuid, store: &Store, signals: &Signals) {
         let started = std::time::Instant::now();
         let measure = tokio::task::spawn_blocking(move || {
             let history = seed::History::from_events(&events);
-            let seed = history.seed(&row.cwd, row.created_at.with_timezone(&Local).date_naive());
+            let seed = history.seed(
+                &row.cwd,
+                None,
+                row.created_at.with_timezone(&Local).date_naive(),
+            );
             RestartMeasure::new(&history.seed_window(), &seed)
         })
         .await?;

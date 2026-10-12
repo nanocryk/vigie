@@ -91,6 +91,7 @@ import {
 } from "@/files";
 import { repoRoot } from "@/git";
 import { folderName, sessionTitle, stateLabel } from "@/format";
+import { takeMove } from "@/moves";
 import { navigate } from "@/route";
 import type { SendAction } from "@/sendGesture";
 import {
@@ -937,12 +938,24 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   };
 
   /** The change flow's panel on the current settings: its first choice resumes untouched. */
-  const startRestart = () => {
+  const startRestart = (moveTo?: string) => {
     setPanel(closedPanel);
     setMenu(closedMenu);
     setColdError(null);
-    setFlow({ kind: "choosing", picks: current, restart: true });
+    setFlow({
+      kind: "choosing",
+      picks: current,
+      restart: true,
+      ...(moveTo === undefined ? {} : { moveTo }),
+    });
   };
+
+  const viewLoaded = view !== null;
+  useEffect(() => {
+    if (!viewLoaded) return;
+    const folder = takeMove(id);
+    if (folder !== null) startRestart(folder);
+  }, [id, viewLoaded]);
 
   const choosePicks = (next: Settings) => {
     if (flow.kind === "choosing") setFlow({ ...flow, picks: next });
@@ -950,6 +963,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
 
   const chooseSettings = (choice: ColdChoice) => {
     if (flow.kind !== "choosing") return;
+    const chosen = flow;
     const chosenPicks = flow.picks;
     const plan = settingsPlan(chosenPicks, current, choice, drafts.get(id) ?? "", readyPaths(id));
     setColdError(null);
@@ -985,6 +999,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
           mode: then.mode,
           ...(then.text === null ? {} : { text: then.text }),
           ...attachmentsField(then.attachments ?? []),
+          ...(chosen.moveTo === undefined ? {} : { cwd: chosen.moveTo }),
           client_id: client.newClientId(),
         });
         drafts.delete(id);
@@ -992,7 +1007,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
       })
       .catch((err: unknown) => {
         setColdError(errorMessage(err));
-        setFlow({ kind: "choosing", picks: chosenPicks });
+        setFlow(chosen);
       })
       .finally(() => setChoosing(false));
   };
@@ -1468,7 +1483,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
                 onRevoke: revoke,
               }}
               restartEnabled={controlsEnabled && !choosingSettings}
-              onRestart={startRestart}
+              onRestart={() => startRestart()}
               agents={{
                 summary: workingLabel(liveAgents) ?? `${entries.length} known`,
                 onOpen: openAgents,
@@ -1549,6 +1564,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               : {
                   changed: firstButton(picks, current) === "rewarm",
                   restart: flow.kind === "choosing" && flow.restart === true,
+                  moveTo: flow.kind === "choosing" ? (flow.moveTo ?? null) : null,
                   onCancel: () => {
                     setColdError(null);
                     setFlow(closedFlow);

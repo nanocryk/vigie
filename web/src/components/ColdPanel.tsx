@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { type ColdChoice, contextSummary } from "@/cold";
 import { useClock, useNow } from "@/components/useNow";
+import { folderName } from "@/format";
 import { type CacheGauge, cacheGauge, cacheLowMs, formatSpan, formatTokens } from "@/gauges";
 import type { CacheView, ContextView } from "@/wire";
 
@@ -220,26 +221,39 @@ export function ColdPanel({
   /** A choice was sent and awaits the server. */
   busy: boolean;
   error: string | null;
-  /** `restart`: opened from the menu's Restart entry, not a model or effort change. */
-  settings: { changed: boolean; restart: boolean; onCancel: () => void } | null;
+  /**
+   * `restart`: opened from the menu's Restart entry, not a model or effort change.
+   * `moveTo`: the folder the restart moves the discussion to, which a rewarm can't.
+   */
+  settings: {
+    changed: boolean;
+    restart: boolean;
+    moveTo: string | null;
+    onCancel: () => void;
+  } | null;
   onChoose: (choice: ColdChoice) => void;
 }) {
   const typed = draft.trim() !== "" && settings?.changed !== false;
   const [confirmingRewarm, setConfirmingRewarm] = useState(false);
-  const choices = CHOICES.map((entry) => {
-    if (settings === null || entry.choice !== "rewarm") return entry;
-    if (settings.changed) return { ...entry, ...REWARM_SETTINGS };
-    return settings.restart ? { ...entry, ...RESUME_AS_IS } : { ...entry, ...RESUME };
-  });
+  const moveTo = settings?.moveTo ?? null;
+  const choices = CHOICES.filter((entry) => moveTo === null || entry.choice !== "rewarm").map(
+    (entry) => {
+      if (settings === null || entry.choice !== "rewarm") return entry;
+      if (settings.changed) return { ...entry, ...REWARM_SETTINGS };
+      return settings.restart ? { ...entry, ...RESUME_AS_IS } : { ...entry, ...RESUME };
+    },
+  );
   const confirms = (choice: ColdChoice) =>
     choice === "rewarm" && (settings === null || settings.changed);
   const heading = archived
     ? "This discussion is archived; any choice restores it."
-    : settings?.restart === true
-      ? "Restart this discussion?"
-      : settings !== null
-        ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
-        : "The cache is cold.";
+    : moveTo !== null
+      ? `Move this discussion to ${folderName(moveTo)}?`
+      : settings?.restart === true
+        ? "Restart this discussion?"
+        : settings !== null
+          ? "Pick a model and an effort level in the menu, opened from the model pill at the top."
+          : "The cache is cold.";
   return (
     <section className="shrink-0 border-t-2 border-primary/40 bg-card px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-5xl space-y-3">
@@ -247,6 +261,11 @@ export function ColdPanel({
           <div>
             {heading} <span className="text-muted-foreground">{contextSummary(context)}</span>
           </div>
+          {moveTo !== null && (
+            <div className="truncate text-xs text-muted-foreground">
+              Every later launch runs in {moveTo}
+            </div>
+          )}
           {askWaiting && (
             <div className="text-xs text-muted-foreground">
               An approval waits. Rewarm shows it; Continue and Blank drop it.
@@ -267,7 +286,9 @@ export function ColdPanel({
             onBack={() => setConfirmingRewarm(false)}
           />
         ) : (
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div
+            className={`grid gap-2 ${choices.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}
+          >
             {choices.map(({ choice, label, explain, tone }) => (
               <button
                 key={choice}

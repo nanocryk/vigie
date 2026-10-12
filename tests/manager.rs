@@ -1044,6 +1044,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         vigie::session::seed::History::from_events(&store.events_after(id, 0, ALL).await.unwrap())
             .seed(
                 &env.cwd,
+                None,
                 row.created_at.with_timezone(&chrono::Local).date_naive(),
             );
     drop(store);
@@ -1062,6 +1063,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         .restart(
             id,
             RestartMode::Continue,
+            None,
             attachments::Message::new("next step".into(), attached.clone()),
             Some("c1".into()),
         )
@@ -1081,6 +1083,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
             exchanges: 1,
             total_exchanges: 1,
             seed: Some(expected_seed.text.clone()),
+            moved_to: None,
         }
     );
     let HostEvent::Started { launch, .. } = host(&stored[1]) else {
@@ -1122,8 +1125,22 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     let script = env.script("init.ndjson", INIT_SCRIPT);
     let manager = env.manager(&script).await;
     let before = manager.store().session(id).await.unwrap().unwrap().last_seq;
+    let missing = env.cwd.join("missing");
+    let refused = manager
+        .restart(id, RestartMode::Blank, Some(missing), " ".into(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.to_string(), vigie::http::wire::FOLDER_MISSING);
+    let moved = env.cwd.join("moved");
+    std::fs::create_dir(&moved).unwrap();
     manager
-        .restart(id, RestartMode::Blank, " ".into(), None)
+        .restart(
+            id,
+            RestartMode::Blank,
+            Some(moved.clone()),
+            " ".into(),
+            None,
+        )
         .await
         .unwrap();
     assert!(
@@ -1136,6 +1153,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
     };
     assert_ne!(blank_session, claude_session);
     assert_eq!((row.cache, row.context), (None, None));
+    assert_eq!(row.cwd, moved);
     let stored = manager.events_after(id, before, ALL).await.unwrap();
     assert_eq!(
         stored.iter().map(host).collect::<Vec<_>>(),
@@ -1144,6 +1162,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
             exchanges: 0,
             total_exchanges: 1,
             seed: None,
+            moved_to: Some(moved.clone()),
         }]
     );
     let session = manager.open(id).await.unwrap();
@@ -1154,7 +1173,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
         host(&stored[0]),
         HostEvent::Started {
             launch: Launch::New(blank_session),
-            cwd: env.cwd.clone(),
+            cwd: moved,
         }
     );
     assert_clean_exit(stored.last().unwrap());

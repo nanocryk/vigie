@@ -18,9 +18,10 @@ export type SettingsFlow =
   | { kind: "closed" }
   /**
    * The choice panel shows with both tabs open on their lists. `restart`: opened
-   * from the menu's Restart entry rather than a model or effort change.
+   * from the menu's Restart entry rather than a model or effort change. `moveTo`:
+   * the folder the restart moves the session to.
    */
-  | { kind: "choosing"; picks: Settings; restart?: boolean }
+  | { kind: "choosing"; picks: Settings; restart?: boolean; moveTo?: string }
   /** A choice was sent; the flow ends once the session list reflects it. */
   | { kind: "applying"; picks: Settings; choice: ColdChoice };
 

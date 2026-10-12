@@ -432,12 +432,17 @@ export function updateTab(
   };
 }
 
-/** Activates the session's tab, created at its root on first use. */
+/** Activates the session's tab, created at its root on first use; a moved session's tab takes the new root. */
 export function openSessionTab(state: ExplorerState, session: string, root: string): ExplorerState {
   const existing = state.tabs.find(
     (tab) => tab.owner.kind === "session" && tab.owner.session === session,
   );
-  if (existing !== undefined) return selectTab(state, existing.id);
+  if (existing !== undefined) {
+    const tabs = state.tabs.map((tab) =>
+      tab.id === existing.id ? { ...tab, owner: { kind: "session" as const, session, root } } : tab,
+    );
+    return selectTab({ ...state, tabs }, existing.id);
+  }
   const tab: ExplorerTab = {
     id: newId(),
     owner: { kind: "session", session, root },

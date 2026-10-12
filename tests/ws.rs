@@ -748,6 +748,7 @@ async fn a_blank_restart_reaches_subscribers_without_a_child() {
                 mode: RestartMode::Blank,
                 text: None,
                 attachments: Vec::new(),
+                cwd: None,
             },
         ))
         .await;
@@ -939,6 +940,7 @@ async fn an_expired_cache_needs_rewarm_to_send_and_answer_but_not_to_interrupt_o
                 mode: RestartMode::Blank,
                 text: None,
                 attachments: Vec::new(),
+                cwd: None,
             },
         ))
         .await;
@@ -1118,6 +1120,7 @@ async fn a_restart_or_a_send_unarchives() {
                 mode: RestartMode::Blank,
                 text: None,
                 attachments: Vec::new(),
+                cwd: None,
             },
         ))
         .await;
@@ -1405,6 +1408,7 @@ async fn clear_restarts_blank_whatever_the_cache() {
                 mode: RestartMode::Clear,
                 text: None,
                 attachments: Vec::new(),
+                cwd: None,
             },
         ))
         .await;
@@ -1435,6 +1439,7 @@ async fn a_restart_starts_on_the_stored_settings_and_ends_the_settings_change() 
                 mode: RestartMode::Blank,
                 text: Some("hello".into()),
                 attachments: Vec::new(),
+                cwd: None,
             },
         ))
         .await;
@@ -1608,6 +1613,7 @@ async fn long_discussion(server: &Server) -> (Uuid, Vec<Event>) {
                 exchanges: 0,
                 total_exchanges: 4,
                 seed: None,
+                moved_to: None,
             }));
             bodies.push(EventBody::Host(started.clone()));
         }

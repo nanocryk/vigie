@@ -289,6 +289,8 @@ export type ClientMessage =
       mode: RestartMode;
       text?: string;
       attachments?: string[];
+      /** Moves the session to this folder for this and every later launch. */
+      cwd?: string;
       client_id: string;
     }
   /** `reason` defaults to `kill`, a stop from Home. */
@@ -315,6 +317,8 @@ export const CACHE_COLD = "cache_cold";
 export const SESSION_LIVE = "session_live";
 /** Ack error of an action on a held message no longer queued. */
 export const HELD_GONE = "held_gone";
+/** Ack error of a `restart` moving to a folder that isn't a directory. */
+export const FOLDER_MISSING = "folder_missing";
 
 /** Why an ask deserves a second look; `reasons` has one line per matched rule. */
 export interface Danger {
@@ -485,6 +489,8 @@ export type HostEvent =
       total_exchanges: number;
       /** The seed the first message of a continue starts with; null for blank. */
       seed: string | null;
+      /** The folder the session left its previous one for; null when it stayed. */
+      moved_to: string | null;
     }
   | { event: "catalog"; models: ModelChoice[]; commands: CommandInfo[] }
   | { event: "unknown"; raw: unknown };
@@ -1197,6 +1203,7 @@ export function parseHostEvent(raw: unknown): HostEvent {
         exchanges,
         total_exchanges: total,
         seed: text("seed"),
+        moved_to: text("moved_to"),
       };
     }
     case "catalog": {

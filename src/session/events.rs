@@ -165,6 +165,9 @@ pub enum HostEvent {
         total_exchanges: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<String>,
+        /// The folder the session left its previous one for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moved_to: Option<PathBuf>,
     },
     /// The models and the commands the CLI offers, from its `initialize` reply.
     Catalog {
