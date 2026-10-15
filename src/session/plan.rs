@@ -31,13 +31,17 @@ pub struct PlanTracker {
     last_file: Option<String>,
 }
 
+/// Where the CLI keeps plan files: `$CLAUDE_CONFIG_DIR/plans`, else `~/.claude/plans`.
+pub fn plans_dir() -> Option<String> {
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".claude")));
+    config_dir.map(|dir| dir.join("plans").to_string_lossy().into_owned())
+}
+
 impl PlanTracker {
-    /// Plan files in `$CLAUDE_CONFIG_DIR/plans`, else `~/.claude/plans`.
     pub fn from_env() -> Self {
-        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|home| home.join(".claude")));
-        Self::in_dir(config_dir.map(|dir| dir.join("plans").to_string_lossy().into_owned()))
+        Self::in_dir(plans_dir())
     }
 
     fn in_dir(plans_dir: Option<String>) -> Self {

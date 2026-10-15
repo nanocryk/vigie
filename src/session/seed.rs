@@ -7,6 +7,7 @@
 //! per tool call with its argument and result cut at `TOOL_LIMIT`; thinking is
 //! dropped. The seed a `restarted` event carries is stripped from the echo of the
 //! first message that followed it, so a later seed never nests an earlier one.
+//! The seed also names the last plan files the whole discussion wrote.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -15,11 +16,14 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, Usage};
-use crate::session::HostEvent;
+use crate::claude::tools;
 use crate::session::gauges::MainRequest;
+use crate::session::{HostEvent, grant};
 use crate::store::{EventKind, StoredEvent};
 
 pub const SEED_EXCHANGES: usize = 5;
+/// Plan files a seed names, the latest written first.
+const SEED_PLANS: usize = 3;
 const USER_LIMIT: usize = 1200;
 const TEXT_LIMIT: usize = 800;
 const TOOL_LIMIT: usize = 100;
@@ -242,17 +246,53 @@ impl History {
         }
     }
 
+    /// The plan files in `plans_dir` the discussion wrote or edited, the latest first.
+    fn plan_files<'a>(&'a self, plans_dir: &str) -> Vec<&'a str> {
+        let mut files: Vec<&str> = Vec::new();
+        for block in self
+            .exchanges
+            .iter()
+            .rev()
+            .flat_map(|exchange| exchange.blocks.iter().rev())
+        {
+            if let Block::Tool { name, input, .. } = block
+                && tools::is_edit(name)
+                && let Some(file) = file_path(input)
+                && grant::directly_in(file, plans_dir)
+                && !files.contains(&file)
+            {
+                files.push(file);
+                if files.len() == SEED_PLANS {
+                    break;
+                }
+            }
+        }
+        files
+    }
+
     /// The seed of a discussion started on `started` in `cwd`, without `CLOSING`.
     /// `moved_to` is the folder the new session runs in when it left `cwd`.
-    pub fn seed(&self, cwd: &Path, moved_to: Option<&Path>, started: NaiveDate) -> Seed {
+    pub fn seed(
+        &self,
+        cwd: &Path,
+        moved_to: Option<&Path>,
+        started: NaiveDate,
+        plans_dir: Option<&str>,
+    ) -> Seed {
         let total = self.exchanges.len();
         let shown = &self.exchanges[total.saturating_sub(SEED_EXCHANGES)..];
         let moved = moved_to.map_or(String::new(), |folder| {
             format!(", which runs in {}", folder.display())
         });
+        let plans = plans_dir.map_or(Vec::new(), |dir| self.plan_files(dir));
+        let plans = if plans.is_empty() {
+            String::new()
+        } else {
+            format!(" Plan files it wrote, latest first: {}.", plans.join(", "))
+        };
         let mut text = format!(
             "This is a new session. The previous vigie session in {} (started {}, {} exchanges) \
-             was restarted into this one{moved}. Its last {} exchanges, oldest first:",
+             was restarted into this one{moved}.{plans} Its last {} exchanges, oldest first:",
             cwd.display(),
             started.format("%Y-%m-%d"),
             total,
@@ -416,7 +456,7 @@ mod tests {
     #[tokio::test]
     async fn seed_of_the_cd_recording() {
         let events = stored_recordings(&["cd"]).await;
-        let seed = History::from_events(&events).seed(Path::new("/work/p"), None, date());
+        let seed = History::from_events(&events).seed(Path::new("/work/p"), None, date(), None);
         assert_eq!(seed.exchanges, 1);
         assert_eq!(seed.total_exchanges, 1);
         assert_eq!(
@@ -447,7 +487,7 @@ mod tests {
         let history = History::from_events(&events);
         let total = history.total_exchanges();
         assert!(total > SEED_EXCHANGES, "only {total} exchanges");
-        let seed = history.seed(Path::new("/p"), None, date());
+        let seed = history.seed(Path::new("/p"), None, date(), None);
         assert_eq!(seed.exchanges, SEED_EXCHANGES);
         assert_eq!(seed.total_exchanges, total);
         assert_eq!(seed.text.matches("\n## Exchange ").count(), SEED_EXCHANGES);
@@ -605,7 +645,7 @@ mod tests {
                     "message": {"role": "user", "content": "synthetic"}}),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
         assert_eq!(seed.total_exchanges, 1);
         let lines: Vec<&str> = seed.text.lines().collect();
         let user_line = lines
@@ -656,7 +696,7 @@ mod tests {
             ),
             user(7, Value::String(first_message(&earlier, ""))),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
         assert_eq!(seed.total_exchanges, 3);
         assert!(
             seed.text
@@ -689,7 +729,7 @@ mod tests {
                 ),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date());
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
         assert!(seed.text.contains("User: /canif-suggest\n"));
         assert!(seed.text.contains("User: /review high\n"));
         assert!(!seed.text.contains("<command-"));
@@ -698,7 +738,7 @@ mod tests {
 
     #[test]
     fn an_empty_history_seeds_no_exchange() {
-        let seed = History::from_events(&[]).seed(Path::new("/p"), None, date());
+        let seed = History::from_events(&[]).seed(Path::new("/p"), None, date(), None);
         assert_eq!((seed.exchanges, seed.total_exchanges), (0, 0));
         assert!(seed.text.ends_with(
             "(started 2026-09-27, 0 exchanges) was restarted into this one. \
@@ -709,8 +749,42 @@ mod tests {
     }
 
     #[test]
+    fn the_seed_names_the_last_three_plan_files_written() {
+        let plans = r"C:\u\.claude\plans";
+        let write = |id: &str, name: &str, file: &str| tool(id, name, &format!(r"{plans}\{file}"));
+        let events = [
+            user(1, Value::String("one".into())),
+            assistant(
+                2,
+                serde_json::json!([write("t1", "Write", "a.md"), write("t2", "Write", "b.md")]),
+            ),
+            user(3, Value::String("two".into())),
+            assistant(
+                4,
+                serde_json::json!([
+                    write("t3", "Read", "z.md"),
+                    write("t4", "Edit", "c.md"),
+                    write("t5", "Edit", "a.md"),
+                    write("t6", "Write", r"deep\d.md"),
+                    tool("t7", "Write", r"C:\work\e.md"),
+                    write("t8", "Edit", "d.md"),
+                ]),
+            ),
+        ];
+        let history = History::from_events(&events);
+        let seed = history.seed(Path::new("/p"), None, date(), Some(plans));
+        assert!(seed.text.contains(&format!(
+            "was restarted into this one. Plan files it wrote, latest first: \
+             {plans}\\d.md, {plans}\\a.md, {plans}\\c.md. Its last 2 exchanges"
+        )));
+        let seed = history.seed(Path::new("/p"), None, date(), None);
+        assert!(!seed.text.contains("Plan files"));
+    }
+
+    #[test]
     fn a_moved_seed_names_both_folders() {
-        let seed = History::from_events(&[]).seed(Path::new("/p"), Some(Path::new("/q")), date());
+        let seed =
+            History::from_events(&[]).seed(Path::new("/p"), Some(Path::new("/q")), date(), None);
         assert!(seed.text.starts_with(
             "This is a new session. The previous vigie session in /p \
              (started 2026-09-27, 0 exchanges) was restarted into this one, which runs in /q. "

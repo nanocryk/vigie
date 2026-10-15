@@ -24,7 +24,7 @@ use crate::session::server_restart::{RestartState, ServerRestart};
 use crate::session::{
     Activity, Config, Event, EventBody, HostEvent, LiveStatus, RestartMode, Session, StopReason,
 };
-use crate::session::{attachments, scratch, seed};
+use crate::session::{attachments, plan, scratch, seed};
 use crate::store::{
     HeldEdit, HeldMode, SessionRow, SessionState, SharedCatalog, Store, StoredEvent, Unread,
 };
@@ -751,6 +751,7 @@ impl SessionManager {
                 &row.cwd,
                 moved_to.as_deref(),
                 row.created_at.with_timezone(&Local).date_naive(),
+                plan::plans_dir().as_deref(),
             )),
             RestartMode::Blank | RestartMode::Clear => None,
         };
@@ -1211,6 +1212,7 @@ async fn measure_restart(id: Uuid, store: &Store, signals: &Signals) {
                 &row.cwd,
                 None,
                 row.created_at.with_timezone(&Local).date_naive(),
+                plan::plans_dir().as_deref(),
             );
             RestartMeasure::new(&history.seed_window(), &seed)
         })
