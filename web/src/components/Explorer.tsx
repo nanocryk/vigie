@@ -36,6 +36,7 @@ import {
   makeFolder,
   newFreeTab,
   pruneSessionTabs,
+  downloadUrl,
   rawUrl,
   selectTab,
   sessionPlaces,
@@ -100,6 +101,11 @@ export const FileIcon = ({ className }: { className?: string }) => (
   <Icon className={className}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
     <path d="M14 3v5h5" />
+  </Icon>
+);
+const DownloadIcon = ({ className }: { className?: string }) => (
+  <Icon className={className}>
+    <path d="M12 4v11m-5-5 5 5 5-5M5 20h14" />
   </Icon>
 );
 const ImageIcon = ({ className }: { className?: string }) => (
@@ -1173,6 +1179,15 @@ function FileViewer({
               })}
             </div>
           )}
+          <a
+            href={downloadUrl(path)}
+            download={folderName(path)}
+            aria-label="Download"
+            title="Download"
+            className={STEP_BUTTON}
+          >
+            <DownloadIcon className="size-4" />
+          </a>
         </div>
       </div>
       <div
@@ -1219,6 +1234,10 @@ function FileViewer({
               <FileIcon className="size-8" />
               <p>This file cannot be displayed.</p>
               <p className="text-xs">{formatSize(view.size)}</p>
+              <a href={downloadUrl(path)} download={folderName(path)} className={`${TOOL} mt-2`}>
+                <DownloadIcon className="size-4" />
+                Download
+              </a>
             </div>
           )}
         </div>

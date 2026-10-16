@@ -200,6 +200,11 @@ export function rawUrl(path: string, version?: string): string {
   return `api/fs/raw${query(path)}${pinned}`;
 }
 
+/** Any file's bytes, served as a download under its own name. */
+export function downloadUrl(path: string): string {
+  return `api/fs/download${query(path)}`;
+}
+
 /** The file's current content hash, or null when it is gone. */
 export async function fetchHash(path: string): Promise<string | null> {
   const response = await fetch(`api/fs/hash${query(path)}`);

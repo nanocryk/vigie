@@ -113,6 +113,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/fs/places", get(files::places_route))
         .route("/api/fs/file", get(files::file_route))
         .route("/api/fs/raw", get(files::raw_route))
+        .route("/api/fs/download", get(files::download_route))
         .route("/api/fs/hash", get(files::hash_route))
         .route("/api/fs/kinds", post(files::kinds_route))
         .route("/api/fs/mkdir", post(files::mkdir_route))
@@ -208,6 +209,7 @@ mod auth_gate_tests {
             (Method::GET, "/api/fs/places"),
             (Method::GET, "/api/fs/file"),
             (Method::GET, "/api/fs/raw"),
+            (Method::GET, "/api/fs/download"),
             (Method::GET, "/api/fs/hash"),
             (Method::POST, "/api/fs/kinds"),
             (Method::POST, "/api/fs/mkdir"),
@@ -235,7 +237,7 @@ mod auth_gate_tests {
     }
 
     struct TestApp {
-        _tmp: tempfile::TempDir,
+        tmp: tempfile::TempDir,
         router: Router,
         device_cookie: String,
         startup_token: String,
@@ -254,7 +256,7 @@ mod auth_gate_tests {
         let startup_token = state.auth.startup_token.clone();
         let router = build_app(state);
         TestApp {
-            _tmp: tmp,
+            tmp,
             router,
             device_cookie,
             startup_token,
@@ -336,6 +338,33 @@ mod auth_gate_tests {
                 "route {method} {path} rejected a valid cookie (got 401)",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn download_serves_any_file_as_an_attachment() {
+        let app = build_test_app().await;
+        let file = app.tmp.path().join("notes.zip");
+        std::fs::write(&file, b"zipped").expect("write");
+        let encoded: String = file
+            .to_str()
+            .expect("utf-8 path")
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect();
+        let uri = format!("/api/fs/download?path={encoded}");
+        let res = hit_with_cookie(&app.router, Method::GET, &uri, &app.device_cookie).await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok()),
+            Some("attachment; filename=\"notes.zip\"; filename*=UTF-8''notes.zip")
+        );
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(&body[..], b"zipped");
     }
 
     /// The cookie `Max-Age` is the only expiry, so every authed response has to

@@ -7,13 +7,15 @@ use std::path::{Path, PathBuf};
 
 use axum::{
     Json,
-    extract::Query,
+    body::Body,
+    extract::{Query, Request},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tower_http::services::ServeFile;
 
 use crate::http::api::ApiError;
 use crate::session::attachments::{digest_hex, file_hash};
@@ -411,6 +413,50 @@ pub async fn raw_route(Query(query): Query<RawQuery>) -> Result<Response, FsErro
         .into_response())
 }
 
+/// `attachment` naming the file: an ASCII fallback, then the exact name (RFC 6266).
+pub fn attachment_disposition(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|c| match c {
+            ' '..='~' if c != '"' && c != '\\' => c,
+            _ => '_',
+        })
+        .collect();
+    let mut encoded = String::new();
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+/// Any file, streamed whole or by range, as a download under its own name.
+pub async fn download_route(
+    Query(query): Query<PathQuery>,
+    request: Request,
+) -> Result<Response, FsError> {
+    let (path, _) = blocking(move || guarded_file(&query.path)).await?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut response = ServeFile::new(&path)
+        .try_call(request)
+        .await?
+        .map(Body::new);
+    if response.status().is_success() {
+        let disposition =
+            HeaderValue::from_str(&attachment_disposition(&name)).map_err(io::Error::other)?;
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, disposition);
+    }
+    Ok(response)
+}
+
 pub async fn hash_route(Query(query): Query<PathQuery>) -> Result<Response, FsError> {
     let hash = blocking(move || {
         let (path, _) = guarded_file(&query.path)?;
@@ -588,6 +634,18 @@ mod tests {
         let second = digest_hex(b"second");
         assert_eq!(read(Some(&second)), (b"second".to_vec(), Caching::Pinned));
         assert_eq!(read(None), (b"second".to_vec(), Caching::None));
+    }
+
+    #[test]
+    fn attachment_disposition_keeps_the_exact_name_beside_an_ascii_fallback() {
+        assert_eq!(
+            attachment_disposition("plan v2.pdf"),
+            "attachment; filename=\"plan v2.pdf\"; filename*=UTF-8''plan%20v2.pdf"
+        );
+        assert_eq!(
+            attachment_disposition("é\"a.zip"),
+            "attachment; filename=\"__a.zip\"; filename*=UTF-8''%C3%A9%22a.zip"
+        );
     }
 
     #[test]
