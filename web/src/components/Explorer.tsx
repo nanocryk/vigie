@@ -15,6 +15,7 @@ import { Header, HomeButton, NeedsYouColumn } from "@/components/TopBar";
 import { useNow } from "@/components/useNow";
 import { useSnapshot } from "@/components/useSnapshot";
 import {
+  type AttachmentGroup,
   type Entry,
   type ExplorerTab,
   type FileView,
@@ -38,6 +39,7 @@ import {
   rawUrl,
   selectTab,
   sessionPlaces,
+  stepAttachment,
   updateTab,
   upSteps,
   useExplorer,
@@ -919,6 +921,112 @@ function ImageBody({ path, size }: { path: string; size: number }) {
   );
 }
 
+/** Travel before a touch counts as a slide or a scroll. */
+const SLIDE_SLOP_PX = 10;
+/** Travel past which a released slide switches file. */
+const SLIDE_SWITCH_PX = 64;
+/** Share of the travel shown past the first or the last file. */
+const SLIDE_EDGE_RESIST = 0.25;
+const SLIDE_BACK = "transform 200ms ease-out";
+
+type Step = -1 | 1;
+
+/** Whether `target`, under `surface`, sits in something that scrolls sideways. */
+function scrollsSideways(target: EventTarget | null, surface: HTMLElement): boolean {
+  for (
+    let node = target instanceof Element ? target : null;
+    node !== null && node !== surface;
+    node = node.parentElement
+  ) {
+    if (node.scrollWidth <= node.clientWidth) continue;
+    const overflow = getComputedStyle(node).overflowX;
+    if (overflow === "auto" || overflow === "scroll") return true;
+  }
+  return false;
+}
+
+/**
+ * A sideways touch drag on the element `surface` is attached to: `offset`
+ * follows the finger, and a release past the threshold calls `onStep` when
+ * `canStep` allows that direction.
+ */
+function useSlide(canStep: (step: Step) => boolean, onStep: (step: Step) => void) {
+  const surface = useRef<HTMLDivElement>(null);
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const latest = useRef({ canStep, onStep });
+  useLayoutEffect(() => {
+    latest.current = { canStep, onStep };
+  });
+
+  useEffect(() => {
+    const element = surface.current;
+    if (element === null) return;
+    let active: number | null = null;
+    let sliding = false;
+    let startX = 0;
+    let startY = 0;
+    const stepOf = (dx: number): Step => (dx < 0 ? 1 : -1);
+    const down = (event: PointerEvent) => {
+      if (active !== null || !event.isPrimary || event.pointerType === "mouse") return;
+      const { canStep } = latest.current;
+      if (!canStep(-1) && !canStep(1)) return;
+      if (scrollsSideways(event.target, element)) return;
+      active = event.pointerId;
+      sliding = false;
+      startX = event.clientX;
+      startY = event.clientY;
+    };
+    const move = (event: PointerEvent) => {
+      if (event.pointerId !== active) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (!sliding) {
+        if (Math.hypot(dx, dy) < SLIDE_SLOP_PX) return;
+        if (Math.abs(dx) <= Math.abs(dy)) {
+          active = null;
+          return;
+        }
+        sliding = true;
+        element.setPointerCapture(event.pointerId);
+        setDragging(true);
+      }
+      setOffset(latest.current.canStep(stepOf(dx)) ? dx : dx * SLIDE_EDGE_RESIST);
+    };
+    const finish = (event: PointerEvent, released: boolean) => {
+      if (event.pointerId !== active) return;
+      active = null;
+      if (element.hasPointerCapture(event.pointerId)) {
+        element.releasePointerCapture(event.pointerId);
+      }
+      if (!sliding) return;
+      sliding = false;
+      setDragging(false);
+      setOffset(0);
+      const dx = event.clientX - startX;
+      const { canStep, onStep } = latest.current;
+      if (released && Math.abs(dx) >= SLIDE_SWITCH_PX && canStep(stepOf(dx))) onStep(stepOf(dx));
+    };
+    const up = (event: PointerEvent) => finish(event, true);
+    const cancel = (event: PointerEvent) => finish(event, false);
+    element.addEventListener("pointerdown", down, { passive: true });
+    element.addEventListener("pointermove", move, { passive: true });
+    element.addEventListener("pointerup", up, { passive: true });
+    element.addEventListener("pointercancel", cancel, { passive: true });
+    return () => {
+      element.removeEventListener("pointerdown", down);
+      element.removeEventListener("pointermove", move);
+      element.removeEventListener("pointerup", up);
+      element.removeEventListener("pointercancel", cancel);
+    };
+  }, []);
+
+  return { surface, offset, dragging };
+}
+
+const STEP_BUTTON =
+  "flex size-7 items-center justify-center rounded-[5px] text-base hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent";
+
 function FileViewer({
   path,
   line,
@@ -926,6 +1034,8 @@ function FileViewer({
   close,
   onJumped,
   showInDiff,
+  attachments,
+  onStep,
 }: {
   path: string;
   /** A line to bring into view and flash once shown. */
@@ -937,7 +1047,22 @@ function FileViewer({
   onJumped: () => void;
   /** Opens the diff of `root` at the repository path `path`, line `line`. */
   showInDiff: (root: string, focus: DiffFocus) => void;
+  /** The attachment row the file was opened from. */
+  attachments: AttachmentGroup | null;
+  /** Opens the file at `index` of `attachments`. */
+  onStep: (index: number) => void;
 }) {
+  const group = attachments !== null && attachments.paths.length > 1 ? attachments : null;
+  const canStep = (step: Step) => {
+    if (group === null) return false;
+    const next = group.index + step;
+    return next >= 0 && next < group.paths.length;
+  };
+  const step = (by: Step) => {
+    if (group !== null && canStep(by)) onStep(group.index + by);
+  };
+  const slide = useSlide(canStep, step);
+
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [target] = useState(line);
@@ -1005,6 +1130,31 @@ function FileViewer({
           <span className="min-w-0 flex-1 truncate text-sm voice-ui font-medium" title={path}>
             {folderName(path)}
           </span>
+          {group !== null && (
+            <div className="flex shrink-0 items-center text-xs voice-ui">
+              <button
+                type="button"
+                disabled={!canStep(-1)}
+                onClick={() => step(-1)}
+                aria-label="Previous attachment"
+                className={STEP_BUTTON}
+              >
+                &lsaquo;
+              </button>
+              <span className="px-1 text-muted-foreground tabular-nums">
+                {group.index + 1}/{group.paths.length}
+              </span>
+              <button
+                type="button"
+                disabled={!canStep(1)}
+                onClick={() => step(1)}
+                aria-label="Next attachment"
+                className={STEP_BUTTON}
+              >
+                &rsaquo;
+              </button>
+            </div>
+          )}
           {markdown && (
             <div className="flex shrink-0 overflow-hidden rounded-[5px] border text-xs">
               {(["Rendered", "Raw"] as const).map((choice) => {
@@ -1025,8 +1175,17 @@ function FileViewer({
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-        <div className={PANEL}>
+      <div
+        ref={slide.surface}
+        className={`min-h-0 flex-1 overflow-auto overscroll-contain ${group !== null ? "touch-pan-y" : ""}`}
+      >
+        <div
+          className={PANEL}
+          style={{
+            transform: slide.offset === 0 ? undefined : `translateX(${slide.offset}px)`,
+            transition: slide.dragging ? undefined : SLIDE_BACK,
+          }}
+        >
           {error !== null && <p className="p-3 text-sm voice-ui text-destructive">{error}</p>}
           {view === null && error === null && (
             <p className="p-3 text-sm voice-ui text-muted-foreground">Loading...</p>
@@ -1291,6 +1450,8 @@ export function Explorer({ client }: { client: Client }) {
           close={closeFile}
           onJumped={() => changeExplorer((current) => updateTab(current, tab.id, { line: null }))}
           showInDiff={openDiff}
+          attachments={tab.attachments}
+          onStep={(index) => changeExplorer((current) => stepAttachment(current, index))}
         />
       ) : tab.diff !== null ? (
         <DiffView

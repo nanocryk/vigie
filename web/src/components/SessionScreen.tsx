@@ -1264,15 +1264,15 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const fileLinks = useMemo<FileLinks>(
     () => ({
       cwd,
-      open: (target, line) => {
+      open: (target, line, attachments) => {
         changeExplorer((state) => {
           if (viewId === null || cwd === null) {
             return target.kind === "file"
-              ? openFileInLastFree(state, target.path, line)
+              ? openFileInLastFree(state, target.path, line, attachments)
               : openFolderInLastFree(state, target.path);
           }
           return target.kind === "file"
-            ? openSessionFile(state, viewId, cwd, target.path, line)
+            ? openSessionFile(state, viewId, cwd, target.path, line, attachments)
             : openSessionFolderAt(state, viewId, cwd, target.path);
         });
         navigateBackLeaves();
@@ -1408,7 +1408,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         awaiting={new Set(asks.map((pendingAsk) => pendingAsk.toolUseId))}
         turnOpen={shown.turnOpen}
         onOpen={switchTo}
-        onOpenAttachment={(path) => fileLinks.open({ kind: "file", path }, null)}
+        onOpenAttachment={(paths, index) => {
+          const path = paths[index];
+          if (path !== undefined) fileLinks.open({ kind: "file", path }, null, { paths, index });
+        }}
         onOpenDiff={openDiff}
         glowTurnEnd={viewing === null}
         background={viewing === null ? (view?.background ?? []) : []}

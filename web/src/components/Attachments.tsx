@@ -88,7 +88,7 @@ export function AttachmentChip({
 }: {
   path: string;
   hash?: string | undefined;
-  onOpen: (path: string) => void;
+  onOpen: () => void;
 }) {
   const name = attachmentName(path);
   const drift = useDrift(path, hash);
@@ -98,7 +98,7 @@ export function AttachmentChip({
     <button
       type="button"
       title={note === null ? name : `${name} (${note})`}
-      onClick={() => onOpen(path)}
+      onClick={onOpen}
       className="relative flex h-11 min-w-11 cursor-pointer items-center justify-center overflow-hidden rounded-md bg-card shadow-md ring-2 ring-background transition-shadow hover:ring-ring"
     >
       <ChipFace name={name} path={path} hash={hash} size="size-11" />

@@ -24,6 +24,7 @@ import {
   pruneSessionTabs,
   selectLastFree,
   selectTab,
+  stepAttachment,
   updateTab,
   upSteps,
 } from "@/files";
@@ -212,6 +213,41 @@ describe("tabs", () => {
     expect(activeTab(state)).toMatchObject({ file: null, diff: "C:\\a", folder: "C:\\a" });
     state = goUp(state);
     expect(activeTab(state)).toMatchObject({ diff: null, folder: "C:\\a" });
+  });
+
+  it("steps through an attachment row, its folder kept", () => {
+    const paths = ["C:\\t\\a.png", "C:\\u\\b.txt", "C:\\t\\c.png"];
+    let state = openSessionFile(initialState(), "s1", "C:\\p", "C:\\t\\a.png", null, {
+      paths,
+      index: 0,
+    });
+    state = stepAttachment(state, 1);
+    expect(activeTab(state)).toMatchObject({
+      folder: "C:\\t",
+      file: "C:\\u\\b.txt",
+      attachments: { paths, index: 1 },
+    });
+    expect(stepAttachment(state, 3)).toBe(state);
+  });
+
+  it("drops the attachment row when another file opens or the file closes", () => {
+    const paths = ["C:\\t\\a.png", "C:\\t\\b.png"];
+    const state = openFileInLastFree(initialState(), "C:\\t\\a.png", null, { paths, index: 0 });
+    const tab = activeTab(state).id;
+    expect(activeTab(updateTab(state, tab, { line: null })).attachments).not.toBeNull();
+    expect(activeTab(updateTab(state, tab, { file: "C:\\t\\x.ts" })).attachments).toBeNull();
+    expect(activeTab(goUp(state)).attachments).toBeNull();
+  });
+
+  it("keeps a stored attachment row only while it matches the open file", () => {
+    const paths = ["C:\\t\\a.png", "C:\\t\\b.png"];
+    const state = openFileInLastFree(initialState(), "C:\\t\\b.png", null, { paths, index: 1 });
+    expect(parseStoredState(JSON.stringify(state))).toEqual(state);
+    const stale = updateTab(state, state.active, {
+      file: "C:\\t\\a.png",
+      attachments: { paths, index: 1 },
+    });
+    expect(activeTab(parseStoredState(JSON.stringify(stale))).attachments).toBeNull();
   });
 
   it("round-trips through storage and recovers from garbage", () => {

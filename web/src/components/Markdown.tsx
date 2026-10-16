@@ -3,7 +3,7 @@ import ReactMarkdown, { type Components, type ExtraProps, type Options } from "r
 import remarkGfm from "remark-gfm";
 
 import { parseFileRef, resolveRefPath, usePathKind } from "@/fileRefs";
-import type { PathKind } from "@/files";
+import type { AttachmentGroup, PathKind } from "@/files";
 import { highlight, languageFromTag } from "@/highlight";
 
 export type PluggableList = NonNullable<Options["remarkPlugins"]>;
@@ -44,7 +44,8 @@ export function CodeBlock({ node }: ExtraProps) {
 /** Where file paths in inline code resolve and open; null leaves them plain. */
 export interface FileLinks {
   cwd: string | null;
-  open: (target: PathKind, line: number | null) => void;
+  /** With `attachments`, the file steps through its attachment row. */
+  open: (target: PathKind, line: number | null, attachments?: AttachmentGroup) => void;
 }
 
 export const FileLinksContext = createContext<FileLinks | null>(null);

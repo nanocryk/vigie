@@ -328,6 +328,12 @@ export function sessionPlaces(sessions: readonly SessionView[]): Place[] {
 
 export type TabOwner = { kind: "free" } | { kind: "session"; session: string; root: string };
 
+/** The files of an attachment row, the open file at `index`. */
+export interface AttachmentGroup {
+  paths: readonly string[];
+  index: number;
+}
+
 export interface ExplorerTab {
   id: string;
   owner: TabOwner;
@@ -339,6 +345,8 @@ export interface ExplorerTab {
   file: string | null;
   /** A line of the open file to bring into view and flash, once. */
   line: number | null;
+  /** The attachment row the open file was opened from, to step through. */
+  attachments: AttachmentGroup | null;
   scroll: number;
 }
 
@@ -364,6 +372,7 @@ function freeTab(): ExplorerTab {
     diff: null,
     file: null,
     line: null,
+    attachments: null,
     scroll: 0,
   };
 }
@@ -424,12 +433,27 @@ export function closeTab(state: ExplorerState, id: string): ExplorerState {
 export function updateTab(
   state: ExplorerState,
   id: string,
-  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "line" | "scroll">>,
+  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "line" | "attachments" | "scroll">>,
 ): ExplorerState {
+  // A patch setting the file drops the attachment row unless it names one.
+  const full =
+    "file" in patch && !("attachments" in patch) ? { ...patch, attachments: null } : patch;
   return {
     ...state,
-    tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)),
+    tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ...full } : tab)),
   };
+}
+
+/** The active tab on the file at `index` of its attachment row, its folder kept for the back button. */
+export function stepAttachment(state: ExplorerState, index: number): ExplorerState {
+  const tab = activeTab(state);
+  const file = tab.attachments?.paths[index];
+  if (tab.attachments === null || file === undefined) return state;
+  return updateTab(state, tab.id, {
+    file,
+    line: null,
+    attachments: { paths: tab.attachments.paths, index },
+  });
 }
 
 /** Activates the session's tab, created at its root on first use; a moved session's tab takes the new root. */
@@ -450,6 +474,7 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
     diff: null,
     file: null,
     line: null,
+    attachments: null,
     scroll: 0,
   };
   return selectTab({ ...state, tabs: [...state.tabs, tab] }, tab.id);
@@ -460,6 +485,7 @@ export function openFileInLastFree(
   state: ExplorerState,
   file: string,
   line: number | null = null,
+  attachments: AttachmentGroup | null = null,
 ): ExplorerState {
   const next = selectLastFree(state);
   return updateTab(next, next.active, {
@@ -467,6 +493,7 @@ export function openFileInLastFree(
     diff: null,
     file,
     line,
+    attachments,
     scroll: 0,
   });
 }
@@ -489,6 +516,7 @@ export function openSessionFile(
   root: string,
   file: string,
   line: number | null = null,
+  attachments: AttachmentGroup | null = null,
 ): ExplorerState {
   const next = openSessionTab(state, session, root);
   return updateTab(next, next.active, {
@@ -496,6 +524,7 @@ export function openSessionFile(
     diff: null,
     file,
     line,
+    attachments,
     scroll: 0,
   });
 }
@@ -552,18 +581,31 @@ function parseOwner(raw: unknown): TabOwner | null {
   return null;
 }
 
+/** A stored attachment row, kept only while its `index` is still the open file. */
+function parseAttachments(raw: unknown, file: string | null): AttachmentGroup | null {
+  if (!isRecord(raw) || file === null) return null;
+  const { paths, index } = raw;
+  if (!Array.isArray(paths)) return null;
+  const strings = paths.filter((path: unknown): path is string => typeof path === "string");
+  if (strings.length !== paths.length) return null;
+  if (typeof index !== "number" || strings[index] !== file) return null;
+  return { paths: strings, index };
+}
+
 function parseTab(raw: unknown): ExplorerTab | null {
   if (!isRecord(raw)) return null;
   const { id, folder, diff, file, line, scroll } = raw;
   const owner = parseOwner(raw["owner"]);
   if (typeof id !== "string" || owner === null) return null;
+  const open = typeof file === "string" ? file : null;
   return {
     id,
     owner,
     folder: typeof folder === "string" ? folder : null,
     diff: typeof diff === "string" ? diff : null,
-    file: typeof file === "string" ? file : null,
+    file: open,
     line: typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null,
+    attachments: parseAttachments(raw["attachments"], open),
     scroll: typeof scroll === "number" && Number.isFinite(scroll) ? scroll : 0,
   };
 }

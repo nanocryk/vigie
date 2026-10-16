@@ -525,7 +525,7 @@ function BubbleBody({
   );
 }
 
-const OpenAttachment = createContext<(path: string) => void>(() => {});
+const OpenAttachment = createContext<(paths: readonly string[], index: number) => void>(() => {});
 
 /** Opens the session's diff view; null outside a repository. */
 const OpenDiff = createContext<(() => void) | null>(null);
@@ -579,7 +579,7 @@ function BubbleFiles({
           key={`${index}:${path}`}
           path={path}
           hash={hashes?.[path]}
-          onOpen={openAttachment}
+          onOpen={() => openAttachment(paths, index)}
         />
       ))}
     </div>
@@ -984,8 +984,8 @@ export function TranscriptView({
   turnOpen: boolean;
   /** Switches to an agent's discussion, or to the main one with null; kept stable. */
   onOpen: (toolUseId: string | null) => void;
-  /** Opens the file of a bubble's attachment chip. */
-  onOpenAttachment: (path: string) => void;
+  /** Opens the file at `index` of a bubble's attachment chips. */
+  onOpenAttachment: (paths: readonly string[], index: number) => void;
   /** Opens the session's diff view; null outside a repository. */
   onOpenDiff: (() => void) | null;
   /** A turn ending while shown glows its closing Claude bubble until the next input. */
