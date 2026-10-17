@@ -89,6 +89,13 @@ const COMPONENTS: Components = {
       <table>{children}</table>
     </div>
   ),
+  // Never loaded on render: an image URL can carry data out with no approval.
+  img: ({ src, alt }) =>
+    typeof src === "string" && src !== "" ? (
+      <a href={src} title={src} target="_blank" rel="noopener noreferrer">
+        Image: {alt !== undefined && alt !== "" ? alt : src}
+      </a>
+    ) : null,
 };
 
 const PLUGINS: PluggableList = [remarkGfm];

@@ -154,14 +154,35 @@ pub fn build_app(state: AppState) -> Router {
         // is exactly where the document lives. So it is routed out here.
         .route_service(BASE_PATH_SLASH, ServeFile::new(web_dir.join("index.html")))
         .nest(BASE_PATH, served)
-        .layer(from_fn(no_store))
+        .layer(from_fn(common_headers))
         .layer(from_fn(redirect_bare_base))
 }
 
-async fn no_store(req: Request, next: Next) -> Response {
+/// The app renders untrusted content (Claude's replies, files, diffs), and a
+/// script running on its origin could drive Claude, so the CSP confines
+/// scripts, connections and images to the origin itself.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
+    style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
+    connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; \
+    frame-ancestors 'none'";
+
+async fn common_headers(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let headers = resp.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     resp
 }
 
@@ -584,6 +605,27 @@ mod auth_gate_tests {
             .filter(|(_, s)| *s != StatusCode::OK)
             .collect();
         assert!(missing.is_empty(), "not served: {missing:?}");
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_security_headers() {
+        let app = build_test_app().await;
+        for uri in [BASE_PATH_SLASH, "/vigie/assets/app.js", "/vigie/api/whoami"] {
+            let res = get_raw(&app.router, uri).await;
+            let headers = res.headers();
+            assert_eq!(
+                headers.get(header::CONTENT_SECURITY_POLICY),
+                Some(&HeaderValue::from_static(CONTENT_SECURITY_POLICY)),
+                "{uri}",
+            );
+            assert_eq!(
+                headers.get(header::X_CONTENT_TYPE_OPTIONS),
+                Some(&HeaderValue::from_static("nosniff")),
+                "{uri}",
+            );
+            assert!(headers.contains_key(header::X_FRAME_OPTIONS), "{uri}");
+            assert!(headers.contains_key(header::REFERRER_POLICY), "{uri}");
+        }
     }
 
     #[tokio::test]
