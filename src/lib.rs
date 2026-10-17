@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod http;
+pub mod paths;
 pub mod session;
 pub mod state_dir;
 pub mod store;

@@ -18,6 +18,7 @@ use serde_json::json;
 use tower_http::services::ServeFile;
 
 use crate::http::api::ApiError;
+use crate::paths::is_network_path;
 use crate::session::attachments::{digest_hex, file_hash};
 
 /// Text past this is cut and flagged truncated.
@@ -88,13 +89,21 @@ pub fn display_path(path: &Path) -> String {
 }
 
 /// `raw` resolved, links followed. A relative path is not found: there is no
-/// working folder to resolve it against.
+/// working folder to resolve it against. A path on another machine is refused
+/// before anything touches it, and so is a link that resolved to one.
 pub fn canonical(raw: &str) -> io::Result<PathBuf> {
     let path = Path::new(raw);
     if !path.is_absolute() {
         return Err(io::ErrorKind::NotFound.into());
     }
-    std::fs::canonicalize(path)
+    if is_network_path(path) {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    let resolved = std::fs::canonicalize(path)?;
+    if is_network_path(Path::new(&display_path(&resolved))) {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(resolved)
 }
 
 /// A NUL byte in the first `SNIFF_BYTES` marks binary content.
@@ -534,6 +543,17 @@ pub async fn mkdir_route(Json(request): Json<MakeDir>) -> Result<Response, FsErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_refuses_network_paths_and_keeps_local_ones() {
+        for raw in [r"\\attacker.invalid\s\x.png", "//attacker.invalid/s/x.png"] {
+            let err = canonical(raw).expect_err(raw);
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{raw}");
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(canonical(&tmp.path().display().to_string()).is_ok());
+    }
 
     fn text_of(view: &FileView) -> (&str, bool) {
         match &view.content {

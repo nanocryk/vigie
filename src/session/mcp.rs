@@ -8,6 +8,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::paths::is_network_path;
 use crate::session::server_restart::ServerRestart;
 use crate::store::{
     BashAsk, BashAskFilter, MessageQuery, SessionRow, Store, StoredMessage, snippet,
@@ -908,6 +909,11 @@ fn set_attachments(arguments: &Value, cwd: &Path) -> Result<Vec<String>, String>
             continue;
         };
         let path = cwd.join(text);
+        // Allowed without asking, so a network path must never be touched.
+        if is_network_path(&path) {
+            bad.push(format!("- {text}: on another machine, not allowed"));
+            continue;
+        }
         if !path.is_file() {
             let why = if path.exists() {
                 "not a file"
@@ -1349,6 +1355,18 @@ mod tests {
             handled.effect,
             Effect::SetAttachments(vec![file.display().to_string()])
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_network_path_is_refused_without_being_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let handled = handle(
+            &call(json!({"paths": [r"\\attacker.invalid\s\x.png"]})),
+            dir.path(),
+        );
+        assert_eq!(handled.effect, Effect::None);
+        assert!(text(&handled).contains("on another machine"));
     }
 
     #[test]
