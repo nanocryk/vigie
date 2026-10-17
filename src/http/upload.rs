@@ -12,8 +12,8 @@ use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::http::api::ApiError;
+use crate::{AppState, state_dir};
 
 pub const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
 
@@ -52,8 +52,8 @@ pub async fn upload_route(
     let path = dir.join(format!("{}-{}", random_stem(), safe_name(&query.name)));
     let written = path.clone();
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(&written, &body)
+        state_dir::create_private_dir(&dir)?;
+        state_dir::write_private(&written, &body)
     })
     .await
     .map_err(|err| ApiError::internal("upload task", err))?

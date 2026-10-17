@@ -49,7 +49,7 @@ impl Vapid {
                 (pkcs8, file.subject)
             }
             Err(err) if err.kind() == ErrorKind::NotFound => {
-                std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+                state_dir::create_private_dir(dir)?;
                 let pkcs8 =
                     EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
                         .map_err(|err| anyhow!("generate vapid pkcs8: {err}"))?;

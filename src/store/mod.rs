@@ -209,9 +209,16 @@ impl Store {
     /// Opens or creates the database, migrates it, and starts the writer thread.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            state_dir::create_private_dir(parent)?;
         }
+        // SQLite gives its WAL and shared-memory files the database file's mode.
+        state_dir::private_options()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("create {}", path.display()))?;
+        state_dir::restrict_to_owner(path)?;
         let connection =
             Connection::open(path).with_context(|| format!("open {}", path.display()))?;
         let journal_mode: String =

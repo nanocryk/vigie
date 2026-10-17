@@ -380,7 +380,7 @@ fn run_revoke_all() -> Result<ExitCode> {
 }
 
 async fn serve(args: ServeArgs) -> Result<ExitCode> {
-    let dir = state_dir::path()?;
+    let dir = state_dir::create()?;
     let settings = Settings::resolve(args, load_config(&dir.join("config.json"))?)?;
     let bind = settings.bind;
     let scheme = settings.scheme();
@@ -658,7 +658,7 @@ fn resolve_tls(
         return Ok((cert.clone(), key.clone()));
     }
     let tls_dir = state_dir.join("tls");
-    std::fs::create_dir_all(&tls_dir).with_context(|| format!("mkdir {}", tls_dir.display()))?;
+    state_dir::create_private_dir(&tls_dir)?;
     let cert_path = tls_dir.join("cert.pem");
     let key_path = tls_dir.join("key.pem");
     let sans_path = tls_dir.join("sans.json");

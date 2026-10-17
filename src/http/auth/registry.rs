@@ -97,8 +97,7 @@ pub struct Registry {
 impl Registry {
     pub fn load(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
+            state_dir::create_private_dir(parent)?;
         }
         let devices = read_locked(&path)?;
         Ok(Self {
@@ -299,10 +298,9 @@ impl Registry {
         F: FnOnce(&mut Vec<Device>) -> (R, bool),
     {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir {}", parent.display()))?;
+            state_dir::create_private_dir(parent)?;
         }
-        let mut file = OpenOptions::new()
+        let mut file = state_dir::private_options()
             .create(true)
             .read(true)
             .write(true)
