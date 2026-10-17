@@ -23,7 +23,7 @@ use super::events::{
 };
 use super::fanout::{self, FanoutGate, FanoutOffer, Remember};
 use super::gauges::FIVE_MINUTE_TTL_SECS;
-use super::grant::{self, FileOffer};
+use super::grant::{self, FileOffer, Granted};
 use super::handle::Config;
 use super::plan::PlanTracker;
 use super::server_restart::ServerRestart;
@@ -722,7 +722,38 @@ impl Actor {
         Ok(())
     }
 
+    /// Answers one ask. An allow granting a file, a folder or accept edits also
+    /// allows the queued asks the grant covers, as a plain allow each: the CLI
+    /// asked them before it had the grant.
     async fn answer(&mut self, request_id: String, answer: Answer) -> Result<()> {
+        let granted = self
+            .ask_index(&request_id)
+            .and_then(|index| Granted::of(&answer, &self.asks[index].request, &self.cwd));
+        self.answer_one(request_id, answer).await?;
+        let Some(granted) = granted else {
+            return Ok(());
+        };
+        let covered: Vec<String> = self
+            .asks
+            .iter()
+            .filter(|ask| granted.covers(&ask.request, &self.cwd))
+            .map(|ask| ask.request_id.clone())
+            .collect();
+        for request_id in covered {
+            let allow = Answer::Allow {
+                updated_input: None,
+                note: None,
+                accept_edits: false,
+                folder: None,
+                always_for_file: false,
+                for_session: false,
+            };
+            self.answer_one(request_id, allow).await?;
+        }
+        Ok(())
+    }
+
+    async fn answer_one(&mut self, request_id: String, answer: Answer) -> Result<()> {
         let index = self
             .ask_index(&request_id)
             .ok_or_else(|| anyhow!("no pending ask {request_id}"))?;

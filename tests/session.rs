@@ -1169,6 +1169,85 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
     harness.finish().await;
 }
 
+/// Four asks queue before any answer. Granting `C:\x\a` on the first also
+/// allows the queued read below it; the Bash ask and the read outside stay queued.
+const QUEUED_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\a\\b\\1.md"}, "tool_use_id": "t1", "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Read", "ruleContent": "//c/x/a/b/**"}], "behavior": "allow", "destination": "session"}]}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "cat C:\\x\\a\\2.md"}, "tool_use_id": "t2"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "C:\\x\\c\\3.md"}, "tool_use_id": "t3"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-4", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "c:\\X\\a\\4.md"}, "tool_use_id": "t4"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\a\\b\\1.md"}, "updatedPermissions": [{"type": "addRules", "rules": [{"toolName": "Read", "ruleContent": "//c/x/a/**"}], "behavior": "allow", "destination": "session"}]}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-4", "response": {"behavior": "allow", "updatedInput": {"file_path": "c:\\X\\a\\4.md"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"command": "cat C:\\x\\a\\2.md"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\c\\3.md"}}}}}
+"#;
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_folder_grant_allows_the_queued_reads_it_covers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("queued.ndjson");
+    std::fs::write(&path, QUEUED_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let allow = |folder: Option<&str>| Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: folder.map(str::to_string),
+        always_for_file: false,
+        for_session: false,
+    };
+    let mut queued = Vec::new();
+    while queued.len() < 4 {
+        if let HostEvent::AskQueued { request_id, .. } = harness
+            .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+            .await
+        {
+            queued.push(request_id);
+        }
+    }
+    assert_eq!(queued, ["cli-1", "cli-2", "cli-3", "cli-4"]);
+
+    harness
+        .session
+        .answer("cli-1".to_string(), allow(Some(r"C:\x\a")))
+        .await
+        .unwrap();
+    let mut resolved = Vec::new();
+    while resolved.len() < 2 {
+        if let HostEvent::AskResolved {
+            request_id,
+            resolution,
+        } = harness
+            .until_host(|host| matches!(host, HostEvent::AskResolved { .. }))
+            .await
+        {
+            resolved.push((request_id, resolution));
+        }
+    }
+    assert_eq!(
+        resolved[1],
+        (
+            "cli-4".to_string(),
+            Resolution::Answered {
+                answer: allow(None)
+            }
+        ),
+        "resolved as a plain allow, as if tapped"
+    );
+
+    for request_id in ["cli-2", "cli-3"] {
+        harness
+            .session
+            .answer(request_id.to_string(), allow(None))
+            .await
+            .unwrap();
+    }
+    harness.finish().await;
+}
+
 /// A subagent's ask and a main agent's ask both wait; once the subagent's times
 /// out, its next ask is denied on arrival, and the main agent's is still answered.
 const TIMEOUT_SCRIPT: &str = r#"

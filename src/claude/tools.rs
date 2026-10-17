@@ -6,6 +6,8 @@ use crate::claude::protocol::CanUseTool;
 
 pub const BASH: &str = "Bash";
 pub const READ: &str = "Read";
+pub const GLOB: &str = "Glob";
+pub const GREP: &str = "Grep";
 pub const EDIT: &str = "Edit";
 pub const NOTEBOOK_EDIT: &str = "NotebookEdit";
 pub const ASK_USER_QUESTION: &str = "AskUserQuestion";

@@ -7,10 +7,12 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::claude::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
 use crate::claude::tools;
 use crate::session::danger;
+use crate::session::events::Answer;
 
 const ACCEPT_EDITS: &str = "acceptEdits";
 const SESSION: &str = "session";
@@ -130,6 +132,88 @@ impl FileOffer {
             extra: Extra::new(),
         })
     }
+}
+
+/// What an allow granted for the session, to answer the asks queued behind it
+/// that the CLI would no longer have asked.
+#[derive(Debug)]
+pub struct Granted {
+    file: Option<FileOffer>,
+    folder: Option<Folder>,
+    accept_edits: bool,
+}
+
+impl Granted {
+    /// None when `answer` grants nothing beyond its own call.
+    pub fn of(answer: &Answer, ask: &CanUseTool, cwd: &Path) -> Option<Self> {
+        let Answer::Allow {
+            accept_edits,
+            folder,
+            always_for_file,
+            ..
+        } = answer
+        else {
+            return None;
+        };
+        let granted = Self {
+            file: always_for_file.then(|| FileOffer::of(ask, cwd)).flatten(),
+            folder: folder.as_deref().and_then(Folder::parse),
+            accept_edits: *accept_edits,
+        };
+        (granted.file.is_some() || granted.folder.is_some() || granted.accept_edits)
+            .then_some(granted)
+    }
+
+    /// Whether the grant covers `ask`: its file again, as the host allows it even
+    /// past a safety check, or, as the CLI's rules would, a read inside the
+    /// granted folder or an edit offering the same accept edits mode. Bash is
+    /// never covered.
+    pub fn covers(&self, ask: &CanUseTool, cwd: &Path) -> bool {
+        let same_file = self
+            .file
+            .as_ref()
+            .zip(FileOffer::of(ask, cwd))
+            .is_some_and(|(granted, file)| granted.same(&file));
+        if same_file {
+            return true;
+        }
+        if danger::is_safety_check(ask) {
+            return false;
+        }
+        let edit_mode = self.accept_edits && offers_accept_edits(ask);
+        let in_folder = self
+            .folder
+            .as_ref()
+            .is_some_and(|folder| reads_inside(ask, folder, cwd));
+        edit_mode || in_folder
+    }
+}
+
+/// A Read of a file below `folder`, or a Glob or Grep searching inside it.
+fn reads_inside(ask: &CanUseTool, folder: &Folder, cwd: &Path) -> bool {
+    let input = |key: &str| ask.input.get(key).and_then(Value::as_str);
+    let (target, folder_itself) = match ask.tool_name.as_str() {
+        tools::READ => (input("file_path"), false),
+        tools::GLOB => {
+            let pattern = input("pattern").unwrap_or_default();
+            if Path::new(pattern).has_root()
+                || Folder::parse(pattern).is_some()
+                || pattern.split(['/', '\\']).any(|part| part == "..")
+            {
+                return false;
+            }
+            (Some(input("path").unwrap_or(".")), true)
+        }
+        tools::GREP => (Some(input("path").unwrap_or(".")), true),
+        _ => return false,
+    };
+    target
+        .and_then(|target| Folder::parse(danger::absolute(target, cwd).to_str()?))
+        .is_some_and(|target| {
+            target
+                .below(folder)
+                .is_some_and(|rest| folder_itself || !rest.is_empty())
+        })
 }
 
 /// Whether the ask is an edit carrying the CLI's `setMode acceptEdits` suggestion.
@@ -691,6 +775,82 @@ mod tests {
         serde_json::from_value(json!({"tool_name": tool_name, "input": input,
             "tool_use_id": "t1", "decision_reason_type": reason_type}))
         .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_grant_covers_what_the_cli_would_no_longer_ask() {
+        let cwd = Path::new(r"C:\x\a");
+        let grant = |folder: Option<&str>, accept_edits: bool, always_for_file: bool| {
+            let answer = Answer::Allow {
+                updated_input: None,
+                note: None,
+                accept_edits,
+                folder: folder.map(str::to_string),
+                always_for_file,
+                for_session: false,
+            };
+            let first = tool("Edit", json!({"file_path": r"C:\x\p.md"}), None);
+            Granted::of(&answer, &first, cwd)
+        };
+        assert!(
+            grant(None, false, false).is_none(),
+            "a plain allow grants nothing"
+        );
+
+        let folder = grant(Some(r"C:\x\a"), false, false).unwrap();
+        let covers = |name: &str, input: Value| folder.covers(&tool(name, input, None), cwd);
+        assert!(covers("Read", json!({"file_path": r"c:\X\A\b\1.md"})));
+        assert!(
+            covers("Read", json!({"file_path": "b/1.md"})),
+            "relative to the cwd"
+        );
+        assert!(!covers("Read", json!({"file_path": r"C:\x\ab\1.md"})));
+        assert!(!covers("Read", json!({"file_path": r"C:\x\a\..\c\1.md"})));
+        assert!(covers("Grep", json!({"pattern": "fn", "path": r"C:\x\a"})));
+        assert!(
+            covers("Grep", json!({"pattern": "fn"})),
+            "the cwd by default"
+        );
+        assert!(!covers("Grep", json!({"pattern": "fn", "path": r"C:\x"})));
+        assert!(covers(
+            "Glob",
+            json!({"pattern": "**/*.md", "path": r"C:\x\a\b"})
+        ));
+        assert!(!covers("Glob", json!({"pattern": "../**/*.md"})));
+        assert!(!covers("Glob", json!({"pattern": r"C:\x\**\*.md"})));
+        assert!(!covers("Glob", json!({"pattern": "/x/**"})));
+        assert!(!covers("Bash", json!({"command": r"cat C:\x\a\1.md"})));
+        assert!(!covers("Edit", json!({"file_path": r"C:\x\a\1.md"})));
+        assert!(
+            !folder.covers(
+                &tool(
+                    "Read",
+                    json!({"file_path": r"C:\x\a\1.md"}),
+                    Some("safetyCheck")
+                ),
+                cwd
+            ),
+            "a safety check ignores rules"
+        );
+
+        let file = grant(None, false, true).unwrap();
+        assert!(file.covers(
+            &tool(
+                "Write",
+                json!({"file_path": r"c:\x\P.md"}),
+                Some("safetyCheck")
+            ),
+            cwd
+        ));
+        assert!(!file.covers(&tool("Read", json!({"file_path": r"C:\x\p.md"}), None), cwd));
+
+        let edits = grant(None, true, false).unwrap();
+        let mut offered = ask("Edit", json!([accept_edits()]));
+        offered.input = json!({"file_path": r"C:\x\a\q.md"});
+        assert!(edits.covers(&offered, cwd));
+        offered.permission_suggestions = None;
+        assert!(!edits.covers(&offered, cwd));
     }
 
     fn edit_rule(tool_name: &str, content: &str) -> Value {
