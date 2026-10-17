@@ -14,11 +14,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::http::api::ApiError;
 use crate::http::files::{PathQuery, blocking, canonical, display_path, is_binary};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Git output past this many bytes fails the call instead of filling memory.
+const OUTPUT_BYTES_MAX: usize = 32 * 1024 * 1024;
 /// A file with more changed lines than this keeps its counts but not its lines.
 const FILE_LINES_MAX: usize = 5_000;
 /// Untracked files past this many are listed without reading them.
@@ -31,6 +34,8 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 pub enum GitError {
     NotFound,
     NotARepo,
+    /// Git printed more than `OUTPUT_BYTES_MAX`.
+    TooLarge,
     Failed(String),
 }
 
@@ -48,6 +53,7 @@ impl From<GitError> for ApiError {
         match err {
             GitError::NotFound => Self::new(StatusCode::NOT_FOUND, "not_found"),
             GitError::NotARepo => Self::new(StatusCode::BAD_REQUEST, "not_a_repo"),
+            GitError::TooLarge => Self::new(StatusCode::UNPROCESSABLE_ENTITY, "too_large"),
             GitError::Failed(message) => Self::internal("git failed", message),
         }
     }
@@ -86,10 +92,41 @@ async fn run(root: &Path, config: &[String], args: &[&str]) -> Result<Output, Gi
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    tokio::time::timeout(GIT_TIMEOUT, command.output())
+    let mut child = command
+        .spawn()
+        .map_err(|err| GitError::Failed(format!("cannot run git: {err}")))?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(GitError::Failed("git pipes missing".to_string()));
+    };
+    // Past a cap the child is dropped, which kills it.
+    let collect = async {
+        tokio::try_join!(
+            read_capped(stdout, OUTPUT_BYTES_MAX),
+            read_capped(stderr, OUTPUT_BYTES_MAX),
+            async { Ok(child.wait().await?) },
+        )
+    };
+    let (stdout, stderr, status) = tokio::time::timeout(GIT_TIMEOUT, collect)
         .await
-        .map_err(|_| GitError::Failed("git timed out".to_string()))?
-        .map_err(|err| GitError::Failed(format!("cannot run git: {err}")))
+        .map_err(|_| GitError::Failed("git timed out".to_string()))??;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// All of `pipe`, or `TooLarge` once it passes `max` bytes.
+async fn read_capped(pipe: impl AsyncRead + Unpin, max: usize) -> Result<Vec<u8>, GitError> {
+    let mut bytes = Vec::new();
+    pipe.take(max as u64 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|err| GitError::Failed(format!("read git output: {err}")))?;
+    if bytes.len() > max {
+        return Err(GitError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 /// A repository's own config can name programs for git to run on `status` and
@@ -777,6 +814,15 @@ Binary files /dev/null and b/img.png differ
         assert_eq!(unquote("plain"), "plain");
         assert_eq!(side_path("\"b/sp ace\"\t", "b/").as_deref(), Some("sp ace"));
         assert_eq!(header_path("a/x y b/x y").as_deref(), Some("x y"));
+    }
+
+    #[tokio::test]
+    async fn output_past_the_cap_is_refused() {
+        assert_eq!(read_capped(&b"hello"[..], 5).await.unwrap(), b"hello");
+        assert!(matches!(
+            read_capped(&b"hello"[..], 4).await,
+            Err(GitError::TooLarge)
+        ));
     }
 
     #[test]

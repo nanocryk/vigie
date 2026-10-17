@@ -161,6 +161,7 @@ async function check(response: Response): Promise<void> {
     code = null;
   }
   if (code === "not_a_repo") throw new Error("Not inside a git repository");
+  if (code === "too_large") throw new Error("Too many changes to show");
   throw new Error(code ?? `HTTP ${response.status}`);
 }
 
