@@ -6,7 +6,7 @@ mod crypto;
 mod routes;
 
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use parking_lot::Mutex;
+use reqwest::Url;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
@@ -103,6 +105,9 @@ impl Pusher {
             .timeout(SEND_TIMEOUT)
             // Push services answer directly; a redirect could lead past the endpoint check.
             .redirect(reqwest::redirect::Policy::none())
+            // Through a proxy the resolver would vet the proxy, not the endpoint.
+            .no_proxy()
+            .dns_resolver(Arc::new(PublicOnly))
             .build()
             .context("build the push client")?;
         Ok(Self {
@@ -197,7 +202,7 @@ impl Pusher {
         payload: &[u8],
     ) -> Result<SendOutcome> {
         // Checked again here, so a stored subscription cannot aim the server at its own network.
-        validate_endpoint(&subscription.endpoint)
+        let endpoint = validate_endpoint(&subscription.endpoint)
             .map_err(|reason| anyhow!("bad endpoint: {reason}"))?;
         let ua_public = URL_SAFE_NO_PAD
             .decode(subscription.keys.p256dh.as_bytes())
@@ -215,11 +220,11 @@ impl Pusher {
             .vapid
             .encrypt(&ua_public, &auth_secret, payload)
             .context("aes128gcm encrypt")?;
-        let audience = crypto::endpoint_origin(&subscription.endpoint)?;
+        let audience = crypto::endpoint_origin(&endpoint);
         let jwt = self.vapid.sign_jwt(&audience)?;
         let response = self
             .client
-            .post(&subscription.endpoint)
+            .post(endpoint)
             .header("TTL", MESSAGE_TTL_SECS)
             .header("Content-Encoding", "aes128gcm")
             .header("Content-Type", "application/octet-stream")
@@ -246,30 +251,87 @@ impl Pusher {
 
 /// Refuses endpoints that would make the server probe its own network: the
 /// endpoint comes from a client and the server posts to it. Push services are
-/// public HTTPS hostnames, so plaintext, IP literals and local names go.
-fn validate_endpoint(endpoint: &str) -> std::result::Result<(), &'static str> {
-    let rest = endpoint
-        .strip_prefix("https://")
-        .ok_or("endpoint must use https")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let authority = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    if authority.is_empty() {
-        return Err("endpoint has no host");
+/// public HTTPS hostnames, so plaintext, IP literals and local names go. The
+/// parse is the one `reqwest` connects with, so both see the same host; names
+/// resolving to private addresses are caught by [`PublicOnly`].
+fn validate_endpoint(endpoint: &str) -> std::result::Result<Url, &'static str> {
+    let url = Url::parse(endpoint).map_err(|_| "endpoint is not a URL")?;
+    if url.scheme() != "https" {
+        return Err("endpoint must use https");
     }
-    if authority.starts_with('[') {
+    let host = url.host_str().ok_or("endpoint has no host")?;
+    if host.starts_with('[') || host.parse::<IpAddr>().is_ok() {
         return Err("endpoint host must be a hostname, not an IP literal");
     }
-    let host = authority.split(':').next().unwrap_or(authority);
-    if host.parse::<IpAddr>().is_ok() {
-        return Err("endpoint host must be a hostname, not an IP literal");
-    }
-    let lower = host.to_ascii_lowercase();
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
     if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") {
         return Err("endpoint host is not publicly routable");
     }
-    Ok(())
+    Ok(url)
+}
+
+/// Resolves names to their public addresses only, so a name pointing at a
+/// private or loopback address cannot reach the server's own network.
+struct PublicOnly;
+
+impl Resolve for PublicOnly {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|address| is_public(address.ip()))
+                .collect();
+            if addresses.is_empty() {
+                return Err(format!("{host} has no public address").into());
+            }
+            Ok(Box::new(addresses.into_iter()) as Addrs)
+        })
+    }
+}
+
+/// Whether `ip` is routable on the public internet.
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_v4(ip),
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            // Addresses embedding an IPv4 one: mapped, NAT64 and 6to4.
+            let embedded = if let Some(v4) = ip.to_ipv4_mapped() {
+                Some(v4)
+            } else if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                Some(Ipv4Addr::from_bits(ip.to_bits() as u32))
+            } else if segments[0] == 0x2002 {
+                Some(Ipv4Addr::from_bits((ip.to_bits() >> 80) as u32))
+            } else {
+                None
+            };
+            if let Some(v4) = embedded {
+                return is_public_v4(v4);
+            }
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || segments[0] & 0xfe00 == 0xfc00
+                || segments[0] & 0xffc0 == 0xfe80
+                || segments[0] & 0xffc0 == 0xfec0
+                || segments[..2] == [0x2001, 0x0db8]
+                || segments[..6] == [0, 0, 0, 0, 0, 0])
+        }
+    }
+}
+
+fn is_public_v4(ip: Ipv4Addr) -> bool {
+    let [first, second, third, _] = ip.octets();
+    !(first == 0
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_documentation()
+        || first >= 224
+        || (first == 100 && second & 0xc0 == 64)
+        || (first == 192 && second == 0 && third == 0)
+        || (first == 198 && second & 0xfe == 18))
 }
 
 /// Pushes every notice the manager raises, and clears a discussion's notification
@@ -348,6 +410,46 @@ mod tests {
         assert!(validate_endpoint("https://localhost:8080/x").is_err());
         assert!(validate_endpoint("https://printer.local/x").is_err());
         assert!(validate_endpoint("https://user@10.0.0.1/x").is_err());
+        assert!(validate_endpoint(r"https://127.0.0.1\@fcm.googleapis.com/x").is_err());
+        assert!(validate_endpoint("https://2130706433/x").is_err());
+        assert!(validate_endpoint("https://0x7f.1/x").is_err());
+        assert!(validate_endpoint("https://LOCALHOST./x").is_err());
+    }
+
+    #[test]
+    fn only_public_addresses_pass() {
+        let public = |text: &str| is_public(text.parse().unwrap());
+        assert!(public("142.250.74.110"));
+        assert!(public("2a00:1450:4007:80e::200a"));
+        for private in [
+            "0.0.0.0",
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:192.168.0.1",
+            "64:ff9b::a00:1",
+            "2002:7f00:1::",
+        ] {
+            assert!(!public(private), "{private}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_resolver_drops_private_addresses() {
+        let resolved = PublicOnly.resolve("localhost".parse().unwrap()).await;
+        assert!(resolved.is_err());
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest::Url;
 use ring::{
     aead, agreement, hkdf,
     rand::{SecureRandom, SystemRandom},
@@ -180,12 +181,8 @@ fn hkdf_expand(prk: &hkdf::Prk, info: &[&[u8]], len: usize) -> Result<Vec<u8>> {
 }
 
 /// The VAPID audience: scheme and authority of the endpoint.
-pub fn endpoint_origin(endpoint: &str) -> Result<String> {
-    let rest = endpoint
-        .strip_prefix("https://")
-        .context("endpoint must use https")?;
-    let host = rest.split('/').next().unwrap_or(rest);
-    Ok(format!("https://{host}"))
+pub fn endpoint_origin(endpoint: &Url) -> String {
+    endpoint.origin().ascii_serialization()
 }
 
 #[cfg(test)]
@@ -195,7 +192,9 @@ mod tests {
     #[test]
     fn the_audience_is_the_endpoint_origin() {
         assert_eq!(
-            endpoint_origin("https://updates.push.services.mozilla.com/wpush/v2/abc").unwrap(),
+            endpoint_origin(
+                &Url::parse("https://updates.push.services.mozilla.com/wpush/v2/abc").unwrap()
+            ),
             "https://updates.push.services.mozilla.com"
         );
     }
