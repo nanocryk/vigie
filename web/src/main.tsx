@@ -2,6 +2,7 @@ import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/App";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { startDisplay } from "@/display";
 import { bootstrap } from "@/pairing";
 import "@/index.css";
@@ -27,8 +28,10 @@ if ("serviceWorker" in navigator) {
 
 createRoot(rootEl).render(
   <StrictMode>
-    <Suspense fallback={null}>
-      <App boot={boot} />
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={null}>
+        <App boot={boot} />
+      </Suspense>
+    </ErrorBoundary>
   </StrictMode>,
 );

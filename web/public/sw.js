@@ -32,15 +32,26 @@ self.addEventListener("push", (event) => {
       body: message.body,
       tag: message.tag,
       renotify: true,
-      data: { url: new URL(message.url, self.registration.scope).href },
+      data: { url: appUrl(message.url) },
     }),
   );
 });
 
+// `url` resolved against the scope when it stays inside it, else the scope.
+function appUrl(url) {
+  const scope = self.registration.scope;
+  try {
+    const resolved = new URL(String(url), scope).href;
+    return resolved.startsWith(scope) ? resolved : scope;
+  } catch {
+    return scope;
+  }
+}
+
 // Focuses an open vigie window on the discussion, else opens one.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification.data?.url ?? self.registration.scope;
+  const url = appUrl(event.notification.data?.url ?? "");
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

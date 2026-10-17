@@ -1,3 +1,5 @@
+import { decodeHashPart } from "@/route";
+
 export type BootResult =
   | { kind: "authed"; label: string | null }
   | { kind: "unpaired" }
@@ -16,7 +18,7 @@ const DEFAULT_RETRY_AFTER_SECS = 3600;
 
 export function extractAuthToken(hash: string): string | null {
   if (!hash.startsWith(AUTH_PREFIX)) return null;
-  const token = decodeURIComponent(hash.slice(AUTH_PREFIX.length));
+  const token = decodeHashPart(hash.slice(AUTH_PREFIX.length));
   return token === "" ? null : token;
 }
 
@@ -54,9 +56,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Resolves the device's auth state, exchanging a `#auth=` token when present. */
+/**
+ * Resolves the device's auth state, exchanging a `#auth=` token when present.
+ * The token leaves the URL before any request, so no failure keeps it in the
+ * address bar or the history.
+ */
 export async function bootstrap(env: BootEnv): Promise<BootResult> {
   const token = extractAuthToken(env.hash);
+  if (env.hash.startsWith(AUTH_PREFIX)) env.stripHash();
 
   let whoami: { authed: boolean; label: string | null };
   try {
@@ -67,7 +74,6 @@ export async function bootstrap(env: BootEnv): Promise<BootResult> {
   }
 
   if (whoami.authed) {
-    if (token !== null) env.stripHash();
     return { kind: "authed", label: whoami.label };
   }
   if (token === null) return { kind: "unpaired" };
@@ -84,19 +90,14 @@ export async function bootstrap(env: BootEnv): Promise<BootResult> {
   }
 
   if (res.ok) {
-    env.stripHash();
     try {
       return { kind: "authed", label: parseExchangeOk(await res.json(), "exchange") };
     } catch (err) {
       return { kind: "error", message: errorMessage(err) };
     }
   }
-  if (res.status === 401) {
-    env.stripHash();
-    return { kind: "bad-token" };
-  }
+  if (res.status === 401) return { kind: "bad-token" };
   if (res.status === 429) {
-    env.stripHash();
     const header = Number.parseInt(res.headers.get("Retry-After") ?? "", 10);
     const retryAfterSecs = Number.isFinite(header) ? header : DEFAULT_RETRY_AFTER_SECS;
     return { kind: "rate-limited", retryAfterSecs };

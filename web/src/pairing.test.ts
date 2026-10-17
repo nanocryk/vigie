@@ -44,6 +44,7 @@ describe("extractAuthToken", () => {
     expect(extractAuthToken("")).toBeNull();
     expect(extractAuthToken("#session=x")).toBeNull();
     expect(extractAuthToken("#auth=")).toBeNull();
+    expect(extractAuthToken("#auth=%")).toBeNull();
   });
 });
 
@@ -117,5 +118,23 @@ describe("bootstrap", () => {
       kind: "error",
       message: "Cannot reach server: offline",
     });
+  });
+
+  it("strips the token before the first request", async () => {
+    let strippedFirst = false;
+    let strips = 0;
+    const env: BootEnv = {
+      hash: "#auth=tok",
+      fetch: async () => {
+        strippedFirst = strips === 1;
+        throw new Error("offline");
+      },
+      stripHash: () => {
+        strips += 1;
+      },
+    };
+    await bootstrap(env);
+    expect(strippedFirst).toBe(true);
+    expect(strips).toBe(1);
   });
 });

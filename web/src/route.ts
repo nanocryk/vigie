@@ -16,25 +16,38 @@ const FILES_HASH = "#/files";
 const SEARCH_HASH = /^#\/search(?:\/([^/?#]+))?(?:\?q=([^#]*))?$/;
 const AROUND_HASH = /^#\/around\/([^/?#]+)\/(\d+)$/;
 
+/** `decodeURIComponent`, or null for a malformed escape such as `%E0%A4%A`. */
+export function decodeHashPart(part: string): string | null {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
+
+/** A hash that does not name a screen, or names it with malformed escapes, is the list. */
 export function parseRoute(hash: string): Route {
   if (hash === SETTINGS_HASH) return { kind: "settings" };
   if (hash === FILES_HASH) return { kind: "files" };
   const search = SEARCH_HASH.exec(hash);
   if (search !== null) {
     const [, discussion, query] = search;
-    return {
-      kind: "search",
-      discussion: discussion === undefined ? null : decodeURIComponent(discussion),
-      query: query === undefined ? "" : decodeURIComponent(query),
-    };
+    const decodedDiscussion = discussion === undefined ? null : decodeHashPart(discussion);
+    const decodedQuery = query === undefined ? "" : decodeHashPart(query);
+    if ((discussion !== undefined && decodedDiscussion === null) || decodedQuery === null) {
+      return { kind: "list" };
+    }
+    return { kind: "search", discussion: decodedDiscussion, query: decodedQuery };
   }
   const around = AROUND_HASH.exec(hash);
   if (around !== null) {
     const [, discussion = "", seq = ""] = around;
-    return { kind: "around", discussion: decodeURIComponent(discussion), seq: Number(seq) };
+    const decoded = decodeHashPart(discussion);
+    return decoded === null ? { kind: "list" } : { kind: "around", discussion: decoded, seq: Number(seq) };
   }
   const id = SESSION_HASH.exec(hash)?.[1];
-  return id === undefined ? { kind: "list" } : { kind: "session", id: decodeURIComponent(id) };
+  const decodedId = id === undefined ? null : decodeHashPart(id);
+  return decodedId === null ? { kind: "list" } : { kind: "session", id: decodedId };
 }
 
 export function routeHash(route: Route): string {

@@ -386,6 +386,18 @@ describe("routes", () => {
     expect(parseRoute("")).toEqual({ kind: "list" });
     expect(parseRoute("#auth=token")).toEqual({ kind: "list" });
   });
+
+  it("falls back to the list on malformed escapes", () => {
+    expect(parseRoute("#/s/%E0%A4%A")).toEqual({ kind: "list" });
+    expect(parseRoute("#/search?q=%")).toEqual({ kind: "list" });
+    expect(parseRoute("#/search/%zz")).toEqual({ kind: "list" });
+    expect(parseRoute("#/around/%/3")).toEqual({ kind: "list" });
+    expect(parseRoute("#/search?q=a%20b")).toEqual({
+      kind: "search",
+      discussion: null,
+      query: "a b",
+    });
+  });
 });
 
 describe("folderName", () => {
