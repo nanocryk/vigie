@@ -594,6 +594,12 @@ function historySearchSummary(input: unknown, cwd: string | null): string | null
   return parts.join(", ");
 }
 
+/** The character a `history_read` call reads its message on from, if it pages one. */
+function historyReadFrom(input: unknown): number | null {
+  const from = isRecord(input) ? input["from"] : undefined;
+  return typeof from === "number" ? from : null;
+}
+
 /** The exchanges a `history_read` call asks for around its message. */
 export function historyReadRange(input: unknown): string {
   const count = (key: string) => {
@@ -620,6 +626,8 @@ export function historyReadSummary(input: unknown, hit: HistoryHit, now: number)
   const who = message.role === "user" ? "you" : "Claude";
   const time = Date.parse(message.time);
   const when = Number.isNaN(time) ? message.time : formatStamp(time, now);
+  const from = historyReadFrom(input);
+  if (from !== null) return `Read on "${snippet}" (${who}, ${when}) ${where}, from character ${from}`;
   return `Read around "${snippet}" (${who}, ${when}) ${where}, ${historyReadRange(input)}`;
 }
 
@@ -627,8 +635,11 @@ function summaryOf(name: string, input: unknown, cwd: string | null): string | n
   switch (name) {
     case HISTORY_SEARCH_TOOL:
       return historySearchSummary(input, cwd);
-    case HISTORY_READ_TOOL:
+    case HISTORY_READ_TOOL: {
+      const from = historyReadFrom(input);
+      if (from !== null) return `a message, from character ${from}`;
       return `${historyReadRange(input)} a message`;
+    }
     case "Bash": {
       const command = field(input, "command");
       const background = isRecord(input) && input["run_in_background"] === true;

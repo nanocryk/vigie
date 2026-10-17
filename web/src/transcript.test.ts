@@ -1424,6 +1424,9 @@ describe("history tool summaries", () => {
     expect(toolSummary(HISTORY_READ_TOOL, { session: "s", seq: 4 })).toBe(
       "1 exchange before and after a message",
     );
+    expect(toolSummary(HISTORY_READ_TOOL, { session: "s", seq: 4, from: 2000 })).toBe(
+      "a message, from character 2000",
+    );
   });
 
   it("reads a fetched hit without its session id or seq", () => {
@@ -1444,6 +1447,9 @@ describe("history tool summaries", () => {
     );
     expect(line).not.toContain("fce5a5d9");
     expect(line).not.toContain("358946");
+    expect(historyReadSummary({ ...input, from: 2000 }, hit, now)).toBe(
+      `Read on "Here's the ${"plan ".repeat(40).slice(0, 109)}..." (Claude, 13:16) in "vigie", from character 2000`,
+    );
     expect(
       historyReadSummary(
         input,

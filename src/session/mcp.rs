@@ -42,7 +42,7 @@ const RESTART_SERVER_DESCRIPTION: &str = "Restart the vigie server on the last b
 
 const HISTORY_SEARCH_DESCRIPTION: &str = "Search earlier vigie discussions for what was said: decisions, past fixes, the user's wording. Only message text is searched: the user's messages and Claude's text replies, never tool calls or their output. A message matches when it contains every word of `query`, ignoring case; no regex. Searches this session's folder and below it unless `project` or `all_projects` says otherwise. Hits come newest first, grouped by session, each with its seq and a snippet; `history_read` gives the exchanges around one. Results come in pages: the last line names the offset of the next one.";
 
-const HISTORY_READ_DESCRIPTION: &str = "Read the exchanges around a message `history_search` found: the exchange holding it (a user message and the replies until the next one), with `before` exchanges before it and `after` exchanges after it. Messages past 2000 characters are cut; the hit is marked.";
+const HISTORY_READ_DESCRIPTION: &str = "Read the exchanges around a message `history_search` found: the exchange holding it (a user message and the replies until the next one), with `before` exchanges before it and `after` exchanges after it. The hit is marked and cut past 2000 characters, the other messages past 600. A cut message ends with the seq and `from` that read on: with `from`, only that message is returned, from that character on.";
 
 const RESTART_SCHEDULED: &str =
     "Restart scheduled: it happens once no turn runs in any session, so end this turn now.";
@@ -341,6 +341,10 @@ fn history_read_tool() -> Value {
                     "type": "integer",
                     "description": "Exchanges after the hit's one. Default 1, at most 5.",
                 },
+                "from": {
+                    "type": "integer",
+                    "description": "Read only the hit message, from this character on, as a cut marker names. `before` and `after` are ignored.",
+                },
             },
             "required": ["session", "seq"],
         },
@@ -351,6 +355,8 @@ const SEARCH_LIMIT: usize = 20;
 const READ_EXCHANGES: u32 = 1;
 const READ_MAX_EXCHANGES: u32 = 5;
 const READ_CHARS: usize = 2000;
+/// Messages around the hit only give context, so they are cut sooner.
+const CONTEXT_CHARS: usize = 600;
 
 async fn history_search(
     arguments: &Value,
@@ -448,8 +454,14 @@ async fn history_read(arguments: &Value, store: Option<&Store>) -> Result<String
         .parse()
         .map_err(|_| "`session` must be a session id `history_search` gave.")?;
     let seq = count_argument(arguments, "seq")?.ok_or("`seq` is required.")? as u64;
-    let before = exchanges_argument(arguments, "before")?;
-    let after = exchanges_argument(arguments, "after")?;
+    let from = count_argument(arguments, "from")?;
+    let (before, after) = match from {
+        Some(_) => (0, 0),
+        None => (
+            exchanges_argument(arguments, "before")?,
+            exchanges_argument(arguments, "after")?,
+        ),
+    };
     let row = history
         .session(session)
         .await
@@ -459,23 +471,44 @@ async fn history_read(arguments: &Value, store: Option<&Store>) -> Result<String
         .messages_around(session, seq, before, after)
         .await
         .map_err(|err| format!("{err:#}"))?;
-    if !messages.iter().any(|message| message.seq == seq) {
+    let Some(hit) = messages.iter().find(|message| message.seq == seq) else {
         return Err(format!("Session {session} has no message {seq}."));
+    };
+    if let Some(from) = from {
+        let Some((start, _)) = hit.text.char_indices().nth(from) else {
+            return Err(format!(
+                "Message {seq} has only {} characters.",
+                hit.text.chars().count()
+            ));
+        };
+        return Ok(format!(
+            "{}\n--- {} {} {}, from character {from}\n{}",
+            session_line(&row),
+            hit.seq,
+            hit.time.format("%Y-%m-%d %H:%M"),
+            hit.role.as_str(),
+            cut_message(&hit.text[start..], hit.seq, from, READ_CHARS)
+        ));
     }
     let mut text = format!(
         "{}\n{} messages, oldest first, the hit marked. A message: seq, time (UTC), who spoke, \
-         then its text, cut past {READ_CHARS} characters.",
+         then its text. The hit is cut past {READ_CHARS} characters, the others past \
+         {CONTEXT_CHARS}.",
         session_line(&row),
         messages.len()
     );
     for message in &messages {
-        let mark = if message.seq == seq { " (hit)" } else { "" };
+        let (mark, limit) = if message.seq == seq {
+            (" (hit)", READ_CHARS)
+        } else {
+            ("", CONTEXT_CHARS)
+        };
         text.push_str(&format!(
             "\n\n--- {} {} {}{mark}\n{}",
             message.seq,
             message.time.format("%Y-%m-%d %H:%M"),
             message.role.as_str(),
-            cut(&message.text, READ_CHARS)
+            cut_message(&message.text, message.seq, 0, limit)
         ));
     }
     Ok(text)
@@ -500,6 +533,20 @@ fn cut(text: &str, limit: usize) -> String {
             "{} [{} more characters]",
             &text[..end],
             text[end..].chars().count()
+        ),
+        None => text.to_string(),
+    }
+}
+
+/// `text`, which starts at character `from` of message `seq`, cut to `limit`
+/// characters, followed by how many were cut and where to read on.
+fn cut_message(text: &str, seq: u64, from: usize, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!(
+            "{} [{} more characters: seq {seq} from {}]",
+            &text[..end],
+            text[end..].chars().count(),
+            from + limit
         ),
         None => text.to_string(),
     }
@@ -1246,8 +1293,32 @@ mod tests {
                 "--- 4 2026-09-02 10:00 claude",
             ]
         );
-        assert!(text.ends_with(&format!("{} [5 more characters]", "c".repeat(READ_CHARS))));
+        assert!(text.ends_with(&format!(
+            "{} [1405 more characters: seq 4 from {CONTEXT_CHARS}]",
+            "c".repeat(CONTEXT_CHARS)
+        )));
+
+        let (text, failed) = run(
+            HISTORY_READ,
+            json!({"session": here.to_string(), "seq": 4, "from": CONTEXT_CHARS, "before": 9}),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        assert!(text.contains("\n--- 4 2026-09-02 10:00 claude, from character 600\n"));
+        assert_eq!(
+            text.lines().filter(|line| line.starts_with("--- ")).count(),
+            1
+        );
+        assert!(text.ends_with(&format!("\n{}", "c".repeat(1405))));
+        let (text, failed) =
+            run(HISTORY_READ, json!({"session": here.to_string(), "seq": 4})).await;
+        assert!(!failed, "{text}");
+        assert!(text.contains(&format!(
+            "{} [5 more characters: seq 4 from {READ_CHARS}]",
+            "c".repeat(READ_CHARS)
+        )));
         for bad in [
+            json!({"session": here.to_string(), "seq": 4, "from": 2005}),
             json!({"session": here.to_string(), "seq": 9}),
             json!({"session": "nope", "seq": 1}),
             json!({"session": Uuid::new_v4().to_string(), "seq": 1}),
