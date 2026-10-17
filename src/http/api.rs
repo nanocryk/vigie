@@ -308,17 +308,25 @@ pub async fn version(State(state): State<AppState>) -> Response {
 }
 
 /// Whether the server can restart itself, whether it runs a previous build because
-/// copying the latest failed, whether a restart waits for every turn to end, and
-/// how many turns run.
+/// copying the latest failed, whether a build differing from the running binary
+/// waits for a restart, whether a restart waits for every turn to end, and how
+/// many turns run.
 pub async fn server(State(state): State<AppState>) -> Response {
     let restart = state.manager.server_restart();
     let supervised = restart.supervision() == Supervision::Shim;
     let stale_copy = restart.running_build() == RunningBuild::Previous;
+    let new_build = match restart.new_build() {
+        Some(check) => tokio::task::spawn_blocking(move || check.ready())
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
     let pending = restart.state() == RestartState::Pending;
     let turns = state.manager.running_turns().await;
     Json(json!({
         "supervised": supervised,
         "stale_copy": stale_copy,
+        "new_build": new_build,
         "pending": pending,
         "turns": turns,
     }))

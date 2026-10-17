@@ -12,6 +12,9 @@ exe=""
 [[ $OSTYPE == msys* || $OSTYPE == cygwin* ]] && exe=.exe
 built=target/release/vigie$exe
 running=target/serve/vigie$exe
+# The server compares the latest build against itself, so it needs a path it can open.
+built_path=$PWD/$built
+[[ -n $exe ]] && built_path=$(cygpath -w "$built_path")
 mkdir -p target/serve
 staging=$running.tmp
 while true; do
@@ -26,7 +29,7 @@ while true; do
     echo "copying $built failed, running the previous copy"
     stale=1
   fi
-  VIGIE_SUPERVISED=1 VIGIE_STALE_COPY=$stale "$running" serve "$@"
+  VIGIE_SUPERVISED=1 VIGIE_STALE_COPY=$stale VIGIE_BUILT="$built_path" "$running" serve "$@"
   code=$?
   if [[ $code -ne $restart_code ]]; then
     echo "vigie exited with code $code"

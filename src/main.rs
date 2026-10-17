@@ -20,7 +20,7 @@ use vigie::http::server::{AppState, build_app};
 use vigie::http::update::Updater;
 use vigie::session::manager::{Probe, SessionManager};
 use vigie::session::server_restart::{
-    self, RestartState, RunningBuild, ServerRestart, Supervision,
+    self, NewBuild, RestartState, RunningBuild, ServerRestart, Supervision,
 };
 use vigie::state_dir;
 use vigie::store::Store;
@@ -461,8 +461,9 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
     spawn_pruning(store.clone());
-    let restart =
-        ServerRestart::new(Supervision::from_env()).with_running_build(RunningBuild::from_env());
+    let restart = ServerRestart::new(Supervision::from_env())
+        .with_running_build(RunningBuild::from_env())
+        .with_new_build(NewBuild::from_env());
     let manager = SessionManager::start(store, Program::claude(), &dir, restart).await?;
     let probe_dir = store_path.with_file_name("probe");
     tokio::spawn({

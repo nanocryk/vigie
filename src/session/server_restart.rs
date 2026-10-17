@@ -1,7 +1,14 @@
 //! Restarting the whole server, which only works under the `serve.sh` shim: the
 //! server exits with `EXIT_CODE` and the shim runs it again.
 
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
+
 use anyhow::{Result, bail};
+use parking_lot::Mutex;
+use ring::digest;
 use tokio::sync::watch;
 
 /// Exit code asking the shim to run the server again.
@@ -10,6 +17,8 @@ pub const EXIT_CODE: u8 = 75;
 const SUPERVISED_VAR: &str = "VIGIE_SUPERVISED";
 /// Set by the shim when copying the new build failed and it ran the previous copy.
 const STALE_COPY_VAR: &str = "VIGIE_STALE_COPY";
+/// Set by the shim: the latest build, which it copies and runs on a restart.
+const BUILT_VAR: &str = "VIGIE_BUILT";
 
 /// Whether a shim runs the server again when it exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +55,74 @@ impl RunningBuild {
     }
 }
 
+/// Whether the latest build differs from the binary running now, by content.
+#[derive(Debug)]
+pub struct NewBuild {
+    /// The latest build: what a restart would run.
+    built: PathBuf,
+    /// SHA-256 of the running binary, taken at startup.
+    running: Vec<u8>,
+    /// The last answer, for the build's size and modification time then.
+    last: Mutex<Option<(u64, SystemTime, bool)>>,
+}
+
+impl NewBuild {
+    /// Under the shim, which names the latest build in `BUILT_VAR`.
+    pub fn from_env() -> Option<Self> {
+        let built = PathBuf::from(std::env::var_os(BUILT_VAR)?);
+        let running = std::env::current_exe().ok()?;
+        match Self::new(built, &running) {
+            Ok(check) => Some(check),
+            Err(err) => {
+                tracing::warn!("hash the running binary: {err}");
+                None
+            }
+        }
+    }
+
+    pub fn new(built: PathBuf, running: &Path) -> io::Result<Self> {
+        Ok(Self {
+            built,
+            running: file_hash(running)?,
+            last: Mutex::new(None),
+        })
+    }
+
+    /// Hashes the build again unless its size and modification time are unchanged.
+    /// Blocking; false when the build cannot be read.
+    pub fn ready(&self) -> bool {
+        let Ok(meta) = std::fs::metadata(&self.built) else {
+            return false;
+        };
+        let Ok(modified) = meta.modified() else {
+            return false;
+        };
+        let mut last = self.last.lock();
+        if let Some((len, time, ready)) = *last
+            && len == meta.len()
+            && time == modified
+        {
+            return ready;
+        }
+        let ready = file_hash(&self.built).is_ok_and(|hash| hash != self.running);
+        *last = Some((meta.len(), modified, ready));
+        ready
+    }
+}
+
+fn file_hash(path: &Path) -> io::Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut context = digest::Context::new(&digest::SHA256);
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(context.finish().as_ref().to_vec());
+        }
+        context.update(&buffer[..read]);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartState {
     Idle,
@@ -59,6 +136,7 @@ pub enum RestartState {
 pub struct ServerRestart {
     supervision: Supervision,
     running_build: RunningBuild,
+    new_build: Option<Arc<NewBuild>>,
     state: watch::Sender<RestartState>,
 }
 
@@ -67,6 +145,7 @@ impl ServerRestart {
         Self {
             supervision,
             running_build: RunningBuild::Latest,
+            new_build: None,
             state: watch::channel(RestartState::Idle).0,
         }
     }
@@ -76,6 +155,18 @@ impl ServerRestart {
             running_build,
             ..self
         }
+    }
+
+    pub fn with_new_build(self, new_build: Option<NewBuild>) -> Self {
+        Self {
+            new_build: new_build.map(Arc::new),
+            ..self
+        }
+    }
+
+    /// The check for a build newer than the running binary, under the shim.
+    pub fn new_build(&self) -> Option<Arc<NewBuild>> {
+        self.new_build.clone()
     }
 
     pub fn supervision(&self) -> Supervision {
@@ -173,5 +264,20 @@ mod tests {
         restart.when_idle().unwrap();
         assert!(!restart.cancel());
         assert_eq!(restart.state(), RestartState::Now);
+    }
+
+    #[test]
+    fn a_build_differing_from_the_running_binary_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let running = tmp.path().join("running");
+        let built = tmp.path().join("built");
+        std::fs::write(&running, b"first").unwrap();
+        std::fs::write(&built, b"first").unwrap();
+        let check = NewBuild::new(built.clone(), &running).unwrap();
+        assert!(!check.ready(), "the same bytes");
+        std::fs::write(&built, b"second build").unwrap();
+        assert!(check.ready());
+        std::fs::remove_file(&built).unwrap();
+        assert!(!check.ready(), "no build to run");
     }
 }

@@ -2,12 +2,14 @@ import { fetchBuild } from "@/version";
 
 /**
  * Whether the server can restart itself, whether it runs a previous build because
- * copying the latest failed, whether a restart waits for every turn to end, and
- * how many turns run.
+ * copying the latest failed, whether a build differing from the running binary
+ * waits for a restart, whether a restart waits for every turn to end, and how
+ * many turns run.
  */
 export interface ServerStatus {
   supervised: boolean;
   staleCopy: boolean;
+  newBuild: boolean;
   pending: boolean;
   turns: number;
 }
@@ -18,6 +20,7 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
   }
   const supervised: unknown = Reflect.get(raw, "supervised");
   const staleCopy: unknown = Reflect.get(raw, "stale_copy");
+  const newBuild: unknown = Reflect.get(raw, "new_build");
   const pending: unknown = Reflect.get(raw, "pending");
   const turns: unknown = Reflect.get(raw, "turns");
   if (typeof supervised !== "boolean") {
@@ -26,13 +29,16 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
   if (typeof staleCopy !== "boolean") {
     throw new Error(`${label}.stale_copy: expected a boolean: ${JSON.stringify(staleCopy)}`);
   }
+  if (typeof newBuild !== "boolean") {
+    throw new Error(`${label}.new_build: expected a boolean: ${JSON.stringify(newBuild)}`);
+  }
   if (typeof pending !== "boolean") {
     throw new Error(`${label}.pending: expected a boolean: ${JSON.stringify(pending)}`);
   }
   if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 0) {
     throw new Error(`${label}.turns: expected a count: ${JSON.stringify(turns)}`);
   }
-  return { supervised, staleCopy, pending, turns };
+  return { supervised, staleCopy, newBuild, pending, turns };
 }
 
 async function check(response: Response): Promise<void> {

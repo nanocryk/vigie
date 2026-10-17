@@ -478,6 +478,7 @@ function ServerRestart({ updated }: { updated: boolean }) {
     return error === null ? null : <p className="text-xs voice-ui text-destructive">{error}</p>;
   }
   const turns = status.turns;
+  const ready = updated || status.newBuild;
   const waiting = pending && !restarting && !confirming;
   const body = waiting || confirming || error !== null;
   return (
@@ -485,9 +486,16 @@ function ServerRestart({ updated }: { updated: boolean }) {
       id="server"
       title="Server"
       summary={
-        updated
-          ? "An update is built: restart to run it. The app reconnects on its own."
-          : "Runs the last built server binary again. The app reconnects on its own."
+        ready ? (
+          <>
+            <span className="voice-heading text-primary">
+              A new build is ready: restart to run it.
+            </span>{" "}
+            The app reconnects on its own.
+          </>
+        ) : (
+          "Runs the last built server binary again. The app reconnects on its own."
+        )
       }
       forceOpen={body}
       action={
@@ -496,7 +504,7 @@ function ServerRestart({ updated }: { updated: boolean }) {
             type="button"
             disabled={busy || restarting}
             onClick={ask}
-            className={`${BUTTON} shrink-0 ${updated ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            className={`${BUTTON} shrink-0 ${ready ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"}`}
           >
             {restarting ? "Restarting..." : pending ? "Restart now" : "Restart"}
           </button>
