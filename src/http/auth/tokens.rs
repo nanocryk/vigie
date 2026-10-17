@@ -13,6 +13,8 @@ use subtle::ConstantTimeEq;
 use tracing::warn;
 
 pub const PAIR_TOKEN_TTL: Duration = Duration::from_secs(300);
+/// Lifetime of the tokens a local console gives: the startup one and `vigie auth pair`'s.
+pub const LOCAL_TOKEN_TTL: Duration = Duration::from_secs(600);
 const RATE_WINDOW: Duration = Duration::from_secs(600);
 const RATE_MAX_FAILS: usize = 5;
 const RATE_LOCKOUT: Duration = Duration::from_secs(3600);

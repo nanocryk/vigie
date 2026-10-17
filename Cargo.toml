@@ -2,6 +2,7 @@
 name = "vigie"
 version = "0.1.0"
 edition = "2024"
+default-run = "vigie"
 description = "Phone-reachable chat UI driving Claude Code headlessly"
 
 [features]

@@ -65,7 +65,7 @@ impl AppState {
             device,
             chrono::Utc::now(),
         ))?;
-        let auth = Arc::new(Auth::new(registry, false));
+        let auth = Arc::new(Auth::new(registry, false, dir.join("pair-token")));
         let store = Store::open(&dir.join("history.db"))?;
         let vapid = Vapid::load_or_generate(dir)?;
         let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);

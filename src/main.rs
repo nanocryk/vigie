@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use vigie::BASE_PATH_SLASH;
 use vigie::claude::child::Program;
-use vigie::http::auth::{Auth, Registry};
+use vigie::http::auth::{Auth, LOCAL_TOKEN_TTL, Registry, local_token};
 use vigie::http::net;
 use vigie::http::push::{self, Pusher};
 use vigie::http::server::{AppState, build_app};
@@ -61,6 +61,8 @@ enum Command {
 enum AuthCmd {
     /// Revoke every paired device (panic button).
     RevokeAll,
+    /// Print a single-use pair URL for the running server.
+    Pair,
 }
 
 #[derive(Subcommand, Debug)]
@@ -236,6 +238,7 @@ async fn main() -> Result<ExitCode> {
         Command::Auth {
             cmd: AuthCmd::RevokeAll,
         } => run_revoke_all(),
+        Command::Auth { cmd: AuthCmd::Pair } => run_pair(),
         Command::Prune { what } => run_prune(what),
     }
 }
@@ -379,6 +382,51 @@ fn run_revoke_all() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Where `vigie auth pair` finds the running server, written at startup.
+#[derive(Serialize, Deserialize)]
+struct ServerInfo {
+    bind: SocketAddr,
+    /// The app's URLs, each ready for `#auth=<token>`.
+    urls: Vec<String>,
+}
+
+const SERVER_INFO: &str = "server.json";
+const PAIR_TOKEN: &str = "pair-token";
+
+fn run_pair() -> Result<ExitCode> {
+    let dir = state_dir::path()?;
+    let info_path = dir.join(SERVER_INFO);
+    let info: ServerInfo = match std::fs::read(&info_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse {}", info_path.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("No vigie server has run yet; start one with `vigie serve`.");
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(err) => return Err(err).with_context(|| format!("read {}", info_path.display())),
+    };
+    let mut probe = info.bind;
+    if probe.ip().is_unspecified() {
+        probe.set_ip(match probe.ip() {
+            IpAddr::V4(_) => IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            IpAddr::V6(_) => IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        });
+    }
+    if std::net::TcpStream::connect_timeout(&probe, Duration::from_secs(1)).is_err() {
+        eprintln!("No vigie server answers on {probe}; start one with `vigie serve`.");
+        return Ok(ExitCode::FAILURE);
+    }
+    let token = local_token::issue(&dir.join(PAIR_TOKEN))?;
+    println!(
+        "Pair URL (single use, expires in {} minutes):",
+        LOCAL_TOKEN_TTL.as_secs() / 60
+    );
+    for url in &info.urls {
+        println!("  {url}#auth={token}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn serve(args: ServeArgs) -> Result<ExitCode> {
     let dir = state_dir::create()?;
     let settings = Settings::resolve(args, load_config(&dir.join("config.json"))?)?;
@@ -392,7 +440,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
     let devices_path = dir.join("devices.json");
     let registry = Registry::load(devices_path.clone())?;
-    let auth = Arc::new(Auth::new(registry, settings.tls_on()));
+    let auth = Arc::new(Auth::new(registry, settings.tls_on(), dir.join(PAIR_TOKEN)));
 
     // `vigie auth revoke-all` rewrites devices.json from a second process.
     // Reloading here is what makes the panic button reach a running server.
@@ -454,20 +502,33 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
     let app = build_app(state);
 
+    let pair_urls: Vec<String> = std::iter::once(format!(
+        "{scheme}://127.0.0.1:{}{BASE_PATH_SLASH}",
+        bind.port()
+    ))
+    .chain(settings.public_hosts.iter().map(|host| {
+        format!(
+            "{}{BASE_PATH_SLASH}",
+            net::origin(scheme, host, bind.port())
+        )
+    }))
+    .collect();
+    state_dir::write_private(
+        &dir.join(SERVER_INFO),
+        serde_json::to_vec_pretty(&ServerInfo {
+            bind,
+            urls: pair_urls.clone(),
+        })?,
+    )?;
+
     if settings.print_token {
-        let loopback_origin = format!("{scheme}://127.0.0.1:{}", bind.port());
         eprintln!("\nvigie listening on {scheme}://{bind}{BASE_PATH_SLASH}");
-        eprintln!("Pair URL (single use, valid until this process exits):");
         eprintln!(
-            "  {loopback_origin}{BASE_PATH_SLASH}#auth={}",
-            auth.startup_token
+            "Pair URL (single use, expires in {} minutes; `vigie auth pair` prints a new one):",
+            LOCAL_TOKEN_TTL.as_secs() / 60
         );
-        for host in &settings.public_hosts {
-            eprintln!(
-                "  {}{BASE_PATH_SLASH}#auth={}",
-                net::origin(scheme, host, bind.port()),
-                auth.startup_token
-            );
+        for url in &pair_urls {
+            eprintln!("  {url}#auth={}", auth.startup_token);
         }
         eprintln!();
         if !reachable_ips.is_empty() && !bind.ip().is_loopback() {

@@ -1,14 +1,17 @@
 //! Device authentication: a paired device holds a session cookie carrying its
 //! secret, and every protected route goes through `require_auth`.
 
+pub mod local_token;
 mod registry;
 mod routes;
 mod tokens;
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -30,6 +33,8 @@ pub use routes::{
 
 use crate::BASE_PATH;
 use crate::http::server::AppState;
+use local_token::LocalToken;
+pub use tokens::LOCAL_TOKEN_TTL;
 use tokens::{PairTokens, RateLimiter, mint_token, same_token};
 
 pub const COOKIE_NAME: &str = "vigie_session";
@@ -38,12 +43,14 @@ const COOKIE_MAX_AGE_DAYS: i64 = 60;
 pub struct Auth {
     pub registry: Registry,
     pub startup_token: String,
+    startup_expires_at: Instant,
     pub cookie_secure: bool,
     /// Set once the startup token has bootstrapped a device. It stays set for
     /// the life of the process, so the token is not resurrected by a later
     /// revoke emptying the registry.
     startup_spent: AtomicBool,
     pair_tokens: PairTokens,
+    local_token: LocalToken,
     rate_limiter: RateLimiter,
     devices_changed: broadcast::Sender<()>,
     /// Open app connections per device id. A device with no entry is offline.
@@ -79,14 +86,17 @@ impl Drop for ConnectionGuard {
 }
 
 impl Auth {
-    pub fn new(registry: Registry, cookie_secure: bool) -> Self {
+    /// `local_token` is the file `vigie auth pair` writes its token to.
+    pub fn new(registry: Registry, cookie_secure: bool, local_token: PathBuf) -> Self {
         let (devices_changed, _) = broadcast::channel::<()>(16);
         Self {
             registry,
             startup_token: mint_token(),
+            startup_expires_at: Instant::now() + LOCAL_TOKEN_TTL,
             cookie_secure,
             startup_spent: AtomicBool::new(false),
             pair_tokens: PairTokens::default(),
+            local_token: LocalToken::new(local_token),
             rate_limiter: RateLimiter::default(),
             devices_changed,
             connections: Mutex::new(HashMap::new()),
@@ -136,9 +146,9 @@ impl Auth {
         cookie
     }
 
-    /// Constant-time compare against the startup token, without spending it.
+    /// Constant-time compare against the unexpired startup token, without spending it.
     fn matches_startup_token(&self, candidate: &str) -> bool {
-        same_token(&self.startup_token, candidate)
+        Instant::now() < self.startup_expires_at && same_token(&self.startup_token, candidate)
     }
 
     /// Spend the startup token. Returns false if it was already spent, which
@@ -320,7 +330,7 @@ mod tests {
         let registry = Registry::load(tmp.path().join("devices.json")).expect("load registry");
         // The tempdir guard drops here; the registry only touches the file on
         // mutation, and these cases never mutate.
-        Auth::new(registry, false)
+        Auth::new(registry, false, tmp.path().join("pair-token"))
     }
 
     #[test]
@@ -359,6 +369,13 @@ mod tests {
             !auth.spend_startup_token(),
             "startup token accepted a second bootstrap",
         );
+    }
+
+    #[test]
+    fn startup_token_expires() {
+        let mut auth = empty_auth();
+        auth.startup_expires_at = Instant::now();
+        assert!(!auth.matches_startup_token(&auth.startup_token.clone()));
     }
 
     #[test]

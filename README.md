@@ -57,11 +57,17 @@ By default it listens on `https://127.0.0.1:7879/vigie/` with a self-signed cert
 
 ```
 vigie listening on https://127.0.0.1:7879/vigie/
-Pair URL (single use, valid until this process exits):
+Pair URL (single use, expires in 10 minutes; `vigie auth pair` prints a new one):
   https://127.0.0.1:7879/vigie/#auth=...
 ```
 
-Open the pair URL in a browser to pair that device. The browser warns about the self-signed certificate on first visit. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
+Open the pair URL in a browser to pair that device. Once it expires, print a fresh one for the running server, also single use for 10 minutes:
+
+```sh
+cargo run --release -- auth pair
+```
+
+The browser warns about the self-signed certificate on first visit. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
 
 ### Configuration
 

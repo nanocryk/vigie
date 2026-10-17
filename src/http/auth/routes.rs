@@ -75,6 +75,8 @@ pub async fn exchange(
             return ApiError::new(StatusCode::UNAUTHORIZED, "bad_token").into_response();
         }
         ("pair", true)
+    } else if auth.local_token.consume(&req.token) {
+        ("local", false)
     } else {
         auth.rate_limiter.record_failure(ip);
         return ApiError::new(StatusCode::UNAUTHORIZED, "bad_token").into_response();
