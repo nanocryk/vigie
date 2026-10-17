@@ -78,7 +78,7 @@ Settings live in `~/.vigie/config.json`, next to the database, keys and device r
 | `bind`          | `--bind`                 | `127.0.0.1:7879` | Address and port to listen on.                           |
 | `cert`, `key`   | `--cert`, `--key`        | self-signed      | TLS certificate and private key (PEM), given together.   |
 | `public_hosts`  | `--public-host` (repeat) | none             | Extra `host[:port]` names offered for pairing and accepted as origins. |
-| `allow_origins` | `--allow-origin` (repeat)| none             | Extra origins accepted on the WebSocket connection.      |
+| `allow_origins` | `--allow-origin` (repeat)| none             | Extra origins accepted on the WebSocket connection, on writes, and as the Host. |
 
 Other flags: `--http` disables TLS, and is refused on any address other than loopback. `--no-print-token` skips the pair URL.
 

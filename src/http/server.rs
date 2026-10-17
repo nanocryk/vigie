@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Request},
-    http::{HeaderValue, header},
+    extract::{DefaultBodyLimit, Request, State},
+    http::{HeaderValue, StatusCode, header},
     middleware::{Next, from_fn, from_fn_with_state},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post},
 };
 use tower_http::services::{ServeDir, ServeFile};
+use tracing::info;
 
 use crate::http::auth::{self, Auth};
 use crate::http::push::{self, Pusher};
@@ -142,6 +143,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/whoami", get(auth::whoami));
 
     let web_dir = state.web_dir.as_ref().clone();
+    let host_check = from_fn_with_state(state.clone(), known_host);
     let served = Router::new()
         .merge(protected)
         .merge(public)
@@ -156,6 +158,33 @@ pub fn build_app(state: AppState) -> Router {
         .nest(BASE_PATH, served)
         .layer(from_fn(common_headers))
         .layer(from_fn(redirect_bare_base))
+        .layer(host_check)
+}
+
+/// A page on a domain rebound to this machine's address reaches vigie with
+/// that domain as its Host, so only the hosts of the allowed origins are
+/// served. A request without one is not from a browser.
+async fn known_host(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| req.uri().authority().map(|authority| authority.as_str()));
+    if let Some(host) = host
+        && !host_allowed(host, &state.allowed_origins)
+    {
+        info!(host = ?host, "forbidden (unknown host)");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
+
+fn host_allowed(host: &str, allowed_origins: &BTreeSet<String>) -> bool {
+    allowed_origins.iter().any(|origin| {
+        origin
+            .split_once("://")
+            .is_some_and(|(_, authority)| authority.eq_ignore_ascii_case(host))
+    })
 }
 
 /// The app renders untrusted content (Claude's replies, files, diffs), and a
@@ -503,6 +532,35 @@ mod auth_gate_tests {
             StatusCode::OK,
             "a read was refused by origin"
         );
+    }
+
+    /// A rebound domain carries its own name as Host, on every route and the
+    /// static files alike.
+    #[tokio::test]
+    async fn a_request_for_an_unknown_host_is_refused() {
+        let app = build_test_app().await;
+        let cookie = &app.device_cookie;
+        for uri in ["/api/devices", "/api/whoami", "/assets/app.js"] {
+            let rebound = send(
+                &app.router,
+                Method::GET,
+                uri,
+                cookie,
+                &[("host", "evil.example:0")],
+            )
+            .await;
+            assert_eq!(rebound.status(), StatusCode::FORBIDDEN, "{uri}");
+
+            let own = send(
+                &app.router,
+                Method::GET,
+                uri,
+                cookie,
+                &[("host", "127.0.0.1:0")],
+            )
+            .await;
+            assert_eq!(own.status(), StatusCode::OK, "{uri}");
+        }
     }
 
     #[tokio::test]
