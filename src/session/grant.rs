@@ -94,7 +94,7 @@ impl FileOffer {
         })
     }
 
-    /// Same kind and same file, compared as Windows compares paths.
+    /// Same kind and same file, compared as the platform compares paths.
     pub fn same(&self, other: &FileOffer) -> bool {
         self.kind == other.kind
             && Folder::parse(&self.path)
@@ -102,7 +102,7 @@ impl FileOffer {
                 .is_some_and(|(mine, theirs)| mine.same(&theirs))
     }
 
-    /// A read of a file inside `folder`, compared as Windows compares paths.
+    /// A read of a file inside `folder`, compared as the platform compares paths.
     pub fn reads_within(&self, folder: &Path) -> bool {
         self.kind == FileKind::Read
             && Folder::parse(&self.path)
@@ -269,7 +269,7 @@ impl FolderSuggestion {
     }
 }
 
-/// Whether the absolute `file` sits directly in `folder`, ignoring case.
+/// Whether the absolute `file` sits directly in `folder`, compared as the platform compares paths.
 pub fn directly_in(file: &str, folder: &str) -> bool {
     Folder::parse(file)
         .zip(Folder::parse(folder))
@@ -283,6 +283,25 @@ enum Root {
     /// Uppercase.
     Drive(char),
     Slash,
+}
+
+/// How a path's parts compare, and whether `\` separates them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Case {
+    /// Windows: case-insensitive, `\` and `/` both separate.
+    Fold,
+    /// Unix: exact, and `\` is part of a name.
+    Exact,
+}
+
+impl Root {
+    fn case(self) -> Case {
+        match self {
+            Root::Drive(_) => Case::Fold,
+            Root::Slash if cfg!(windows) => Case::Fold,
+            Root::Slash => Case::Exact,
+        }
+    }
 }
 
 /// An absolute folder (or file) path without `.` or `..` parts.
@@ -322,8 +341,12 @@ impl Folder {
     }
 
     fn from_parts(root: Root, rest: &str) -> Option<Self> {
+        let separators: &[char] = match root.case() {
+            Case::Fold => &['\\', '/'],
+            Case::Exact => &['/'],
+        };
         let parts: Vec<String> = rest
-            .split(['\\', '/'])
+            .split(separators)
             .filter(|part| !part.is_empty())
             .map(String::from)
             .collect();
@@ -359,16 +382,19 @@ impl Folder {
         })
     }
 
-    /// Case-insensitive, as Windows compares paths.
     fn same(&self, other: &Folder) -> bool {
-        self.root == other.root && same_parts(&self.parts, &other.parts)
+        self.root == other.root && same_parts(&self.parts, &other.parts, self.root.case())
     }
 
     /// The parts of `self` below `base`, when `base` contains it.
     fn below(&self, base: &Folder) -> Option<&[String]> {
         (self.root == base.root
             && self.parts.len() >= base.parts.len()
-            && same_parts(&self.parts[..base.parts.len()], &base.parts))
+            && same_parts(
+                &self.parts[..base.parts.len()],
+                &base.parts,
+                self.root.case(),
+            ))
         .then(|| &self.parts[base.parts.len()..])
     }
 
@@ -390,19 +416,25 @@ impl Folder {
                 home.parts.len() == self.parts.len() + 1 && home.below(self).is_some();
             parent_of_home
                 || self.below(home).is_some_and(|rest| {
-                    rest.is_empty() || BROAD_IN_HOME.iter().any(|broad| same_parts(broad, rest))
+                    rest.is_empty()
+                        || BROAD_IN_HOME
+                            .iter()
+                            .any(|broad| same_parts(broad, rest, Case::Fold))
                 })
         });
         top_level || broad_name || in_home
     }
 }
 
-fn same_parts(left: &[impl AsRef<str>], right: &[impl AsRef<str>]) -> bool {
+fn same_parts(left: &[impl AsRef<str>], right: &[impl AsRef<str>], case: Case) -> bool {
     left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.as_ref().to_lowercase() == right.as_ref().to_lowercase())
+        && left.iter().zip(right).all(|(left, right)| {
+            let (left, right) = (left.as_ref(), right.as_ref());
+            match case {
+                Case::Fold => left.to_lowercase() == right.to_lowercase(),
+                Case::Exact => left == right,
+            }
+        })
 }
 
 impl fmt::Display for Folder {
@@ -718,6 +750,19 @@ mod tests {
             path: r"C:\Users\user\.claude\plans\y.md".into(),
             ..edit.clone()
         }));
+    }
+
+    #[test]
+    fn unix_paths_compare_as_the_platform_does() {
+        let edit = |path: &str| FileOffer {
+            kind: FileKind::Edit,
+            path: path.into(),
+        };
+        let grant = edit("/home/user/notes/x.md");
+        assert!(grant.same(&edit("/home/user/notes/x.md")));
+        assert_eq!(grant.same(&edit("/home/user/notes/X.md")), cfg!(windows));
+        assert_eq!(grant.same(&edit(r"/home/user\notes\x.md")), cfg!(windows));
+        assert!(!grant.same(&edit("/home/user/notes/../notes/x.md")));
     }
 
     #[test]
