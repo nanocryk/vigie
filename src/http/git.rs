@@ -3,7 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use axum::{
@@ -71,12 +71,14 @@ fn canonical_root(raw: &str) -> Result<PathBuf, GitError> {
     repo_root(&canonical(raw)?).ok_or(GitError::NotARepo)
 }
 
-async fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+/// Runs git in `root` with `config` overrides and `args`, giving up after `GIT_TIMEOUT`.
+async fn run(root: &Path, config: &[String], args: &[&str]) -> Result<Output, GitError> {
     let mut command = tokio::process::Command::new("git");
+    command.arg("-C").arg(root);
+    for entry in config {
+        command.arg("-c").arg(entry);
+    }
     command
-        .arg("-C")
-        .arg(root)
-        .args(["-c", "core.quotePath=false"])
         .args(args)
         // Status and diff would otherwise refresh the index, racing a session's own git.
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -84,15 +86,70 @@ async fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(GIT_TIMEOUT, command.output())
+    tokio::time::timeout(GIT_TIMEOUT, command.output())
         .await
         .map_err(|_| GitError::Failed("git timed out".to_string()))?
-        .map_err(|err| GitError::Failed(format!("cannot run git: {err}")))?;
+        .map_err(|err| GitError::Failed(format!("cannot run git: {err}")))
+}
+
+/// A repository's own config can name programs for git to run on `status` and
+/// `diff`: an fsmonitor, filter drivers. Opening a folder in the explorer runs
+/// those commands, so every call turns them off. Filters set in the user's
+/// global or system config (Git LFS) are trusted and kept. Diffs also pass
+/// `--no-textconv` and `--no-ext-diff`, and submodules, whose config is not
+/// read here, are never entered.
+async fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+    let mut config = vec![
+        "core.quotePath=false".to_string(),
+        "core.fsmonitor=false".to_string(),
+    ];
+    config.extend(repo_filter_overrides(root).await?);
+    let output = run(root, &config, args).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(GitError::Failed(stderr.trim().to_string()));
     }
     Ok(output.stdout)
+}
+
+/// Overrides emptying every filter driver key the repository's own config
+/// sets, included files followed. Reading config runs nothing.
+async fn repo_filter_overrides(root: &Path) -> Result<Vec<String>, GitError> {
+    let listing = run(
+        root,
+        &[],
+        &[
+            "config",
+            "--show-scope",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\.",
+        ],
+    )
+    .await?;
+    // Exit code 1: no key matched.
+    if !listing.status.success() && listing.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&listing.stderr);
+        return Err(GitError::Failed(stderr.trim().to_string()));
+    }
+    Ok(filter_overrides(&String::from_utf8_lossy(&listing.stdout)))
+}
+
+/// From `git config --show-scope --name-only` lines (`scope<TAB>key`), an empty
+/// value for each key of local or worktree scope, `false` for `required`.
+fn filter_overrides(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(scope, _)| matches!(*scope, "local" | "worktree"))
+        .map(|(_, key)| {
+            if key.ends_with(".required") {
+                format!("{key}=false")
+            } else {
+                format!("{key}=")
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +474,8 @@ async fn patch(root: &Path, paths: &[&str]) -> Result<Vec<u8>, GitError> {
         base(root).await,
         "--no-color",
         "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=dirty",
         "--find-renames",
         "--src-prefix=a/",
         "--dst-prefix=b/",
@@ -565,7 +624,13 @@ pub async fn repo_status(path: &Path) -> Result<RepoStatus, GitError> {
     };
     let raw = git(
         &root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=dirty",
+        ],
     )
     .await?;
     Ok(RepoStatus {
@@ -755,6 +820,66 @@ Binary files /dev/null and b/img.png differ
             .status()
             .expect("git runs");
         assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn only_the_repository_s_own_filter_keys_are_emptied() {
+        let listing = "system\tfilter.lfs.clean\nglobal\tfilter.lfs.process\n\
+            local\tfilter.x.clean\nlocal\tfilter.x.required\nworktree\tfilter.my.drv.smudge\n";
+        assert_eq!(
+            filter_overrides(listing),
+            [
+                "filter.x.clean=",
+                "filter.x.required=false",
+                "filter.my.drv.smudge="
+            ]
+        );
+    }
+
+    /// A folder carrying its own `.git/config` must not run anything when the
+    /// explorer reads its status or diff.
+    #[tokio::test]
+    async fn programs_named_by_a_repository_s_own_config_never_run() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = std::fs::canonicalize(tmp.path()).expect("canonical");
+        let repo = dir.join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        run(&repo, &["init", "-q"]);
+        std::fs::write(repo.join(".gitattributes"), "*.txt filter=x diff=x\n").expect("write");
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        run(&repo, &["add", "."]);
+        run(&repo, &["commit", "-q", "-m", "init"]);
+
+        let marker = |name: &str| dir.join(name).display().to_string().replace('\\', "/");
+        let touch = |name: &str| format!("sh -c 'touch {}; cat'", marker(name));
+        for (key, value) in [
+            ("core.fsmonitor", touch("fsmonitor")),
+            ("filter.x.clean", touch("clean")),
+            ("filter.x.process", touch("process")),
+            ("filter.x.required", "true".to_string()),
+            ("diff.x.textconv", touch("textconv")),
+            ("diff.x.command", touch("command")),
+        ] {
+            run(&repo, &["config", key, &value]);
+        }
+        std::fs::write(repo.join("a.txt"), "two\n").expect("write");
+
+        let status = repo_status(&repo).await.expect("status");
+        assert_eq!(status.changes.len(), 1);
+        let diff = repo_diff(&repo).await.expect("diff");
+        assert_eq!(diff.files.len(), 1);
+        assert!(
+            file_diff(&repo.join("a.txt"))
+                .await
+                .expect("file diff")
+                .is_some()
+        );
+
+        let ran: Vec<&str> = ["fsmonitor", "clean", "process", "textconv", "command"]
+            .into_iter()
+            .filter(|name| dir.join(name).exists())
+            .collect();
+        assert!(ran.is_empty(), "repository programs ran: {ran:?}");
     }
 
     #[tokio::test]
