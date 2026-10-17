@@ -5,9 +5,10 @@
 //! assistant block until the next one. Each keeps the user text cut at
 //! `USER_LIMIT` characters, each text block cut at `TEXT_LIMIT`, and one line
 //! per tool call with its argument and result cut at `TOOL_LIMIT`; thinking is
-//! dropped. The seed a `restarted` event carries is stripped from the echo of the
+//! dropped. The last text block of the discussion, usually its handoff, is kept
+//! whole. The seed a `restarted` event carries is stripped from the echo of the
 //! first message that followed it, so a later seed never nests an earlier one.
-//! The seed also names the last plan files the whole discussion wrote.
+//! The seed also names the last plan files the whole discussion wrote that still exist.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -25,7 +26,7 @@ pub const SEED_EXCHANGES: usize = 5;
 /// Plan files a seed names, the latest written first.
 const SEED_PLANS: usize = 3;
 const USER_LIMIT: usize = 1200;
-const TEXT_LIMIT: usize = 800;
+const TEXT_LIMIT: usize = 1500;
 const TOOL_LIMIT: usize = 100;
 /// Ends a seed sent without a typed message.
 pub const CLOSING: &str =
@@ -246,7 +247,8 @@ impl History {
         }
     }
 
-    /// The plan files in `plans_dir` the discussion wrote or edited, the latest first.
+    /// The plan files in `plans_dir` the discussion wrote or edited and that still
+    /// exist, the latest first.
     fn plan_files<'a>(&'a self, plans_dir: &str) -> Vec<&'a str> {
         let mut files: Vec<&str> = Vec::new();
         for block in self
@@ -260,6 +262,7 @@ impl History {
                 && let Some(file) = file_path(input)
                 && grant::directly_in(file, plans_dir)
                 && !files.contains(&file)
+                && Path::new(file).is_file()
             {
                 files.push(file);
                 if files.len() == SEED_PLANS {
@@ -284,20 +287,34 @@ impl History {
         let moved = moved_to.map_or(String::new(), |folder| {
             format!(", which runs in {}", folder.display())
         });
-        let plans = plans_dir.map_or(Vec::new(), |dir| self.plan_files(dir));
-        let plans = if plans.is_empty() {
-            String::new()
-        } else {
-            format!(" Plan files it wrote, latest first: {}.", plans.join(", "))
-        };
         let mut text = format!(
             "This is a new session. The previous vigie session in {} (started {}, {} exchanges) \
-             was restarted into this one{moved}.{plans} Its last {} exchanges, oldest first:",
+             was restarted into this one{moved}.",
             cwd.display(),
             started.format("%Y-%m-%d"),
             total,
-            shown.len()
         );
+        let plans = plans_dir.map_or(Vec::new(), |dir| self.plan_files(dir));
+        if !plans.is_empty() {
+            text.push_str(
+                "\n\n# Plan files\nWritten by the previous session, latest first. For reference: \
+                 open one only if the user asks or the recall points to it.",
+            );
+            for plan in plans {
+                text.push_str(&format!("\n- {plan}{}", plan_progress(plan)));
+            }
+        }
+        text.push_str(&format!(
+            "\n\n# Recall\nThe previous session's last {} exchanges, oldest first. Text ending \
+             in … was cut; the vigie history_read tool has it whole.",
+            shown.len()
+        ));
+        let last_text = shown.last().and_then(|exchange| {
+            exchange
+                .blocks
+                .iter()
+                .rposition(|block| matches!(block, Block::Text(body) if !body.trim().is_empty()))
+        });
         for (index, exchange) in shown.iter().enumerate() {
             text.push_str(&format!(
                 "\n\n## Exchange {}\nUser: {}\n\nClaude:",
@@ -305,7 +322,8 @@ impl History {
                 truncate(&exchange.user, USER_LIMIT)
             ));
             let mut emitted = false;
-            for block in &exchange.blocks {
+            let last_exchange = index + 1 == shown.len();
+            for (position, block) in exchange.blocks.iter().enumerate() {
                 match block {
                     Block::Text(body) => {
                         let body = body.trim();
@@ -313,7 +331,11 @@ impl History {
                             continue;
                         }
                         text.push('\n');
-                        text.push_str(&truncate(body, TEXT_LIMIT));
+                        if last_exchange && last_text == Some(position) {
+                            text.push_str(body);
+                        } else {
+                            text.push_str(&truncate(body, TEXT_LIMIT));
+                        }
                     }
                     Block::Tool { id, name, input } => {
                         text.push('\n');
@@ -385,6 +407,25 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let start = text.find(&open)? + open.len();
     let end = start + text[start..].find(&format!("</{name}>"))?;
     Some(&text[start..end])
+}
+
+/// " (2 of 5 sections done)" when the plan marks some `##` sections `[DONE`, else empty.
+fn plan_progress(plan: &str) -> String {
+    let Ok(content) = std::fs::read_to_string(plan) else {
+        return String::new();
+    };
+    let sections: Vec<&str> = content
+        .lines()
+        .filter(|line| line.starts_with("## "))
+        .collect();
+    let done = sections
+        .iter()
+        .filter(|line| line.contains("[DONE"))
+        .count();
+    if done == 0 {
+        return String::new();
+    }
+    format!(" ({done} of {} sections done)", sections.len())
 }
 
 fn file_path(input: &Value) -> Option<&str> {
@@ -462,14 +503,17 @@ mod tests {
         assert_eq!(
             seed.text,
             "This is a new session. The previous vigie session in /work/p \
-             (started 2026-09-27, 1 exchanges) was restarted into this one. \
-             Its last 1 exchanges, oldest first:\n\n\
+             (started 2026-09-27, 1 exchanges) was restarted into this one.\n\n\
+             # Recall\n\
+             The previous session's last 1 exchanges, oldest first. Text ending in … was cut; \
+             the vigie history_read tool has it whole.\n\n\
              ## Exchange 1\n\
              User: Use the Bash tool to run exactly: pwd. Reply with its output.\n\n\
              Claude:\n  • Bash(command=pwd) → /tmp/vigie2-spike/cwd\n\
-             ``` /tmp/vigie2-spike/cwd ``` `/cd` didn't run, so the shell is still in `cwd`, \
-             not `spike-cd-target`. Separately, the claude.ai Google Drive connector needs \
-             authorization in your claude.ai connector settings. It won't work until you do that."
+             ```\n/tmp/vigie2-spike/cwd\n```\n\n\
+             `/cd` didn't run, so the shell is still in `cwd`, not `spike-cd-target`.\n\n\
+             Separately, the claude.ai Google Drive connector needs authorization in your \
+             claude.ai connector settings. It won't work until you do that."
         );
     }
 
@@ -610,7 +654,7 @@ mod tests {
     #[test]
     fn truncation_and_tool_lines() {
         let long_user = format!("{}  tail", "u".repeat(1300));
-        let long_text = "t ".repeat(500);
+        let long_text = "t ".repeat(1000);
         let long_command = "x".repeat(150);
         let events = [
             user(1, Value::String(long_user)),
@@ -623,6 +667,8 @@ mod tests {
                         "input": {"description": "d", "command": long_command}},
                     {"type": "tool_use", "id": "t2", "name": "Custom", "input": {"b": [1], "a": 2}},
                     {"type": "tool_use", "id": "t3", "name": "Empty", "input": {}},
+                    {"type": "text", "text": format!("last\n\n{}", "w".repeat(2000))},
+                    {"type": "text", "text": "  "},
                 ]),
             ),
             user(
@@ -656,6 +702,12 @@ mod tests {
         assert!(user_line.ends_with("u…"));
         let text_line = lines.iter().find(|line| line.starts_with("t t")).unwrap();
         assert_eq!(text_line.chars().count(), TEXT_LIMIT);
+        assert!(text_line.ends_with('…'));
+        // The last text block of the discussion is kept whole, line breaks included.
+        assert!(
+            seed.text
+                .contains(&format!("\nlast\n\n{}", "w".repeat(2000)))
+        );
         assert!(!seed.text.contains("hidden"));
         assert!(lines.contains(
             &format!("  • Bash(command={}…) → line one line two", "x".repeat(99)).as_str()
@@ -741,17 +793,28 @@ mod tests {
         let seed = History::from_events(&[]).seed(Path::new("/p"), None, date(), None);
         assert_eq!((seed.exchanges, seed.total_exchanges), (0, 0));
         assert!(seed.text.ends_with(
-            "(started 2026-09-27, 0 exchanges) was restarted into this one. \
-                            Its last 0 exchanges, oldest first:"
+            "(started 2026-09-27, 0 exchanges) was restarted into this one.\n\n# Recall\n\
+             The previous session's last 0 exchanges, oldest first. Text ending in … was cut; \
+             the vigie history_read tool has it whole."
         ));
         assert_eq!(first_message("S", "  "), format!("S\n\n{CLOSING}"));
         assert_eq!(first_message("S", "go on"), "S\n\ngo on");
     }
 
     #[test]
-    fn the_seed_names_the_last_three_plan_files_written() {
-        let plans = r"C:\u\.claude\plans";
-        let write = |id: &str, name: &str, file: &str| tool(id, name, &format!(r"{plans}\{file}"));
+    fn the_seed_names_the_last_three_plan_files_still_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans = dir.path().to_str().unwrap();
+        let path = |file: &str| dir.path().join(file).to_str().unwrap().to_string();
+        std::fs::write(
+            path("a.md"),
+            "# A\n## One [DONE]\n## Two\n## Three [DONE except x]\n",
+        )
+        .unwrap();
+        std::fs::write(path("b.md"), "# B\n## One\n").unwrap();
+        std::fs::write(path("c.md"), "").unwrap();
+        // d.md was written, then deleted.
+        let write = |id: &str, name: &str, file: &str| tool(id, name, &path(file));
         let events = [
             user(1, Value::String("one".into())),
             assistant(
@@ -774,11 +837,15 @@ mod tests {
         let history = History::from_events(&events);
         let seed = history.seed(Path::new("/p"), None, date(), Some(plans));
         assert!(seed.text.contains(&format!(
-            "was restarted into this one. Plan files it wrote, latest first: \
-             {plans}\\d.md, {plans}\\a.md, {plans}\\c.md. Its last 2 exchanges"
+            "was restarted into this one.\n\n# Plan files\nWritten by the previous session, \
+             latest first. For reference: open one only if the user asks or the recall points \
+             to it.\n- {} (2 of 3 sections done)\n- {}\n- {}\n\n# Recall\n",
+            path("a.md"),
+            path("c.md"),
+            path("b.md"),
         )));
         let seed = history.seed(Path::new("/p"), None, date(), None);
-        assert!(!seed.text.contains("Plan files"));
+        assert!(!seed.text.contains("# Plan files"));
     }
 
     #[test]
@@ -787,7 +854,7 @@ mod tests {
             History::from_events(&[]).seed(Path::new("/p"), Some(Path::new("/q")), date(), None);
         assert!(seed.text.starts_with(
             "This is a new session. The previous vigie session in /p \
-             (started 2026-09-27, 0 exchanges) was restarted into this one, which runs in /q. "
+             (started 2026-09-27, 0 exchanges) was restarted into this one, which runs in /q.\n"
         ));
     }
 }
