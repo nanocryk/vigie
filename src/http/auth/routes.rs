@@ -68,7 +68,12 @@ pub async fn exchange(
 
     let (path, pair_matched) = if via_startup {
         ("startup", false)
-    } else if auth.pair_tokens.consume(&req.token) {
+    } else if let Some(issuer) = auth.pair_tokens.consume(&req.token) {
+        // A device revoked after issuing a token must not pair a successor.
+        if auth.registry.find_active(&issuer).is_none() {
+            warn!(%ip, "pair token of a revoked device rejected");
+            return ApiError::new(StatusCode::UNAUTHORIZED, "bad_token").into_response();
+        }
         ("pair", true)
     } else {
         auth.rate_limiter.record_failure(ip);
@@ -80,12 +85,10 @@ pub async fn exchange(
         return ApiError::new(StatusCode::UNAUTHORIZED, "token_spent").into_response();
     }
 
-    let id = mint_token();
+    let secret = mint_token();
     let label = auth.registry.next_label();
-    let device = Device {
-        last_ip: Some(ip.to_string()),
-        ..Device::new(id.clone(), label.clone(), Utc::now())
-    };
+    let mut device = Device::new(mint_token(), label.clone(), &secret, Utc::now());
+    device.last_ip = Some(ip.to_string());
     if let Err(err) = auth.registry.insert(device) {
         warn!(%err, "registry insert failed");
         return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "registry_write").into_response();
@@ -93,12 +96,12 @@ pub async fn exchange(
     auth.notify_changed();
 
     info!(via = path, pair = pair_matched, label = %label, "device paired");
-    let cookie = auth.cookie_for(id);
+    let cookie = auth.cookie_for(secret);
     (jar.add(cookie), Json(ExchangeOk { label: &label })).into_response()
 }
 
 pub async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Json<WhoamiResp> {
-    match session_cookie_values(&headers).find_map(|value| state.auth.registry.find_active(value)) {
+    match session_cookie_values(&headers).find_map(|value| state.auth.registry.peek(value)) {
         Some(device) => Json(WhoamiResp {
             authed: true,
             label: Some(device.label),

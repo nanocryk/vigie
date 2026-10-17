@@ -44,8 +44,9 @@ pub struct AppState {
 
 #[cfg(any(test, feature = "test-support"))]
 impl AppState {
-    /// A state kept in `dir` that runs `program`, with `device` paired, served
-    /// over plain HTTP on `port` to `http://127.0.0.1:{port}`.
+    /// A state kept in `dir` that runs `program`, with `device` paired (as its
+    /// id and its secret), served over plain HTTP on `port` to
+    /// `http://127.0.0.1:{port}`.
     pub async fn for_tests(
         dir: &std::path::Path,
         program: crate::claude::child::Program,
@@ -61,6 +62,7 @@ impl AppState {
         registry.insert(Device::new(
             device.to_string(),
             "test".into(),
+            device,
             chrono::Utc::now(),
         ))?;
         let auth = Arc::new(Auth::new(registry, false));
@@ -199,10 +201,12 @@ mod auth_gate_tests {
             (Method::DELETE, "/api/devices/anything"),
             (Method::GET, "/api/sessions"),
             (Method::POST, "/api/sessions"),
+            (Method::POST, "/api/sessions/scratch"),
             (Method::POST, "/api/sessions/anything/upload"),
             (Method::GET, "/api/usage"),
             (Method::GET, "/api/catalog"),
             (Method::GET, "/api/commands/recent"),
+            (Method::GET, "/api/history/message"),
             (Method::GET, "/api/history/search"),
             (Method::GET, "/api/history/around"),
             (Method::GET, "/api/fs/list"),
@@ -219,6 +223,9 @@ mod auth_gate_tests {
             (Method::GET, "/api/git/file"),
             (Method::GET, "/api/ws"),
             (Method::GET, "/api/version"),
+            (Method::GET, "/api/server"),
+            (Method::POST, "/api/server/restart"),
+            (Method::POST, "/api/server/restart/cancel"),
             (Method::GET, "/api/update"),
             (Method::POST, "/api/update/check"),
             (Method::POST, "/api/update/run"),
@@ -420,6 +427,84 @@ mod auth_gate_tests {
                 .collect();
             assert_eq!(you, [valid.as_str()], "cookies {header}");
         }
+    }
+
+    async fn send(
+        router: &Router,
+        method: Method,
+        uri: &str,
+        cookie: &str,
+        headers: &[(&str, &str)],
+    ) -> Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(under_base(uri))
+            .header("cookie", format!("{}={cookie}", auth::COOKIE_NAME));
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let mut req = builder.body(Body::empty()).expect("build request");
+        req.extensions_mut().insert(peer());
+        router.clone().oneshot(req).await.expect("oneshot")
+    }
+
+    /// The SameSite cookie rides along on a form posted from another port of
+    /// the same host, so a write is refused on its origin alone.
+    #[tokio::test]
+    async fn a_write_from_another_origin_is_refused_despite_a_valid_cookie() {
+        let app = build_test_app().await;
+        let cookie = &app.device_cookie;
+        let evil = [("origin", "http://127.0.0.1:5173")];
+        let refused = send(
+            &app.router,
+            Method::POST,
+            "/api/server/restart/cancel",
+            cookie,
+            &evil,
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let own = [("origin", "http://127.0.0.1:0")];
+        let accepted = send(
+            &app.router,
+            Method::POST,
+            "/api/server/restart/cancel",
+            cookie,
+            &own,
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+
+        let read = send(&app.router, Method::GET, "/api/devices", cookie, &evil).await;
+        assert_eq!(
+            read.status(),
+            StatusCode::OK,
+            "a read was refused by origin"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pair_token_dies_with_the_device_that_issued_it() {
+        let app = build_test_app().await;
+        let cookie = &app.device_cookie;
+        let res = send(&app.router, Method::POST, "/api/auth/pair", cookie, &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let pair: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let token = pair["token"].as_str().expect("token").to_string();
+
+        let revoke = format!("/api/devices/{cookie}/revoke");
+        let revoked = send(&app.router, Method::POST, &revoke, cookie, &[]).await;
+        assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+
+        assert_eq!(
+            exchange(&app.router, &token).await,
+            StatusCode::UNAUTHORIZED,
+            "a revoked device's pair token paired a new device",
+        );
     }
 
     async fn exchange(router: &Router, token: &str) -> StatusCode {

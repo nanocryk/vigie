@@ -1,11 +1,11 @@
-//! Device authentication: a paired device holds a session cookie naming its
-//! registry entry, and every protected route goes through `require_auth`.
+//! Device authentication: a paired device holds a session cookie carrying its
+//! secret, and every protected route goes through `require_auth`.
 
 mod registry;
 mod routes;
 mod tokens;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,8 +123,8 @@ impl Auth {
         info!(subscribers, "devices changed");
     }
 
-    pub fn cookie_for(&self, id: String) -> Cookie<'static> {
-        let mut cookie = Cookie::new(COOKIE_NAME, id);
+    pub fn cookie_for(&self, secret: String) -> Cookie<'static> {
+        let mut cookie = Cookie::new(COOKIE_NAME, secret);
         cookie.set_http_only(true);
         cookie.set_secure(self.cookie_secure);
         cookie.set_same_site(SameSite::Strict);
@@ -173,6 +173,26 @@ fn session_cookie_values(headers: &HeaderMap) -> impl Iterator<Item = &str> {
         .map(|(_, value)| value.trim())
 }
 
+/// Whether a request that changes state comes from an origin allowed to make
+/// it. The SameSite cookie alone lets through a page on another port of the
+/// same host. A request with neither header is not from a browser, which is
+/// the only client a forged request can ride on.
+fn write_origin_allowed(headers: &HeaderMap, allowed_origins: &BTreeSet<String>) -> bool {
+    let fetch_site = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok());
+    if fetch_site == Some("same-origin") {
+        return true;
+    }
+    match headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(origin) => allowed_origins.contains(origin.trim_end_matches('/')),
+        None => fetch_site.is_none(),
+    }
+}
+
 pub async fn require_auth(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -184,18 +204,21 @@ pub async fn require_auth(
     let sent: Vec<String> = session_cookie_values(req.headers())
         .map(str::to_owned)
         .collect();
-    let device = sent
-        .iter()
-        .find_map(|value| state.auth.registry.find_active(value));
-    let sent = sent.len();
-    if sent == 0 {
+    if sent.is_empty() {
         info!(ip = %peer.ip(), path = %path, "unauthorized (no cookie)");
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let Some(device) = device else {
-        info!(ip = %peer.ip(), path = %path, sent, "unauthorized (invalid cookie)");
+    let Some((device, secret)) = sent
+        .iter()
+        .find_map(|value| state.auth.registry.authenticate(value))
+    else {
+        info!(ip = %peer.ip(), path = %path, sent = sent.len(), "unauthorized (invalid cookie)");
         return Err(StatusCode::UNAUTHORIZED);
     };
+    if !req.method().is_safe() && !write_origin_allowed(req.headers(), &state.allowed_origins) {
+        info!(ip = %peer.ip(), path = %path, "forbidden (cross-origin write)");
+        return Err(StatusCode::FORBIDDEN);
+    }
     let device_id = device.id.clone();
     state
         .auth
@@ -208,7 +231,7 @@ pub async fn require_auth(
     // The cookie's Max-Age is the only expiry there is, and the browser never
     // reports how much of it is left. Re-issuing on every authed request is
     // what keeps a device that is in use from ageing out.
-    let jar = jar.add(state.auth.cookie_for(device_id));
+    let jar = jar.add(state.auth.cookie_for(secret));
     Ok((jar, next.run(req).await).into_response())
 }
 
@@ -254,17 +277,42 @@ mod tests {
         registry.insert(device("live")).expect("insert");
 
         for header in [
-            "vigie_session=live; vigie_session=stale",
-            "vigie_session=stale; vigie_session=live",
-            "other_session=other; vigie_session=stale; vigie_session=live",
+            "vigie_session=live-secret; vigie_session=stale",
+            "vigie_session=stale; vigie_session=live-secret",
+            "other_session=other; vigie_session=stale; vigie_session=live-secret",
         ] {
             let mut headers = HeaderMap::new();
             headers.insert(header::COOKIE, header.parse().expect("header value"));
             let found = session_cookie_values(&headers)
-                .find_map(|value| registry.find_active(value))
-                .map(|device| device.id);
+                .find_map(|value| registry.authenticate(value))
+                .map(|(device, _)| device.id);
             assert_eq!(found.as_deref(), Some("live"), "for header {header:?}");
         }
+    }
+
+    #[test]
+    fn writes_are_allowed_same_origin_or_from_listed_origins_only() {
+        let allowed = BTreeSet::from(["https://box:7879".to_string()]);
+        let allows = |pairs: &[(&'static str, &'static str)]| {
+            let mut headers = HeaderMap::new();
+            for (name, value) in pairs {
+                headers.insert(*name, value.parse().expect("header value"));
+            }
+            write_origin_allowed(&headers, &allowed)
+        };
+        assert!(allows(&[]), "a non-browser client");
+        assert!(allows(&[("origin", "https://box:7879")]));
+        assert!(allows(&[("origin", "https://box:7879/")]));
+        assert!(allows(&[
+            ("sec-fetch-site", "same-origin"),
+            ("origin", "https://other-name:7879"),
+        ]));
+        assert!(!allows(&[("origin", "https://box:8080")]));
+        assert!(!allows(&[
+            ("sec-fetch-site", "same-site"),
+            ("origin", "http://box:5173"),
+        ]));
+        assert!(!allows(&[("sec-fetch-site", "cross-site")]));
     }
 
     fn empty_auth() -> Auth {

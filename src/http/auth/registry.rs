@@ -10,13 +10,24 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use super::tokens::{mint_token, same_token, secret_hash};
 use crate::state_dir;
 
 const LAST_SEEN_THROTTLE_SECS: i64 = 60;
 
+/// A device's `id` is public: listed to every paired device and used in URLs.
+/// Its cookie carries a separate secret, of which only the hash is kept.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Device {
     pub id: String,
+    /// Absent on a device whose cookie still carries its id, from before ids
+    /// and secrets were split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secret_hash: Option<String>,
+    /// The secret issued to replace an id cookie, kept until the device first
+    /// presents it, so concurrent requests carrying the id all get the same one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_secret: Option<String>,
     pub label: String,
     pub issued_at: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
@@ -27,16 +38,29 @@ pub struct Device {
 }
 
 impl Device {
-    /// An active device issued and last seen at `now`, with no known address.
-    pub fn new(id: String, label: String, now: DateTime<Utc>) -> Self {
+    /// An active device issued and last seen at `now`, with no known address,
+    /// authenticated by `secret`.
+    pub fn new(id: String, label: String, secret: &str, now: DateTime<Utc>) -> Self {
         Self {
             id,
+            secret_hash: Some(secret_hash(secret)),
+            pending_secret: None,
             label,
             issued_at: now,
             last_seen: now,
             revoked: false,
             last_ip: None,
         }
+    }
+
+    fn has_secret(&self, hash: &str) -> bool {
+        self.secret_hash.as_deref() == Some(hash)
+    }
+
+    /// Whether a cookie carrying the device id still authenticates it.
+    fn accepts_id_cookie(&self, presented: &str) -> bool {
+        (self.secret_hash.is_none() || self.pending_secret.is_some())
+            && same_token(&self.id, presented)
     }
 
     fn seen_stale(&self, now: DateTime<Utc>) -> bool {
@@ -98,6 +122,65 @@ impl Registry {
             .iter()
             .find(|device| device.id == id && !device.revoked)
             .cloned()
+    }
+
+    /// The active device a cookie value authenticates, without changing it.
+    pub fn peek(&self, presented: &str) -> Option<Device> {
+        let hash = secret_hash(presented);
+        self.devices
+            .lock()
+            .iter()
+            .find(|device| {
+                !device.revoked && (device.has_secret(&hash) || device.accepts_id_cookie(presented))
+            })
+            .cloned()
+    }
+
+    /// The active device a cookie value authenticates, and the value its
+    /// cookie carries from now on. An id cookie is answered with a fresh
+    /// secret, and stops authenticating once the device presents that secret.
+    pub fn authenticate(&self, presented: &str) -> Option<(Device, String)> {
+        let device = self.peek(presented)?;
+        let hash = secret_hash(presented);
+        if device.has_secret(&hash) {
+            if device.pending_secret.is_some() {
+                let confirmed = self.with_file(|devices| {
+                    match devices.iter_mut().find(|known| known.has_secret(&hash)) {
+                        Some(known) if known.pending_secret.is_some() => {
+                            known.pending_secret = None;
+                            ((), true)
+                        }
+                        _ => ((), false),
+                    }
+                });
+                if let Err(err) = confirmed {
+                    warn!(%err, "registry persist (confirm secret) failed");
+                }
+            }
+            return Some((device, presented.to_string()));
+        }
+        let rotated = self.with_file(|devices| {
+            let Some(known) = devices
+                .iter_mut()
+                .find(|known| !known.revoked && known.accepts_id_cookie(presented))
+            else {
+                return (None, false);
+            };
+            if let Some(secret) = &known.pending_secret {
+                return (Some((known.clone(), secret.clone())), false);
+            }
+            let secret = mint_token();
+            known.secret_hash = Some(secret_hash(&secret));
+            known.pending_secret = Some(secret.clone());
+            (Some((known.clone(), secret)), true)
+        });
+        match rotated {
+            Ok(rotated) => rotated,
+            Err(err) => {
+                warn!(%err, "registry persist (rotate secret) failed");
+                Some((device, presented.to_string()))
+            }
+        }
     }
 
     #[cfg(test)]
@@ -284,7 +367,75 @@ pub mod tests {
     use super::*;
 
     pub fn device(id: &str) -> Device {
-        Device::new(id.to_string(), id.to_string(), Utc::now())
+        Device::new(
+            id.to_string(),
+            id.to_string(),
+            &format!("{id}-secret"),
+            Utc::now(),
+        )
+    }
+
+    /// A device whose cookie carries its id, as paired before secrets.
+    fn id_cookie_device(id: &str) -> Device {
+        Device {
+            secret_hash: None,
+            ..device(id)
+        }
+    }
+
+    fn registry(dir: &tempfile::TempDir) -> Registry {
+        Registry::load(dir.path().join("devices.json")).expect("load registry")
+    }
+
+    #[test]
+    fn a_secret_authenticates_and_the_public_id_does_not() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let registry = registry(&tmp);
+        registry.insert(device("phone")).expect("insert");
+
+        let (found, cookie) = registry.authenticate("phone-secret").expect("secret");
+        assert_eq!(found.id, "phone");
+        assert_eq!(cookie, "phone-secret");
+        assert!(registry.authenticate("phone").is_none(), "id authenticated");
+    }
+
+    #[test]
+    fn an_id_cookie_is_swapped_for_a_secret_shared_until_presented() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let registry = registry(&tmp);
+        registry.insert(id_cookie_device("phone")).expect("insert");
+
+        let (_, first) = registry.authenticate("phone").expect("id cookie");
+        assert_ne!(first, "phone");
+        let (_, second) = registry
+            .authenticate("phone")
+            .expect("concurrent id cookie");
+        assert_eq!(first, second, "concurrent requests got different secrets");
+
+        let (_, kept) = registry.authenticate(&first).expect("new secret");
+        assert_eq!(kept, first);
+        assert!(
+            registry.authenticate("phone").is_none(),
+            "id cookie still accepted after the secret was presented",
+        );
+        let on_disk = Registry::load(tmp.path().join("devices.json")).expect("reload");
+        assert!(
+            on_disk.authenticate(&first).is_some(),
+            "secret not persisted"
+        );
+    }
+
+    #[test]
+    fn a_revoked_device_authenticates_by_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let registry = registry(&tmp);
+        registry.insert(device("phone")).expect("insert");
+        registry.insert(id_cookie_device("tablet")).expect("insert");
+        registry.revoke_all().expect("revoke");
+
+        assert!(registry.authenticate("phone-secret").is_none());
+        assert!(registry.authenticate("tablet").is_none());
+        assert!(registry.peek("tablet").is_none());
     }
 
     fn revoke_all_from_another_process(path: &Path) {

@@ -8,6 +8,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use parking_lot::Mutex;
 use rand::TryRng;
 use rand::rngs::SysRng;
+use ring::digest;
 use subtle::ConstantTimeEq;
 use tracing::warn;
 
@@ -15,6 +16,9 @@ pub const PAIR_TOKEN_TTL: Duration = Duration::from_secs(300);
 const RATE_WINDOW: Duration = Duration::from_secs(600);
 const RATE_MAX_FAILS: usize = 5;
 const RATE_LOCKOUT: Duration = Duration::from_secs(3600);
+/// Addresses tracked at once. Past it, new addresses go untracked: tokens are
+/// 256-bit, so the limiter only trims noise, and memory must stay bounded.
+const RATE_MAX_TRACKED: usize = 4096;
 
 pub fn mint_token() -> String {
     let mut bytes = [0u8; 32];
@@ -27,6 +31,11 @@ pub fn mint_token() -> String {
 /// Constant-time equality of two tokens.
 pub fn same_token(token: &str, candidate: &str) -> bool {
     token.as_bytes().ct_eq(candidate.as_bytes()).into()
+}
+
+/// What the registry stores of a device secret: its SHA-256, base64.
+pub fn secret_hash(secret: &str) -> String {
+    URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, secret.as_bytes()))
 }
 
 struct PairToken {
@@ -56,21 +65,16 @@ impl PairTokens {
         token
     }
 
-    /// Consume a pair token if it matches and is still valid. Returns true on match.
-    pub fn consume(&self, candidate: &str) -> bool {
+    /// Consume a pair token if it matches and is still valid, returning the
+    /// id of the device that issued it.
+    pub fn consume(&self, candidate: &str) -> Option<String> {
         let now = Instant::now();
         let mut tokens = self.tokens.lock();
         tokens.retain(|pair| pair.expires_at > now);
-        match tokens
+        let index = tokens
             .iter()
-            .position(|pair| same_token(&pair.token, candidate))
-        {
-            Some(index) => {
-                tokens.remove(index);
-                true
-            }
-            None => false,
-        }
+            .position(|pair| same_token(&pair.token, candidate))?;
+        Some(tokens.remove(index).issued_by)
     }
 }
 
@@ -90,11 +94,30 @@ pub enum RateCheck {
     Locked { retry_after_secs: u64 },
 }
 
+impl IpState {
+    fn is_stale(&self, now: Instant) -> bool {
+        self.lockout_until.is_none_or(|until| until <= now)
+            && self
+                .failures
+                .iter()
+                .all(|failure| now.duration_since(*failure) >= RATE_WINDOW)
+    }
+}
+
+/// The key an address is limited under: an IPv6 address by its /64, which a
+/// single host can rotate through freely.
+fn rate_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
+    }
+}
+
 impl RateLimiter {
     pub fn check(&self, ip: IpAddr) -> RateCheck {
         let now = Instant::now();
         let mut addresses = self.addresses.lock();
-        let Some(state) = addresses.get_mut(&ip) else {
+        let Some(state) = addresses.get_mut(&rate_key(ip)) else {
             return RateCheck::Ok;
         };
         state
@@ -115,7 +138,14 @@ impl RateLimiter {
     pub fn record_failure(&self, ip: IpAddr) {
         let now = Instant::now();
         let mut addresses = self.addresses.lock();
-        let state = addresses.entry(ip).or_default();
+        let key = rate_key(ip);
+        if !addresses.contains_key(&key) {
+            addresses.retain(|_, state| !state.is_stale(now));
+            if addresses.len() >= RATE_MAX_TRACKED {
+                return;
+            }
+        }
+        let state = addresses.entry(key).or_default();
         state
             .failures
             .retain(|failure| now.duration_since(*failure) < RATE_WINDOW);
@@ -124,5 +154,44 @@ impl RateLimiter {
             state.lockout_until = Some(now + RATE_LOCKOUT);
             warn!(%ip, "rate-limit lockout: too many failed pair attempts");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn locked(limiter: &RateLimiter, ip: &str) -> bool {
+        matches!(
+            limiter.check(ip.parse().expect("ip")),
+            RateCheck::Locked { .. }
+        )
+    }
+
+    #[test]
+    fn an_ipv6_host_is_limited_across_its_whole_slash_64() {
+        let limiter = RateLimiter::default();
+        for suffix in 1..=RATE_MAX_FAILS {
+            limiter.record_failure(format!("2001:db8:1:2::{suffix}").parse().expect("ip"));
+        }
+        assert!(locked(&limiter, "2001:db8:1:2:ffff::1"));
+        assert!(!locked(&limiter, "2001:db8:1:3::1"));
+    }
+
+    #[test]
+    fn tracked_addresses_stay_bounded() {
+        let limiter = RateLimiter::default();
+        for index in 0..RATE_MAX_TRACKED as u32 + 100 {
+            limiter.record_failure(IpAddr::V4(index.into()));
+        }
+        assert_eq!(limiter.addresses.lock().len(), RATE_MAX_TRACKED);
+    }
+
+    #[test]
+    fn a_consumed_pair_token_names_its_issuer_once() {
+        let tokens = PairTokens::default();
+        let token = tokens.issue("phone");
+        assert_eq!(tokens.consume(&token).as_deref(), Some("phone"));
+        assert_eq!(tokens.consume(&token), None);
     }
 }
