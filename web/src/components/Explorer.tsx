@@ -1069,6 +1069,32 @@ function FileViewer({
   };
   const slide = useSlide(canStep, step);
 
+  const stepRef = useRef(step);
+  useEffect(() => {
+    stepRef.current = step;
+  });
+  const stepping = group !== null;
+  useEffect(() => {
+    if (!stepping) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const by = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : null;
+      if (by === null) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, select") !== null)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      stepRef.current(by);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [stepping]);
+
   const [view, setView] = useState<FileView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [target] = useState(line);
