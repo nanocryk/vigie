@@ -1281,6 +1281,122 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
     [viewId, cwd],
   );
 
+  const showAgentCold = agentColdPanel && agent !== null && agentCold !== null;
+  // The composer footer anchors the menu right above its Menu button, in front
+  // of an ask card; without that footer the menu sits at the discussion's bottom.
+  const composerShown = panel.kind === "closed" && !coldPanel && !showAgentCold;
+  const menuPanel =
+    menu.kind === "open" ? (
+      <SessionMenu
+        entry={menu.entry}
+        enabled={controlsEnabled}
+        picking={choosingSettings}
+        name={
+          view === null
+            ? null
+            : {
+                current: view.name,
+                folder: folderName(view.cwd),
+                onSave: (name) =>
+                  client.command({
+                    type: "rename",
+                    session: id,
+                    name,
+                    client_id: client.newClientId(),
+                  }),
+              }
+        }
+        mode={mode}
+        modeControl={modeControl}
+        model={{
+          label: modelLabel,
+          stopLabel: "Stop here and change model",
+          options: models.map((model) => ({
+            value: model.value,
+            label: modelOptionLabel(models, model),
+          })),
+          selected: picks.model ?? DEFAULT_MODEL,
+          onStop: () => startSettings("model"),
+          onPick: (value) => choosePicks(pickModel(picks, value, models)),
+        }}
+        effort={{
+          label: effortTabLabel(
+            view?.applied_effort ?? null,
+            picks.effort,
+            choosingSettings,
+            fallbackEffort,
+          ),
+          stopLabel: "Stop here and change effort",
+          options: effortLevels(models, picks.model).map((level) => ({
+            value: level,
+            label: level,
+          })),
+          selected: picks.effort,
+          onStop: () => startSettings("effort"),
+          onPick: (value) => choosePicks(pickEffort(picks, value)),
+        }}
+        commandsEnabled={controlsEnabled && !choosingSettings}
+        revoke={{
+          // Revoking ends the process, so a running turn would be cut short.
+          enabled: controlsEnabled && view?.live === true && !turnOpen,
+          busy: revoking,
+          error: revokeError,
+          onRevoke: revoke,
+        }}
+        restartEnabled={controlsEnabled && !choosingSettings}
+        onRestart={() => startRestart()}
+        agents={{
+          summary: workingLabel(liveAgents) ?? `${entries.length} known`,
+          onOpen: openAgents,
+          stopAll: {
+            enabled: liveAgents.some((running) => running.state === "running"),
+            busy: stoppingAgents,
+            error: stopAgentsError,
+            onStop: stopAllAgents,
+          },
+        }}
+        draft={
+          viewing !== null ||
+          editing !== null ||
+          ((drafts.get(draftSlot) ?? "").trim() === "" && readyPaths(draftSlot).length === 0)
+            ? null
+            : {
+                onHold: () => {
+                  setMenu(closedMenu);
+                  const draft = takeDraft();
+                  if (draft !== null) hold(draft.text, draft.attachments, "held");
+                },
+                onSendNow: transcript.turnOpen
+                  ? () => {
+                      setMenu(closedMenu);
+                      const draft = takeDraft();
+                      if (draft !== null) {
+                        send(draft.text, {
+                          ...rewarm,
+                          ...attachmentsField(draft.attachments),
+                        });
+                      }
+                    }
+                  : null,
+              }
+        }
+        onEntry={(entry) => setMenu({ kind: "open", entry })}
+        onCommands={() => {
+          setMenu(closedMenu);
+          panelEvent({ type: "open_tab" });
+        }}
+        onClose={() => setMenu(closedMenu)}
+      />
+    ) : agentsOpen ? (
+      <AgentsPanel
+        entries={recentAgents(entries, viewing, Date.now())}
+        viewing={viewing}
+        onSwitch={switchTo}
+        onStop={stopAgent}
+        onClose={() => setAgentsOpen(false)}
+      />
+    ) : undefined;
+
   return (
     <FileLinksContext.Provider value={fileLinks}>
       <Header
@@ -1428,116 +1544,9 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               onUse={(card) => panelEvent({ type: "use", card })}
               onClose={() => panelEvent({ type: "close" })}
             />
-          ) : menu.kind === "open" ? (
-            <SessionMenu
-              entry={menu.entry}
-              enabled={controlsEnabled}
-              picking={choosingSettings}
-              name={
-                view === null
-                  ? null
-                  : {
-                      current: view.name,
-                      folder: folderName(view.cwd),
-                      onSave: (name) =>
-                        client.command({
-                          type: "rename",
-                          session: id,
-                          name,
-                          client_id: client.newClientId(),
-                        }),
-                    }
-              }
-              mode={mode}
-              modeControl={modeControl}
-              model={{
-                label: modelLabel,
-                stopLabel: "Stop here and change model",
-                options: models.map((model) => ({
-                  value: model.value,
-                  label: modelOptionLabel(models, model),
-                })),
-                selected: picks.model ?? DEFAULT_MODEL,
-                onStop: () => startSettings("model"),
-                onPick: (value) => choosePicks(pickModel(picks, value, models)),
-              }}
-              effort={{
-                label: effortTabLabel(
-                  view?.applied_effort ?? null,
-                  picks.effort,
-                  choosingSettings,
-                  fallbackEffort,
-                ),
-                stopLabel: "Stop here and change effort",
-                options: effortLevels(models, picks.model).map((level) => ({
-                  value: level,
-                  label: level,
-                })),
-                selected: picks.effort,
-                onStop: () => startSettings("effort"),
-                onPick: (value) => choosePicks(pickEffort(picks, value)),
-              }}
-              commandsEnabled={controlsEnabled && !choosingSettings}
-              revoke={{
-                // Revoking ends the process, so a running turn would be cut short.
-                enabled: controlsEnabled && view?.live === true && !turnOpen,
-                busy: revoking,
-                error: revokeError,
-                onRevoke: revoke,
-              }}
-              restartEnabled={controlsEnabled && !choosingSettings}
-              onRestart={() => startRestart()}
-              agents={{
-                summary: workingLabel(liveAgents) ?? `${entries.length} known`,
-                onOpen: openAgents,
-                stopAll: {
-                  enabled: liveAgents.some((running) => running.state === "running"),
-                  busy: stoppingAgents,
-                  error: stopAgentsError,
-                  onStop: stopAllAgents,
-                },
-              }}
-              draft={
-                viewing !== null ||
-                editing !== null ||
-                ((drafts.get(draftSlot) ?? "").trim() === "" && readyPaths(draftSlot).length === 0)
-                  ? null
-                  : {
-                      onHold: () => {
-                        setMenu(closedMenu);
-                        const draft = takeDraft();
-                        if (draft !== null) hold(draft.text, draft.attachments, "held");
-                      },
-                      onSendNow: transcript.turnOpen
-                        ? () => {
-                            setMenu(closedMenu);
-                            const draft = takeDraft();
-                            if (draft !== null) {
-                              send(draft.text, {
-                                ...rewarm,
-                                ...attachmentsField(draft.attachments),
-                              });
-                            }
-                          }
-                        : null,
-                    }
-              }
-              onEntry={(entry) => setMenu({ kind: "open", entry })}
-              onCommands={() => {
-                setMenu(closedMenu);
-                panelEvent({ type: "open_tab" });
-              }}
-              onClose={() => setMenu(closedMenu)}
-            />
-          ) : agentsOpen ? (
-            <AgentsPanel
-              entries={recentAgents(entries, viewing, Date.now())}
-              viewing={viewing}
-              onSwitch={switchTo}
-              onStop={stopAgent}
-              onClose={() => setAgentsOpen(false)}
-            />
-          ) : undefined
+          ) : composerShown ? undefined : (
+            menuPanel
+          )
         }
       />
 
@@ -1596,7 +1605,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
             />
           )}
 
-          {agentColdPanel && agent !== null && agentCold !== null ? (
+          {showAgentCold ? (
             <AgentColdPanel
               name={agent.name}
               promptTokens={agent.promptTokens}
@@ -1605,7 +1614,10 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
               onBack={() => switchTo(null)}
             />
           ) : (
-            <footer className="border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+            <footer className="relative border-t px-3 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+              {menuPanel !== undefined && (
+                <div className="absolute inset-x-0 bottom-full">{menuPanel}</div>
+              )}
               {commandError !== null && (
                 <p className="mx-auto max-w-5xl text-xs voice-ui text-destructive">
                   {commandError}
