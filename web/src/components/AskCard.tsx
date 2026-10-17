@@ -20,10 +20,13 @@ import {
   HISTORY_READ_TOOL,
   HISTORY_SEARCH_TOOL,
   type PendingAsk,
+  askSummary,
   denyCountdown,
+  hiddenCount,
   historyReadSummary,
   historyScope,
   relativePath,
+  revealHidden,
   toolDisplayName,
   toolSummary,
 } from "@/transcript";
@@ -296,25 +299,39 @@ function InputView({
   }
   const scopeWarning =
     ask.toolName === HISTORY_SEARCH_TOOL ? historyScope(ask.input, cwd).warning : null;
+  const fullInput = JSON.stringify(ask.input, null, 2);
+  const hidden = hiddenCount(fullInput);
+  const showContext = context !== null && CONTEXT_TOOLS.has(ask.toolName);
   return (
     <>
-      {context !== null && CONTEXT_TOOLS.has(ask.toolName) && (
-        <div className="max-h-[25dvh] min-w-0 overflow-y-auto rounded-[5px] rounded-l-none border-l-2 border-ring bg-bubble-claude px-3 py-2 text-sm voice-prose">
-          <Markdown text={context} />
-        </div>
+      {showContext && (
+        <>
+          <p className="text-xs voice-ui text-muted-foreground">Claude wrote</p>
+          <div className="max-h-[25dvh] min-w-0 overflow-y-auto rounded-[5px] rounded-l-none border-l-2 border-ring bg-bubble-claude px-3 py-2 text-sm voice-prose">
+            <Markdown text={context} />
+          </div>
+          <p className="text-xs voice-ui text-muted-foreground">Command to approve</p>
+        </>
+      )}
+      {hidden > 0 && (
+        <p className="text-sm voice-ui text-destructive">
+          {hidden === 1 ? "1 invisible character" : `${hidden} invisible characters`} (direction
+          changes or zero-width marks), shown as \u{"{...}"} escapes. They can make text read
+          differently from what runs.
+        </p>
       )}
       {diff === null ? (
-        <div className="rounded-[5px] border bg-background p-2 text-sm voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
+        <div className="max-h-[40dvh] overflow-y-auto rounded-[5px] border bg-background p-2 text-sm voice-code [overflow-wrap:anywhere] whitespace-pre-wrap">
           {ask.toolName === HISTORY_READ_TOOL ? (
             <HistoryReadLine input={ask.input} />
           ) : (
-            toolSummary(ask.toolName, ask.input, cwd)
+            revealHidden(askSummary(ask.toolName, ask.input, cwd))
           )}
         </div>
       ) : (
         <div className="space-y-1">
           <div className="min-w-0 truncate text-sm voice-code">
-            <span className="voice-ui">{diff.verb}</span>({diff.path})
+            <span className="voice-ui">{diff.verb}</span>({revealHidden(diff.path)})
           </div>
           <div className="text-xs voice-ui text-muted-foreground">
             &#x2514; {changeSummary(diff.added, diff.removed)}
@@ -328,7 +345,7 @@ function InputView({
           full input
         </summary>
         <pre className="mt-1 max-h-60 overflow-auto rounded-[5px] bg-muted p-2 text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
-          {JSON.stringify(ask.input, null, 2)}
+          {revealHidden(fullInput)}
         </pre>
       </details>
     </>

