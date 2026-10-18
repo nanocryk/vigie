@@ -32,13 +32,16 @@ cd vigie/web && npm ci && npm run build && cd ..
 ./serve.sh          # Windows: serve.bat
 ```
 
-Then open the pair URL it prints, accept the certificate warning (see below), and the app opens. To use it from a phone, see [Remote access with Tailscale](#remote-access-with-tailscale-recommended).
+This first start stops with `no TLS certificate`: vigie serves nothing until it has one. Either:
+
+- set up [Tailscale](#remote-access-with-tailscale-recommended) (recommended): the phone trusts its certificate, and the installed app and push notifications work.
+- or start with `./serve.sh --self-signed` to try vigie on this machine, then open the pair URL it prints and accept the certificate warning (see [Run](#run)).
 
 The first `./serve.sh` compiles the server in release mode, which takes several minutes. Later starts reuse that build.
 
 ### Platforms
 
-vigie is developed and tested on Windows. The code and scripts are meant to run on Linux and macOS too, but nobody has tried them there yet: reports are welcome.
+Developed and used on Windows. CI builds and tests it on Linux and macOS, but nobody has run it as a server there yet: reports are welcome.
 
 ### Requirements
 
@@ -74,7 +77,7 @@ From the repository root, build and start the server:
 
 Its arguments go to the server, e.g. `./serve.sh --bind 0.0.0.0:7879`. It restarts the server when asked from the app. On Windows, run `serve.bat` instead, from any terminal or by double-clicking it: it runs `serve.sh` with Git for Windows' bash.
 
-By default it listens on `https://127.0.0.1:7879/vigie/` with a self-signed certificate, and prints a pair URL:
+It needs a TLS certificate (see [Configuration](#configuration)). By default it listens on `https://127.0.0.1:7879/vigie/`, and prints a pair URL:
 
 ```
 vigie listening on https://127.0.0.1:7879/vigie/
@@ -88,16 +91,17 @@ Open the pair URL in a browser to pair that device. Once it expires, print a fre
 cargo run --release -- auth pair
 ```
 
-The browser warns about the self-signed certificate on first visit. Before accepting it, compare the SHA-256 fingerprint the browser shows with the one vigie prints at startup: a match means nothing sits between the browser and vigie. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
+With `--self-signed`, the browser warns about the certificate on first visit. Before accepting it, compare the SHA-256 fingerprint the browser shows with the one vigie prints at startup: a match means nothing sits between the browser and vigie. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
 
 ### Configuration
 
-Settings live in `~/.vigie/config.json`, next to the database, keys and device registry. Every field is optional, and a command-line flag overrides its field.
+Settings live in `~/.vigie/config.json`, next to the database, keys and device registry. A command-line flag overrides its field. Every field is optional, except that vigie needs a certificate: `cert` and `key`, or `self_signed`.
 
 | Field           | Flag                     | Default          | Meaning                                                  |
 |-----------------|--------------------------|------------------|----------------------------------------------------------|
 | `bind`          | `--bind`                 | `127.0.0.1:7879` | Address and port to listen on.                           |
-| `cert`, `key`   | `--cert`, `--key`        | self-signed      | TLS certificate and private key (PEM), given together.   |
+| `cert`, `key`   | `--cert`, `--key`        | none             | TLS certificate and private key (PEM), given together. `vigie tailscale` writes them (see [Tailscale](#remote-access-with-tailscale-recommended)). |
+| `self_signed`   | `--self-signed`          | off              | Serve a self-signed certificate kept in `~/.vigie/tls/`. Browsers warn about it, and the installed app and push notifications may not work. |
 | `public_hosts`  | `--public-host` (repeat) | none             | Extra `host[:port]` names offered for pairing and accepted as origins. |
 | `allow_origins` | `--allow-origin` (repeat)| none             | Extra origins accepted on the WebSocket connection, on writes, and as the Host. |
 
@@ -146,15 +150,16 @@ The certificate is valid for 90 days. Renew it by running `tailscale cert` again
 
 Without Tailscale, forward a port on the router to the machine and bind vigie to `0.0.0.0`. This exposes vigie to the whole internet: the pairing token and device authentication are then all that stand between the internet and a Claude Code able to run commands on your machine. Prefer Tailscale.
 
-- Bring your own certificate for a domain name pointing at the router (`cert` and `key`), and add that name to `public_hosts`. With the self-signed certificate, the phone shows a warning on every new visit, and the installed app and push notifications may not work.
+- Bring your own certificate for a domain name pointing at the router (`cert` and `key`), and add that name to `public_hosts`. With `--self-signed`, the phone shows a warning on every new visit, and the installed app and push notifications may not work.
 - Keep the forwarded port the same as the bind port, or give the public host its port explicitly (`"example.com:443"`).
 
 ## Troubleshooting
 
+- **vigie stops at startup with `no TLS certificate`:** it needs one before serving. Run `vigie tailscale`, or start with `--self-signed` (see [Quick start](#quick-start)).
 - **The pair URL expired or was already used:** print a new one with `cargo run --release -- auth pair` while the server runs.
 - **A blank page with a 403:** vigie only answers to the names and addresses it knows, and the log shows `forbidden (unknown host)`. Add the name you opened it with to `public_hosts`, or as a full origin to `allow_origins`.
 - **The page is unreachable from another device:** the default bind is `127.0.0.1`, reachable from this machine only. Bind the Tailscale IP or `0.0.0.0` (see [Configuration](#configuration)).
-- **The installed app or push notifications don't work on the phone:** they need a certificate the phone trusts. The Tailscale setup gives one.
+- **The phone shows a certificate warning, or the installed app and push notifications don't work:** they need a certificate the phone trusts, which the self-signed one isn't. The Tailscale setup gives one.
 - **A session stops right away about billing:** Claude Code is logged in with an API key. Run `claude`, log in with your Claude subscription, then start the session again.
 - **The page is stale after a manual `git pull`:** rebuild the web app (`npm run build` in `web/`) and restart the server. The Update button in device settings does both for you.
 

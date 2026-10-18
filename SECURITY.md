@@ -27,7 +27,7 @@ Pair only devices you control. Revoke a lost device from the device settings of 
 - **Pairing:** a device pairs with a single-use token. The one printed at startup or by `vigie auth pair` expires after 10 minutes; one issued from a paired device expires after 5. Tokens are 256-bit random values and travel in the URL fragment, which browsers never send to the server.
 - **Device sessions:** a paired device holds an `HttpOnly`, `SameSite=Strict` cookie, valid for 60 days and checked on every request. Revoking a device ends its open connections.
 - **Request checks:** requests whose `Host` is not an allowed origin are refused, and so are writes and WebSocket connections whose `Origin` is not. The allowed origins are loopback, the bind address, the machine's reachable addresses, `public_hosts` and `--allow-origin`.
-- **TLS:** on by default. Plain HTTP (`--http`) is refused on any address other than loopback. With the self-signed certificate, compare the fingerprint vigie prints at startup with the one the browser shows before accepting it.
+- **TLS:** required. vigie refuses to start without a certificate, unless asked for a self-signed one (`--self-signed`) or plain HTTP (`--http`), which is refused on any address other than loopback. With the self-signed certificate, compare the fingerprint vigie prints at startup with the one the browser shows before accepting it.
 - **Pairing rate limit:** after 5 failed pairing attempts in 10 minutes, the client's IP address is locked out for an hour.
 
 ### What the client protects against

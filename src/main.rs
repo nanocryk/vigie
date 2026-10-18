@@ -106,6 +106,11 @@ struct ServeArgs {
     #[arg(long)]
     key: Option<PathBuf>,
 
+    /// Serve a self-signed certificate kept in the state directory. Browsers
+    /// warn about it; `vigie tailscale` sets up a trusted one.
+    #[arg(long)]
+    self_signed: bool,
+
     /// Disable TLS. Refuses to start on a non-loopback bind.
     #[arg(long)]
     http: bool,
@@ -131,6 +136,8 @@ struct ServerConfig {
     cert: Option<PathBuf>,
     #[serde(default)]
     key: Option<PathBuf>,
+    #[serde(default)]
+    self_signed: bool,
     #[serde(default)]
     public_hosts: Vec<String>,
     #[serde(default)]
@@ -187,10 +194,18 @@ impl Settings {
                 "cert and key must be provided together (either both flags or both in config.json)"
             ),
         };
-        let tls = if args.http {
-            Tls::Off
-        } else {
-            provided.unwrap_or(Tls::SelfSigned)
+        let self_signed = args.self_signed || config.self_signed;
+        let tls = match (args.http, provided, self_signed) {
+            (true, _, _) => Tls::Off,
+            (false, Some(_), true) => {
+                bail!("self-signed refused: a certificate and key are already given")
+            }
+            (false, Some(provided), false) => provided,
+            (false, None, true) => Tls::SelfSigned,
+            (false, None, false) => bail!(
+                "no TLS certificate. Run `vigie tailscale` to set up a trusted one (recommended, see \
+                 the README's Tailscale section), or start with --self-signed for one browsers warn about"
+            ),
         };
         let public_hosts = if args.public_host.is_empty() {
             config.public_hosts
@@ -903,6 +918,7 @@ mod tests {
             bind: None,
             cert: None,
             key: None,
+            self_signed: false,
             http: false,
             public_host: Vec::new(),
             allow_origin: Vec::new(),
@@ -916,6 +932,7 @@ mod tests {
             bind: Some("0.0.0.0:9000".parse().unwrap()),
             cert: Some("config.pem".into()),
             key: Some("config.key".into()),
+            self_signed: false,
             public_hosts: vec!["https://config.example/".into()],
             allow_origins: vec!["https://config.example".into()],
         };
@@ -957,6 +974,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loopback.scheme(), "http");
+    }
+
+    #[test]
+    fn a_self_signed_certificate_needs_asking_for() {
+        assert!(Settings::resolve(args(), ServerConfig::default()).is_err());
+        let flag = ServeArgs {
+            self_signed: true,
+            ..args()
+        };
+        let from_flag = Settings::resolve(flag, ServerConfig::default()).unwrap();
+        assert!(matches!(from_flag.tls, Tls::SelfSigned));
+        let config = ServerConfig {
+            self_signed: true,
+            ..ServerConfig::default()
+        };
+        let from_config = Settings::resolve(args(), config).unwrap();
+        assert!(matches!(from_config.tls, Tls::SelfSigned));
+        let both = ServeArgs {
+            self_signed: true,
+            cert: Some("cert.pem".into()),
+            key: Some("key.pem".into()),
+            ..args()
+        };
+        assert!(Settings::resolve(both, ServerConfig::default()).is_err());
     }
 
     #[test]
