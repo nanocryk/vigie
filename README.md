@@ -133,3 +133,7 @@ Without Tailscale, forward a port on the router to the machine and bind vigie to
 - `web/`: the React and TypeScript client (`npm run build`, `npm run check` for the type-check and tests).
 - `src/`: the Rust server. `cargo test` runs the suite against a fake `claude` that replays recorded sessions from `spike/runs`, so tests spend no usage.
 - `DESIGN.md` holds the design, `notes/` the protocol research and the client wire protocol.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
