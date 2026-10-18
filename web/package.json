@@ -9,6 +9,9 @@
     "directory": "web"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

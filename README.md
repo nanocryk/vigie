@@ -24,11 +24,32 @@ Supervised work with Claude Code, away from the desk as much as at it. You read 
 
 ## Installation
 
+### Quick start
+
+```sh
+git clone https://github.com/nanocryk/vigie.git
+cd vigie/web && npm ci && npm run build && cd ..
+./serve.sh          # Windows: serve.bat
+```
+
+Then open the pair URL it prints, accept the certificate warning (see below), and the app opens. To use it from a phone, see [Remote access with Tailscale](#remote-access-with-tailscale-recommended).
+
+The first `./serve.sh` compiles the server in release mode, which takes several minutes. Later starts reuse that build.
+
+### Platforms
+
+vigie is developed and tested on Windows. The code and scripts are meant to run on Linux and macOS too, but nobody has tried them there yet: reports are welcome.
+
 ### Requirements
 
-- [Rust](https://rustup.rs/) 1.85 or newer (edition 2024).
-- [Node.js](https://nodejs.org/) with npm, to build the web app.
+- [Rust](https://rustup.rs/) 1.89 or newer.
+- [Node.js](https://nodejs.org/) 22.12 or newer, with npm, to build the web app.
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) installed, with `claude` on the `PATH`, and logged in with a Claude subscription. vigie refuses to run sessions billed through an API key: it removes `ANTHROPIC_API_KEY` from Claude's environment, and stops a session that reports any other key source.
+- On Windows, [Git for Windows](https://gitforwindows.org/), whose bash runs `serve.sh`.
+
+### Commands
+
+The server's commands run from the repository root through cargo, e.g. `cargo run --release -- auth pair`. Where vigie's own messages say `vigie auth pair`, that is the same command.
 
 ### Build
 
@@ -51,7 +72,7 @@ From the repository root, build and start the server:
 ./serve.sh
 ```
 
-Its arguments go to the server, e.g. `./serve.sh --bind 0.0.0.0:7879`. It restarts the server when asked from the app. On Windows, run `serve.bat` instead, from any terminal or by double-clicking it: it runs `serve.sh` with the bash of [Git for Windows](https://gitforwindows.org/).
+Its arguments go to the server, e.g. `./serve.sh --bind 0.0.0.0:7879`. It restarts the server when asked from the app. On Windows, run `serve.bat` instead, from any terminal or by double-clicking it: it runs `serve.sh` with Git for Windows' bash.
 
 By default it listens on `https://127.0.0.1:7879/vigie/` with a self-signed certificate, and prints a pair URL:
 
@@ -127,6 +148,15 @@ Without Tailscale, forward a port on the router to the machine and bind vigie to
 
 - Bring your own certificate for a domain name pointing at the router (`cert` and `key`), and add that name to `public_hosts`. With the self-signed certificate, the phone shows a warning on every new visit, and the installed app and push notifications may not work.
 - Keep the forwarded port the same as the bind port, or give the public host its port explicitly (`"example.com:443"`).
+
+## Troubleshooting
+
+- **The pair URL expired or was already used:** print a new one with `cargo run --release -- auth pair` while the server runs.
+- **A blank page with a 403:** vigie only answers to the names and addresses it knows, and the log shows `forbidden (unknown host)`. Add the name you opened it with to `public_hosts`, or as a full origin to `allow_origins`.
+- **The page is unreachable from another device:** the default bind is `127.0.0.1`, reachable from this machine only. Bind the Tailscale IP or `0.0.0.0` (see [Configuration](#configuration)).
+- **The installed app or push notifications don't work on the phone:** they need a certificate the phone trusts. The Tailscale setup gives one.
+- **A session stops right away about billing:** Claude Code is logged in with an API key. Run `claude`, log in with your Claude subscription, then start the session again.
+- **The page is stale after a manual `git pull`:** rebuild the web app (`npm run build` in `web/`) and restart the server. The Update button in device settings does both for you.
 
 ## Security
 
