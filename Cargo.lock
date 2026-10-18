@@ -2333,6 +2333,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures-util",
+ "hyper-util",
  "if-addrs",
  "notify",
  "parking_lot",

@@ -25,6 +25,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 clap = { version = "4", features = ["derive"] }
 dirs = "7"
 futures-util = "0.3"
+hyper-util = { version = "0.1", features = ["tokio"] }
 if-addrs = "0.15"
 notify = "8"
 parking_lot = "0.12"

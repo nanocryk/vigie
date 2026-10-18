@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use hyper_util::rt::TokioTimer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -30,6 +31,8 @@ const DEFAULT_BIND: &str = "127.0.0.1:7879";
 const WEB_DIST: &str = "web/dist";
 /// Time open connections get to finish after Ctrl+C.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// Time a client gets to send a full request head (hyper's default).
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -587,41 +590,31 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         let _ = stop_sender.send(true);
     });
 
+    let handle = axum_server::Handle::new();
+    tokio::spawn({
+        let handle = handle.clone();
+        let stop = stop.clone();
+        async move {
+            stopped(stop).await;
+            handle.graceful_shutdown(Some(SHUTDOWN_GRACE));
+        }
+    });
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
     let served: Result<()> = if let Some((cert_path, key_path, _)) = tls {
         let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .with_context(|| format!("load TLS from {}", cert_path.display()))?;
-        let handle = axum_server::Handle::new();
-        tokio::spawn({
-            let handle = handle.clone();
-            let stop = stop.clone();
-            async move {
-                stopped(stop).await;
-                handle.graceful_shutdown(Some(SHUTDOWN_GRACE));
-            }
-        });
-        axum_server::bind_rustls(bind, config)
+        with_header_timeout(axum_server::bind_rustls(bind, config), HEADER_READ_TIMEOUT)
             .handle(handle)
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .serve(service)
             .await
-            .map_err(Into::into)
     } else {
-        let listener = tokio::net::TcpListener::bind(bind).await?;
-        let server = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(stopped(stop.clone()));
-        // Graceful shutdown waits for every connection, open WebSockets
-        // included, so it gets a deadline.
-        tokio::select! {
-            served = server => served.map_err(Into::into),
-            () = async {
-                stopped(stop.clone()).await;
-                tokio::time::sleep(SHUTDOWN_GRACE).await;
-            } => Ok(()),
-        }
-    };
+        with_header_timeout(axum_server::bind(bind), HEADER_READ_TIMEOUT)
+            .handle(handle)
+            .serve(service)
+            .await
+    }
+    .map_err(Into::into);
     if let Err(err) = manager.shutdown().await {
         warn!("session shutdown: {err:#}");
     }
@@ -634,6 +627,22 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
 
 async fn stopped(mut stop: watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
+}
+
+/// Closes connections that don't send a full request head within `timeout`,
+/// so a client trickling bytes can't hold one open. hyper only enforces the
+/// timeout once a timer is installed.
+fn with_header_timeout<Acc>(
+    mut server: axum_server::Server<SocketAddr, Acc>,
+    timeout: Duration,
+) -> axum_server::Server<SocketAddr, Acc> {
+    let builder = server.http_builder();
+    builder
+        .http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(timeout);
+    builder.http2().timer(TokioTimer::new());
+    server
 }
 
 /// Origins a WebSocket upgrade is accepted from: the bind address, loopback,
@@ -810,6 +819,27 @@ fn origin_host(origin: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn server_closes_a_connection_that_never_finishes_its_request_head() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let handle = axum_server::Handle::new();
+        let server = with_header_timeout(
+            axum_server::bind(SocketAddr::from(([127, 0, 0, 1], 0))),
+            Duration::from_millis(200),
+        )
+        .handle(handle.clone());
+        tokio::spawn(server.serve(axum::Router::new().into_make_service()));
+        let addr = handle.listening().await.expect("server listening");
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        let mut rest = Vec::new();
+        let closed =
+            tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok(), "connection still open after 10 s");
+    }
 
     #[test]
     fn the_fingerprint_is_the_sha256_of_the_certificate_der() {
