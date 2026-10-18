@@ -100,7 +100,7 @@ A web app reachable from a phone that drives Claude Code headlessly on the host 
 - A glow draws the eye to a bubble: breathing slowly (steady under reduced motion) until the next input on that device (pointer, touch, key, wheel; input in the first half second does not count), then fading out over 1 s. It marks the message jumped to, and Claude's last bubble when a turn ends live in the main discussion, as the end of Claude's turn; a turn ending on a tool call, an interrupt or an error glows nothing. Not saved: a reload drops it. At the bottom with it on screen: no button. In an agent's view, the last message is the last one relayed to it.
 - Permission and question cards. Several asks queue; a new one never replaces the card being looked at, and never captures input meant for something else (the TUI failure: a prompt appearing while typing takes an Enter not meant for it).
 - Approvals by swipe: right accepts, left rejects, with a way to add notes.
-  - Tool-use asks and plan approval are swiped, notes included.
+  - Tool-use asks and plan approval are swiped, notes included. Question cards (`AskUserQuestion`) are not: options are tapped, then an Answer button sends.
   - Every ask takes two swipes in a row in the same direction: one gesture for all asks, so no conflicting muscle memory. The first swipe shows "Confirm?" in that side's color; the second sends the answer at once. A tap, a swipe in the other direction, or waiting 3 s cancels.
   - A swipe can start anywhere on the panel. Its side is chosen by a minimum travel distance, large enough that a movement in that direction is never a fluke: at least 20% of the panel width and 56 px, mostly horizontal (horizontal travel at least twice the vertical) so scrolling never registers. Below the threshold the panel springs back.
   - Settings, Swipes tunes this per device: the distance (short 12% / 40 px, default, long 30% / 80 px), the time for the second swipe (2, 3 or 5 s), and one swipe instead of two for unflagged asks. Dangerous asks always take two.
@@ -246,7 +246,7 @@ A web app reachable from a phone that drives Claude Code headlessly on the host 
 
 ## Host
 
-- One long-lived `claude` child per session: background tasks run inside it and start turns on their own. Idle children are reaped and restarted with `--resume` on demand, also after a server restart. A Claude session no message reached yet has no conversation to resume, so it launches again with `--session-id` until one does.
+- One long-lived `claude` child per session: background tasks run inside it and start turns on their own. A child runs until it is killed from Home, its folders are revoked, or the server stops; the next message restarts it with `--resume`, also after a server restart. A Claude session no message reached yet has no conversation to resume, so it launches again with `--session-id` until one does.
 - Own serde types for the stream-json protocol, validated against the recordings. Unknown fields pass through as raw JSON. `claude-wrapper` serves as reference only.
 - History in SQLite, for queries and search.
 - vigie sets its own env var on its children, so hooks can detect which host runs them. Every other `VIGIE_*` var (a parent session's, the shim's) is removed from their env.
@@ -276,26 +276,20 @@ A web app reachable from a phone that drives Claude Code headlessly on the host 
 
 ## Open
 
-- Swipe details: whether questions use a card other than swipe.
 - Delivery states for outbound actions (queued, on host, received by Claude, done) and how they show.
-- When an idle child is reaped.
-- Server to client events: raw CLI lines plus thin host events; their exact shape and the SQLite schema.
-- Auth gate (refuse API-key billing) and the rest of the billing kill switch.
-- Projects Home design, including how projects and scratch discussions are laid out.
-- Which folder or file counts as related to a session (its cwd, the last file referenced, files it edited).
+- Whether idle children are reaped, and when.
+- Which file counts as related to a session (the last file referenced, files it edited), beyond its folder.
 - Terminals for non-Claude tasks: approach undecided (ideas: fixed size, piping output and showing text instead of a terminal emulator, named run configurations such as canif scripts with live text output).
 - Per-session and per-project notification and visibility settings: which settings.
-- MCP server: the tools beyond `set_attachments`, and their schemas.
 - Sensory features (sound, music, animation): opt-in per device, global mute, reduced motion.
 - Which commands get a custom presentation beyond commits, and how one is defined.
-- Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, auto-title, Mermaid rendering.
+- Welcomed from other tools, not designed: word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, auto-title, Mermaid rendering.
 - Welcomed, not designed:
   - rounds (one Claude message: text and tool calls, before their results come back) as the grouping unit, not rendered as frames: a round's parallel calls as one expandable row, earlier rounds' text dimmed or folded so the last round's answer stands out, a little more space between rounds than within one;
   - the cost of each turn as a share of the 5h window, shown on the turn.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).
 - How checks are registered per project.
 - Claude Code version check at startup (`claude --version`, `system/init.capabilities`), and how features degrade on an unsupported version.
-- Raw protocol log per session: possibly unnecessary, can grow big.
 - Lag when the phone's VPN sleeps. Ideas: self-signed certificate and port forwarding.
 - Mascot and session comic: undecided.
 - Folder grants: whether a same-session restart within the TTL keeps the cache warm.
