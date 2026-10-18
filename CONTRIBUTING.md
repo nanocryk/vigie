@@ -9,7 +9,8 @@
 ## Build and test
 
 - Server: `cargo test` runs the suite against a fake `claude` that replays the recordings in `spike/runs`, so tests spend no usage. `cargo clippy --all-targets` should stay clean, and `cargo fmt` formats.
-- Client: from `web/`, `npm run check` type-checks and runs the tests, `npm run build` builds `web/dist`.
+- Client: from `web/`, `npm run check` type-checks and runs the tests, `npm run build` builds `web/dist`, and `npm run format` formats.
+- CI runs all of these on every push and pull request (`.github/workflows/ci.yml`): the Rust checks on Windows, Linux and macOS, plus a check with Rust 1.89, the oldest supported. A weekly job audits the dependencies.
 
 ## Design documents
 
