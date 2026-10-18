@@ -2,25 +2,23 @@
 
 A web app reachable from a phone that drives Claude Code headlessly on the host (`claude -p` with stream-json input and output) and renders a native chat UI. No TUI in the loop. Protocol research lives in `notes/protocol.md`, the client protocol in `notes/wire.md`.
 
-It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI through a PTY.
-
 ## Usage profile
 
 - Supervised use, not unattended agents. The user reads and steers; on a big task whose plan was approved, glances quickly at the commands.
 - 1 to 3 sessions at once, usually one per project, several projects in parallel.
-- Continuing work on an existing project: usually a single Claude session, reused. When its cache is cold, the user starts a fresh session and pulls back the recent context (today `/clear` then `/tail-session`).
+- Continuing work on an existing project: usually a single Claude session, reused. When its cache is cold, the user starts a fresh session and pulls back the recent context.
 - Random experiments or discussions not tied to a project, with the user's own Claude Code instructions applied (the official Claude app lacks them).
 - Used on the phone and on the computer.
-- Designed for an "autistic adhd brain".
+- Designed for a neurodivergent brain: clear states, no clutter.
 
 ## Principles
 
-- Reliability first. Pain points of the Claude mobile app: "messages are lost in transit, can't diff, stop orders are "sent" but not really".
-- No "cold corporate feel". Code stays readable as a developer reads it: no hiding diffs.
+- Reliability first: messages are never lost in transit, diffs are always viewable, and stop really stops.
+- No cold corporate feel. Code stays readable as a developer reads it: no hiding diffs.
 
 ## Access and clients
 
-- Remote access and authentication work as in vigie-tui.
+- Devices pair with a single-use token and authenticate with a per-device cookie (see `SECURITY.md`).
 - Several clients (phone, computer) can be on the same session at once. A card answered on one client disappears on all of them.
 - Compose drafts can be stored on the server.
 
@@ -153,7 +151,7 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - Model and effort: a pick is stored per discussion and passed on every start of the child; without a pick the CLI chooses. The menu always shows what the CLI actually applies, read with `get_settings` (`applied.model`, `applied.effort`) when the child starts, after each turn and after a change, and kept for stopped discussions: e.g. "Opus 5.5" and "medium effort", never "Default" or "auto". Only those two values are kept from that reply, which also carries the user's settings. The catalog (models, commands) and the applied values with no pick are shared by all discussions: the server keeps the latest seen from any Claude start, persisted, so a stopped or cold discussion still shows its values and opens its lists; a discussion without its own applied values shows its pick, else those defaults. With nothing stored yet, the server starts a short-lived Claude at launch to read them, without any model request. Since a change reloads the cache (model always; effort treated the same), the model and effort menu entries each open a single choice, "Stop here and change model" (or effort). It interrupts a running turn and puts the discussion in the cold-cache state: the choice panel shows and the entry used opens its list (models from the CLI's `initialize`; effort levels those the chosen model supports, none on a model without effort). While the panel shows, the menu's model and effort entries open their lists; a pick, a tap elsewhere or Escape closes it. The panel's first button is a green "Resume, same model" when nothing changed (no cache cost), or a red "Rewarm with new settings" with the reload warning and a confirmation when something did; continue and blank start on the picked settings.
 - Commands: the menu's commands entry opens a panel in front of the discussion, one card per command with its name, a short description and its argument hint. vigie's own commands come first: Clear (a fresh Claude session and a "Cleared" divider, like blank, without the cold check), Change model, Change effort. Then Claude's commands and skills from `initialize`, minus the terminal-only ones. A card is used by a double swipe right, or on desktop a Use button on its right pressed twice; for Clear that is its confirmation. The filter field sits at the bottom, in the composer's place. Typing `/` as the composer's first character opens the same panel, the composer text acting as the filter. A command without an argument is sent at once; one with an argument turns the bottom field into its argument entry, prefilled with `/name `. A composer draft present when the panel is used is never touched: the command goes alone, and the draft is back afterwards. A `/...` typed in the composer is the command itself and is consumed.
 - File references (`path:line`) and URLs in messages are links, opened inside the app.
-- Attachments in prompts, including screenshots taken on the phone, better integrated than in vigie-tui.
+- Attachments in prompts, including screenshots taken on the phone.
 - Commit card: a commit is presented as a card, not a bare command. Generalizes to custom presentations: specific commands get a customized interface.
 - Verification chips: checks (command, pass or fail, output tail) reported through the MCP server, expandable. Checks are registered per project, so the full list shows, including the ones skipped; the agent answers why a check was not run (not needed, not relevant, ...).
 - Plan file progress shown in the session. Mentions of a plan part (e.g. "Phase 3 of the plan") are clickable and show that part.
@@ -174,12 +172,11 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 
 ## Projects and Home
 
-- Projects Home designed anew. vigie-tui's Home (file explorer, favorites, discussions per project) is "a bit messy".
 - No workspace concept: commands reach the whole machine anyway. Projects are the folders sessions were started in.
 - Home lists projects and scratch discussions as two kinds of entries.
 - A full-screen file explorer (see File explorer), opened from a "File explorer" button on Home. Sessions start from it; there is no path field.
-- Buttons switch between a session and its related folder or file, "so it becomes more fluid to switch between them".
-- Opening a file or folder lands where expected. vigie-tui often lands in the wrong directory; the navigation logic is designed anew.
+- Buttons switch between a session and its related folder or file.
+- Opening a file or folder lands where expected.
 - Handoffs are detected and give their project a special status. Opening the session suggests starting from the handoff. The handoff, clear, read-handoff sequence is integrated as a workflow.
 - canif scripts are first-class: shown with their description and what each argument is.
 - Items with positive and negative actions take them by swipe: negative ones to the left, positive ones to the right. On desktop, each action's button sits on the side the item slides toward. On touch screens, the action is shown either by a button or by a hint above the list, on that same side.
@@ -227,13 +224,13 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 
 ## Account usage
 
-- Usage module inside the app, doing what the custom Claude status bar does today, and more: 5h and 7d windows with projections, stats. Remade in this service to avoid useless dependencies, porting the existing Rust code from `../claude-projection-status`.
+- Usage module inside the app: 5h and 7d windows with projections, stats.
 - Estimates are calibrated from the tokens each turn reports, window usage measured before and after turns, and history. The same data feeds stats and projections.
 - History stores the raw CLI lines and periodic `get_usage` samples.
-- The usage storage is vigie's own schema, starting empty and filled from live readings only; nothing is backfilled from history or imported from `claude-projection-status`'s `state.db`.
-- The backend ports every feature of the status bar (windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share, bypass). The frontend shows them through the top bar; the others get their own presentation.
-- Each window row starts with the time left before its reset over the window length, as in the status bar (`3h55/5h`).
-- Bars use the text color by default (white on the dark theme). Window colors follow the status bar:
+- The usage storage is vigie's own schema, starting empty and filled from live readings only; nothing is backfilled from history.
+- The backend computes windows, projections, rate, work left, deadline, fun line facts, model mix, subagent share and bypass. The frontend shows the windows and projections through the top bar; the others get their own presentation.
+- Each window row starts with the time left before its reset over the window length (`3h55/5h`).
+- Bars use the text color by default (white on the dark theme). Window colors:
   - the spent part is always the text color, red once 100% is used;
   - the projection, from the spent edge to the projected value, is green, yellow or red by the projected share: yellow from 75% and red from 90% on the 5h window, from 85% and 95% on the 7d window; more opaque when well supported and less when barely;
   - the used number is green, yellow from 40% and red from 70%; the projected number takes the projection's color, bold when well supported and faint when barely.
@@ -244,7 +241,7 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 
 ## Usage credits
 
-- Usage credits are disabled on the user's account. Their use is detected on a best-effort basis; on detection vigie stops the discussion automatically and warns the user so they can investigate.
+- Usage credits are meant to stay off. Their use is detected on a best-effort basis; on detection vigie stops the discussion automatically and warns the user so they can investigate.
 - Signals: `rate_limit_event` reporting overage use or an `overage` limit type, main-conversation cache writes moving from the 1 hour to the 5 minute TTL, `get_usage` extra-usage credits increasing.
 
 ## Host
@@ -269,31 +266,13 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - React, TypeScript and Vite: a single-page app served by the host server.
 - Tailwind and shadcn/ui, restyled with vigie's own theme rather than the shadcn defaults.
 - Motion for gestures and animation (swipe cards).
-- Recursive for all text, its settings varying by role to keep the UI "varied while consistent". Code (spans and blocks) is monospaced and fully linear; everything else (message prose, UI, headings) is proportional, prose and headings half casual. Text needing alignment comes in code blocks, so it keeps it.
+- Recursive for all text, its settings varying by role to keep the UI varied while consistent. Code (spans and blocks) is monospaced and fully linear; everything else (message prose, UI, headings) is proportional, prose and headings half casual. Text needing alignment comes in code blocks, so it keeps it.
 
 ## Development
 
 - Lots of unit and integration tests. A fake `claude` replays recorded stream-json sessions, so tests cost no usage and stay deterministic. Recordings also catch regressions across Claude Code updates and show what changed.
 - vigie is developed with vigie (dogfooding), so it must stay usable with degraded features. When it is too broken and a plain Claude Code TUI is used instead, the user's hooks, skills and tools must handle not running under vigie.
-- The first slice holds the core features the others build on. Authentication is copied from vigie-tui. Content:
-  - Server with vigie-tui's authentication.
-  - Sessions: start one in a chosen folder, list, reopen.
-  - Child process with the auth gate: no API key in the child env; `apiKeySource` other than `"none"` stops the session.
-  - SQLite history; clients connect over a websocket and get a replay on reconnect.
-  - Chat view: streamed text, compact tool calls, composer, stop (interrupt).
-  - Permission cards with allow and deny buttons, `AskUserQuestion` answers; one card shown, the rest queued.
-  - Several clients on one session; a card answered on one disappears on the others.
-  - Fake `claude` replaying the recordings in tests.
-- Outside the first slice: directory explorer, swipe, cache and usage header, cold-cache blocking, MCP server, scratch folders.
-- Second slice, making vigie the daily tool:
-  - Markdown rendering in bubbles; diffs for Edit and Write.
-  - Usage module (see Account usage).
-  - Cache and context header with cold-cache blocking.
-  - Session controls (model, effort, permission mode) and the slash command picker.
-  - In-app pairing with a QR code.
-  - Push notifications.
-  - Session management: archive a session (hidden from Home, restorable) and kill it (stop its Claude process; the session stays listed).
-  - Swipe approvals.
+- Auth gate: no API key in the child env; an `apiKeySource` other than `"none"` stops the session.
 
 ## Open
 
@@ -310,7 +289,7 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - Sensory features (sound, music, animation): opt-in per device, global mute, reduced motion.
 - Which commands get a custom presentation beyond commits, and how one is defined.
 - Welcomed from other tools, not designed: permission cards for edits showing the diff, reconnect with sequence numbers and a replay buffer, word-level and side-by-side diffs, checkpoints and rewind, usage analytics by project, model and time, session fork, auto-title, Mermaid rendering.
-- Welcomed, not designed ("all your new ideas are very good"):
+- Welcomed, not designed:
   - rounds (one Claude message: text and tool calls, before their results come back) as the grouping unit, not rendered as frames: a round's parallel calls as one expandable row, earlier rounds' text dimmed or folded so the last round's answer stands out, a little more space between rounds than within one;
   - the cost of each turn as a share of the 5h window, shown on the turn.
 - Welcomed, not designed: pinning messages to a session or project, one-tap quick replies customizable per project, two kinds of stop ("stop now" interrupts, "stop after this step" queues a steer).
@@ -320,5 +299,5 @@ It supersedes vigie-tui (`../vigie-tui`), which drove the Claude Code TUI throug
 - Lag when the phone's VPN sleeps. Ideas: self-signed certificate and port forwarding.
 - Mascot and session comic: undecided.
 - Folder grants: whether a same-session restart within the TTL keeps the cache warm.
-- Bash asks also carry a suggestion to always allow the exact command, saved in the project's local settings. The CLI's suggested command is "often either too broad or overly specific"; the ask panel would offer an improved version of it. How is not designed.
+- Bash asks also carry a suggestion to always allow the exact command, saved in the project's local settings. The CLI's suggested command is often too broad or too specific; the ask panel would offer an improved version of it. How is not designed.
 - Brainstormed and not yet confirmed: step pace, steer box, tangent thread, grouped tool activity, dimmed intermediate chatter, phase-boundary card (testable changes, diff, commit and next phase as separate actions), an MCP tool opening a URL on the phone client for on-device testing.

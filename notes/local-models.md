@@ -46,22 +46,6 @@ Rules of thumb:
 - Keep the raw source one click away; summaries drop the line that matters (CI logs).
 - No decisions with consequences (permission answers, danger checks).
 
-## Email filtering
-
-First use case the user named.
-
-- Fetch: Proton Mail Bridge (paid plan) exposes local IMAP; IMAP IDLE for new mail.
-- Clean: MIME parse, HTML to text, cut quotes and signatures, truncate.
-- Classify: Ollama with a JSON schema (`format`), e.g. `{category, priority, needs_reply, deadline, project, one_line_summary}`. A 9B model on CPU or a small GPU suffices.
-- Act: move or label over IMAP, never delete.
-- Output: important items plus a daily digest for the user or Claude.
-- Proton Sieve filters handle known senders deterministically before the LLM.
-- Prompt injection: the classifier has no tools and its output is held to the schema. A Claude session reading the digest gets no dangerous tools without approval.
-- Shadow mode first: classify without moving, compare with the user's own sorting.
-- A separate service, not part of vigie; it could expose the digest to vigie through a file or an MCP server.
-
 ## Open
 
-- Daily email volume and share of noise.
-- Hardware of a GPU machine.
 - Whether any vigie use above is wanted.
