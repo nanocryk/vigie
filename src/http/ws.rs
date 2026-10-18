@@ -52,7 +52,7 @@ pub async fn handler(
         warn!(ip = %peer.ip(), %origin, "ws upgrade origin not in allowlist");
         return (StatusCode::FORBIDDEN, "bad origin").into_response();
     }
-    info!(device = %device.label, ip = %peer.ip(), "ws connected");
+    info!(device = ?device.label, ip = %peer.ip(), "ws connected");
     let manager = state.manager.clone();
     let auth = Arc::clone(&state.auth);
     ws.on_upgrade(move |socket| async move {
@@ -60,7 +60,7 @@ pub async fn handler(
         if let Err(err) = run(socket, manager, auth, device).await {
             debug!("ws ended: {err:#}");
         }
-        info!(device = %label, "ws disconnected");
+        info!(device = ?label, "ws disconnected");
     })
 }
 
@@ -106,7 +106,7 @@ async fn run(
             tick = devices.recv() => match tick {
                 Ok(()) | Err(RecvError::Lagged(_)) => {
                     if auth.registry.find_active(&device.id).is_none() {
-                        info!(device = %device.label, "ws closing: device revoked");
+                        info!(device = ?device.label, "ws closing: device revoked");
                         let _ = socket.send(Message::Close(None)).await;
                         break Ok(());
                     }

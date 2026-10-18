@@ -97,7 +97,7 @@ pub async fn exchange(
     }
     auth.notify_changed();
 
-    info!(via = path, pair = pair_matched, label = %label, "device paired");
+    info!(via = path, pair = pair_matched, label = ?label, "device paired");
     let cookie = auth.cookie_for(secret);
     (jar.add(cookie), Json(ExchangeOk { label: &label })).into_response()
 }
@@ -160,15 +160,23 @@ pub struct RenameReq {
     pub label: String,
 }
 
+/// `raw` trimmed, unless that leaves it empty, over `MAX_LABEL_LEN` bytes, or
+/// holding a control character (a newline or terminal escape).
+fn valid_label(raw: &str) -> Option<&str> {
+    let label = raw.trim();
+    let valid =
+        !label.is_empty() && label.len() <= MAX_LABEL_LEN && !label.chars().any(char::is_control);
+    valid.then_some(label)
+}
+
 pub async fn devices_rename(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<RenameReq>,
 ) -> Result<StatusCode, ApiError> {
-    let label = req.label.trim();
-    if label.is_empty() || label.len() > MAX_LABEL_LEN {
+    let Some(label) = valid_label(&req.label) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_label"));
-    }
+    };
     match state.auth.registry.rename(&id, label) {
         Ok(true) => {
             state.auth.notify_changed();
@@ -261,7 +269,7 @@ pub async fn pair(
         })
         .collect();
 
-    info!(device = %device.label, urls = urls.len(), "pair token issued");
+    info!(device = ?device.label, urls = urls.len(), "pair token issued");
     Json(PairResp {
         token,
         expires_in_secs: PAIR_TOKEN_TTL.as_secs(),
@@ -295,7 +303,7 @@ pub async fn devices_events(
     let changes = state.auth.subscribe_changes();
     let auth = Arc::clone(&state.auth);
     let device_id = device.id.clone();
-    info!(device = %device.label, ip = %peer.ip(), "devices SSE client connected");
+    info!(device = ?device.label, ip = %peer.ip(), "devices SSE client connected");
     // Every tick re-checks the streaming device against the registry, so a
     // revoke tears this stream down instead of leaving it live until the
     // client happens to disconnect.
@@ -324,4 +332,18 @@ pub async fn devices_events(
         },
     );
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_label_trims_and_refuses_empty_long_or_control_labels() {
+        assert_eq!(valid_label("  Pixel 7 "), Some("Pixel 7"));
+        assert_eq!(valid_label("   "), None);
+        assert_eq!(valid_label(&"x".repeat(MAX_LABEL_LEN + 1)), None);
+        assert_eq!(valid_label("Pixel\n7"), None);
+        assert_eq!(valid_label("Pixel \u{1b}[2J"), None);
+    }
 }
