@@ -2,6 +2,7 @@
 //! suggestion, its folder suggestion moved to a folder picked among the
 //! suggested one and its ancestors, and the ask's file.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
@@ -9,7 +10,9 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::claude::protocol::{CanUseTool, Extra, PermissionRule, PermissionUpdate};
+use crate::claude::protocol::{
+    CanUseTool, ContentBlock, Extra, Inbound, PermissionRule, PermissionUpdate,
+};
 use crate::claude::tools;
 use crate::session::danger;
 use crate::session::events::Answer;
@@ -530,11 +533,81 @@ impl fmt::Display for Folder {
     }
 }
 
+/// The tool calls of each agent's latest message. The CLI asks a message's
+/// calls one after the other, so a grant given on one of them knows which
+/// later asks come from the same step.
+#[derive(Debug, Default)]
+pub struct Steps {
+    /// By parent tool use id, `None` for the main agent: the message id and the
+    /// tool use ids seen so far, one `assistant` line per block.
+    latest: HashMap<Option<String>, (String, Vec<String>)>,
+}
+
+impl Steps {
+    pub fn on_line(&mut self, line: &Inbound) {
+        let Inbound::Assistant(message) = line else {
+            return;
+        };
+        let Some(message_id) = &message.message.id else {
+            return;
+        };
+        let step = self
+            .latest
+            .entry(message.parent_tool_use_id.clone())
+            .or_insert_with(|| (message_id.clone(), Vec::new()));
+        if step.0 != *message_id {
+            *step = (message_id.clone(), Vec::new());
+        }
+        step.1.extend(
+            message
+                .message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                }),
+        );
+    }
+
+    /// The tool use ids of the latest message holding `tool_use_id`, empty when
+    /// no agent's latest message holds it.
+    pub fn of(&self, tool_use_id: &str) -> Vec<String> {
+        self.latest
+            .values()
+            .find(|(_, ids)| ids.iter().any(|id| id == tool_use_id))
+            .map(|(_, ids)| ids.clone())
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    fn assistant(message_id: &str, parent: Option<&str>, tool_use_id: &str) -> Inbound {
+        serde_json::from_value(json!({"type": "assistant", "parent_tool_use_id": parent,
+            "session_id": "s", "uuid": "u", "message": {"id": message_id,
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": "Edit", "input": {}}]}}))
+        .unwrap()
+    }
+
+    #[test]
+    fn steps_group_the_tool_uses_of_each_agent_s_latest_message() {
+        let mut steps = Steps::default();
+        steps.on_line(&assistant("m1", None, "a"));
+        steps.on_line(&assistant("m1", None, "b"));
+        steps.on_line(&assistant("sub1", Some("agent"), "c"));
+        assert_eq!(steps.of("a"), ["a", "b"]);
+        assert_eq!(steps.of("c"), ["c"]);
+
+        steps.on_line(&assistant("m2", None, "d"));
+        assert_eq!(steps.of("d"), ["d"]);
+        assert!(steps.of("a").is_empty());
+        assert_eq!(steps.of("c"), ["c"]);
+    }
 
     const OUTSIDE: &str = r"C:\Users\user\AppData\Local\Temp\vigie2-spike\outside";
 

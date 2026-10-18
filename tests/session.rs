@@ -1169,6 +1169,65 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
     harness.finish().await;
 }
 
+/// One message edits the file twice; the CLI asks the second edit only once the
+/// first is answered. Granting the file on the first allows the second with no
+/// row; an edit from the next message gets one.
+const STEP_SCRIPT: &str = r#"
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "session_id": "s", "uuid": "u1", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}}]}}}
+{"t": 0, "dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "session_id": "s", "uuid": "u2", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}}]}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-1", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t1", "decision_reason_type": "safetyCheck"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-1", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t2", "decision_reason_type": "safetyCheck"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}}}}}
+{"t": 0, "dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "session_id": "s", "uuid": "u3", "message": {"id": "m2", "content": [{"type": "tool_use", "id": "t3", "name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}}]}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-3", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "input": {"file_path": "C:\\x\\plans\\p.md"}, "tool_use_id": "t3", "decision_reason_type": "safetyCheck"}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-3", "response": {"behavior": "allow", "updatedInput": {"file_path": "C:\\x\\plans\\p.md"}}}}}
+"#;
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_file_grant_allows_the_rest_of_its_step_with_no_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("step.ndjson");
+    std::fs::write(&path, STEP_SCRIPT.trim()).unwrap();
+    let mut harness = Harness::start(&path);
+    let always = Answer::Allow {
+        updated_input: None,
+        note: None,
+        accept_edits: false,
+        folder: None,
+        always_for_file: true,
+        for_session: false,
+    };
+    let HostEvent::AskQueued { request_id, .. } = harness
+        .until_host(|host| matches!(host, HostEvent::AskQueued { .. }))
+        .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(request_id, "cli-1");
+    harness.session.answer(request_id, always).await.unwrap();
+
+    let HostEvent::AutoAllowed { request_id, .. } = harness
+        .until_host(|host| {
+            matches!(
+                host,
+                HostEvent::AutoAllowed { .. } | HostEvent::AskQueued { .. }
+            )
+        })
+        .await
+    else {
+        panic!("the same step's edit was queued")
+    };
+    assert_eq!(
+        request_id, "cli-3",
+        "only the next message's edit has a row"
+    );
+    harness.finish().await;
+}
+
 /// Four asks queue before any answer. Granting `C:\x\a` on the first also
 /// allows the queued read below it; the Bash ask and the read outside stay queued.
 const QUEUED_SCRIPT: &str = r#"

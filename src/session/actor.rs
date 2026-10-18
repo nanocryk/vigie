@@ -23,7 +23,7 @@ use super::events::{
 };
 use super::fanout::{self, FanoutGate, FanoutOffer, Remember};
 use super::gauges::FIVE_MINUTE_TTL_SECS;
-use super::grant::{self, FileOffer, Granted};
+use super::grant::{self, FileOffer, Granted, Steps};
 use super::handle::Config;
 use super::plan::PlanTracker;
 use super::server_restart::ServerRestart;
@@ -91,6 +91,20 @@ enum State {
     Ready,
     /// Stdin closed or child killed; draining stdout until it closes.
     Stopping,
+}
+
+struct FileGrant {
+    file: FileOffer,
+    /// Tool use ids of the step the grant was given in.
+    step: Vec<String>,
+}
+
+/// Whether an auto-allowed ask shows in the discussion.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cue {
+    Row,
+    /// Same step as the grant: resolved like a tapped Allow.
+    Silent,
 }
 
 struct PendingAsk {
@@ -168,7 +182,8 @@ pub struct Actor {
     cold_sends: HashMap<String, agents::ColdSend>,
     fanout: FanoutGate,
     /// Files allowed with `always_for_file`; their later asks are answered here.
-    file_grants: Vec<FileOffer>,
+    file_grants: Vec<FileGrant>,
+    steps: Steps,
     /// Reads of files in it are answered here.
     uploads: Option<PathBuf>,
     /// Set by `set_attachments`, announced and cleared when the turn ends.
@@ -213,6 +228,7 @@ impl Actor {
             cold_sends: HashMap::new(),
             fanout: FanoutGate::default(),
             file_grants: Vec::new(),
+            steps: Steps::default(),
             uploads: config.uploads,
             turn_attachments: Vec::new(),
             pending: HashMap::new(),
@@ -309,6 +325,7 @@ impl Actor {
                 self.emit_verdict(verdict);
             }
             self.plans.on_line(parsed);
+            self.steps.on_line(parsed);
             self.handle_line(parsed).await;
         }
     }
@@ -395,16 +412,21 @@ impl Actor {
                     .as_ref()
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                if let Some(granted) = file.as_ref().filter(|file| {
-                    self.file_grants.iter().any(|grant| grant.same(file))
-                        || self
+                if let Some(file) = &file {
+                    let cue = match self.file_grants.iter().find(|grant| grant.file.same(file)) {
+                        Some(grant) if grant.step.contains(&ask.tool_use_id) => Some(Cue::Silent),
+                        Some(_) => Some(Cue::Row),
+                        None => self
                             .uploads
                             .as_deref()
                             .is_some_and(|uploads| file.reads_within(uploads))
-                }) {
-                    self.auto_allow(&request.request_id, ask, granted.clone(), agent_id)
-                        .await;
-                    return;
+                            .then_some(Cue::Row),
+                    };
+                    if let Some(cue) = cue {
+                        self.auto_allow(&request.request_id, ask, file.clone(), agent_id, cue)
+                            .await;
+                        return;
+                    }
                 }
                 if let Some(agent_id) = &agent_id
                     && let Some(message) = self.wrapping_up.get(agent_id).cloned()
@@ -769,9 +791,10 @@ impl Actor {
             ..
         } = &answer
             && let Some(file) = FileOffer::of(&ask.request, &self.cwd)
-            && !self.file_grants.iter().any(|grant| grant.same(&file))
+            && !self.file_grants.iter().any(|grant| grant.file.same(&file))
         {
-            self.file_grants.push(file);
+            let step = self.steps.of(&ask.request.tool_use_id);
+            self.file_grants.push(FileGrant { file, step });
         }
         let remember = match &answer {
             Answer::Allow {
@@ -847,11 +870,15 @@ impl Actor {
         ask: &CanUseTool,
         file: FileOffer,
         agent_id: Option<String>,
+        cue: Cue,
     ) {
         let result = PermissionResult::allow(ask.input.clone());
         let response = ControlResponse::permission(request_id.to_string(), &result);
         if let Err(err) = self.write(Outbound::ControlResponse(response)).await {
             tracing::warn!("auto-allow {}: {err:#}", ask.tool_name);
+            return;
+        }
+        if cue == Cue::Silent {
             return;
         }
         self.emit_host(HostEvent::AutoAllowed {
