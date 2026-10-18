@@ -1066,6 +1066,7 @@ async fn a_subagent_asks_through_the_parent_and_takes_a_faithful_relay() {
 /// edit of the file, spelled in another case, is allowed by the host. A read of
 /// the same file is another kind: it asks, and its grant does send a Read rule.
 /// An edit of another file still asks.
+#[cfg(windows)]
 const FILE_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
@@ -1172,6 +1173,7 @@ async fn a_file_granted_for_good_is_allowed_by_the_host() {
 /// One message edits the file twice; the CLI asks the second edit only once the
 /// first is answered. Granting the file on the first allows the second with no
 /// row; an edit from the next message gets one.
+#[cfg(windows)]
 const STEP_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
@@ -1230,6 +1232,7 @@ async fn a_file_grant_allows_the_rest_of_its_step_with_no_row() {
 
 /// Four asks queue before any answer. Granting `C:\x\a` on the first also
 /// allows the queued read below it; the Bash ask and the read outside stay queued.
+#[cfg(windows)]
 const QUEUED_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
@@ -1391,6 +1394,7 @@ async fn an_unanswered_subagent_ask_times_out_and_the_agent_wraps_up() {
 
 /// A read in the session's uploads folder is allowed by the host; an edit there,
 /// and a read in another session's folder, still ask.
+#[cfg(windows)]
 const UPLOADS_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}}}
 {"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}}
