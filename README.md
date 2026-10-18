@@ -128,11 +128,17 @@ Without Tailscale, forward a port on the router to the machine and bind vigie to
 - Bring your own certificate for a domain name pointing at the router (`cert` and `key`), and add that name to `public_hosts`. With the self-signed certificate, the phone shows a warning on every new visit, and the installed app and push notifications may not work.
 - Keep the forwarded port the same as the bind port, or give the public host its port explicitly (`"example.com:443"`).
 
-## Development
+## Security
 
-- `web/`: the React and TypeScript client (`npm run build`, `npm run check` for the type-check and tests).
-- `src/`: the Rust server. `cargo test` runs the suite against a fake `claude` that replays recorded sessions from `spike/runs`, so tests spend no usage.
-- `DESIGN.md` holds the design, `notes/` the protocol research and the client wire protocol.
+- **A paired device has full control of your machine:** it runs Claude sessions, answers their asks, and reads any file your account can. Pair only devices you control, and revoke a lost one from another device's settings or with `vigie auth revoke-all`.
+- **Keep vigie off the open internet:** prefer Tailscale to port forwarding.
+- **The danger warning on asks is a hint:** an ask without one is unflagged, not safe.
+
+The full threat model and how to report a vulnerability are in [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Layout, build and test commands, and the design documents are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
