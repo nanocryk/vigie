@@ -43,7 +43,9 @@ export function parseRoute(hash: string): Route {
   if (around !== null) {
     const [, discussion = "", seq = ""] = around;
     const decoded = decodeHashPart(discussion);
-    return decoded === null ? { kind: "list" } : { kind: "around", discussion: decoded, seq: Number(seq) };
+    return decoded === null
+      ? { kind: "list" }
+      : { kind: "around", discussion: decoded, seq: Number(seq) };
   }
   const id = SESSION_HASH.exec(hash)?.[1];
   const decodedId = id === undefined ? null : decodeHashPart(id);

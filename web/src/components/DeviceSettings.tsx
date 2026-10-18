@@ -112,7 +112,7 @@ function Swipes() {
     <SettingsSection
       id="swipes"
       title="Swipes"
-      summary={`${DISTANCE_LABELS[prefs.distance]} distance, ${prefs.confirmWindow / 1000} s to confirm, ${SAFE_ASK_LABELS[prefs.safeAsk].toLowerCase()} for safe asks.`}
+      summary={`${DISTANCE_LABELS[prefs.distance]} distance, ${prefs.confirmWindow / 1000} s to confirm, ${SAFE_ASK_LABELS[prefs.safeAsk].toLowerCase()} for unflagged asks.`}
     >
       <Choices
         label="Distance to choose a side"
@@ -129,7 +129,7 @@ function Swipes() {
         onPick={(confirmWindow) => setSwipePrefs({ ...prefs, confirmWindow })}
       />
       <Choices
-        label="Asks that are not dangerous take"
+        label="Asks with no danger warning take"
         options={SAFE_ASK_SWIPES}
         value={prefs.safeAsk}
         name={(count) => SAFE_ASK_LABELS[count]}

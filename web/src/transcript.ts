@@ -627,7 +627,8 @@ export function historyReadSummary(input: unknown, hit: HistoryHit, now: number)
   const time = Date.parse(message.time);
   const when = Number.isNaN(time) ? message.time : formatStamp(time, now);
   const from = historyReadFrom(input);
-  if (from !== null) return `Read on "${snippet}" (${who}, ${when}) ${where}, from character ${from}`;
+  if (from !== null)
+    return `Read on "${snippet}" (${who}, ${when}) ${where}, from character ${from}`;
   return `Read around "${snippet}" (${who}, ${when}) ${where}, ${historyReadRange(input)}`;
 }
 
