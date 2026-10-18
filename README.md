@@ -67,7 +67,7 @@ Open the pair URL in a browser to pair that device. Once it expires, print a fre
 cargo run --release -- auth pair
 ```
 
-The browser warns about the self-signed certificate on first visit. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
+The browser warns about the self-signed certificate on first visit. Before accepting it, compare the SHA-256 fingerprint the browser shows with the one vigie prints at startup: a match means nothing sits between the browser and vigie. Once one device is paired, pair the others from its device settings (the cogwheel at the top right): pick the address the link should use, then scan the QR code or copy the link. That link is single use and expires after 5 minutes.
 
 ### Configuration
 

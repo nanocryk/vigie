@@ -522,8 +522,21 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         })?,
     )?;
 
+    let tls = if settings.tls_on() {
+        let extra_sans: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
+        let (cert_path, key_path) = resolve_tls(&settings, &dir, &extra_sans)?;
+        let fingerprint = cert_fingerprint(&cert_path)?;
+        info!(%fingerprint, "TLS certificate");
+        Some((cert_path, key_path, fingerprint))
+    } else {
+        None
+    };
+
     if settings.print_token {
         eprintln!("\nvigie listening on {scheme}://{bind}{BASE_PATH_SLASH}");
+        if let Some((_, _, fingerprint)) = &tls {
+            eprintln!("TLS certificate SHA-256: {fingerprint}");
+        }
         eprintln!(
             "Pair URL (single use, expires in {} minutes; `vigie auth pair` prints a new one):",
             LOCAL_TOKEN_TTL.as_secs() / 60
@@ -574,9 +587,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         let _ = stop_sender.send(true);
     });
 
-    let served: Result<()> = if settings.tls_on() {
-        let extra_sans: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
-        let (cert_path, key_path) = resolve_tls(&settings, &dir, &extra_sans)?;
+    let served: Result<()> = if let Some((cert_path, key_path, _)) = tls {
         let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .with_context(|| format!("load TLS from {}", cert_path.display()))?;
@@ -709,6 +720,22 @@ where
     Some(watcher)
 }
 
+/// SHA-256 of the leaf certificate in `cert_path`, as colon-separated hex, the
+/// form browsers show in their certificate viewer.
+fn cert_fingerprint(cert_path: &Path) -> Result<String> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+
+    let cert = CertificateDer::from_pem_file(cert_path)
+        .with_context(|| format!("read certificate {}", cert_path.display()))?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, &cert);
+    Ok(digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 /// The certificate and key to serve: the provided ones, or a self-signed pair
 /// regenerated whenever the names it must cover change.
 fn resolve_tls(
@@ -783,6 +810,26 @@ fn origin_host(origin: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fingerprint_is_the_sha256_of_the_certificate_der() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("rcgen");
+        let cert_path = tmp.path().join("cert.pem");
+        std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
+
+        let fingerprint = cert_fingerprint(&cert_path).expect("fingerprint");
+
+        let digest = ring::digest::digest(&ring::digest::SHA256, generated.cert.der());
+        let expected: Vec<String> = digest
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        assert_eq!(fingerprint, expected.join(":"));
+        assert_eq!(fingerprint.len(), 32 * 3 - 1);
+    }
 
     #[test]
     fn strip_url_scheme_drops_http_and_https() {
