@@ -4,7 +4,7 @@ import { fetchBuild } from "@/version";
  * Whether the server can restart itself, whether it runs a previous build because
  * copying the latest failed, whether a build differing from the running binary
  * waits for a restart, whether a restart waits for every turn to end, and how
- * many turns run.
+ * many turns run, and when a TLS certificate about to expire does.
  */
 export interface ServerStatus {
   supervised: boolean;
@@ -12,6 +12,7 @@ export interface ServerStatus {
   newBuild: boolean;
   pending: boolean;
   turns: number;
+  certExpiresSoon: Date | null;
 }
 
 export function parseServerStatus(raw: unknown, label: string): ServerStatus {
@@ -23,6 +24,7 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
   const newBuild: unknown = Reflect.get(raw, "new_build");
   const pending: unknown = Reflect.get(raw, "pending");
   const turns: unknown = Reflect.get(raw, "turns");
+  const certExpiresSoon: unknown = Reflect.get(raw, "cert_expires_soon");
   if (typeof supervised !== "boolean") {
     throw new Error(`${label}.supervised: expected a boolean: ${JSON.stringify(supervised)}`);
   }
@@ -38,7 +40,30 @@ export function parseServerStatus(raw: unknown, label: string): ServerStatus {
   if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 0) {
     throw new Error(`${label}.turns: expected a count: ${JSON.stringify(turns)}`);
   }
-  return { supervised, staleCopy, newBuild, pending, turns };
+  return {
+    supervised,
+    staleCopy,
+    newBuild,
+    pending,
+    turns,
+    certExpiresSoon: parseDateOrNull(certExpiresSoon, `${label}.cert_expires_soon`),
+  };
+}
+
+function parseDateOrNull(raw: unknown, label: string): Date | null {
+  if (raw === null) return null;
+  const date = typeof raw === "string" ? new Date(raw) : null;
+  if (date === null || Number.isNaN(date.getTime())) {
+    throw new Error(`${label}: expected a date or null: ${JSON.stringify(raw)}`);
+  }
+  return date;
+}
+
+/** The banner text for a certificate expiring at `expiresAt`. */
+export function certWarning(expiresAt: Date, now: number): string {
+  const renew = "renew it (vigie tailscale for a Tailscale one), then restart vigie";
+  if (expiresAt.getTime() <= now) return `The TLS certificate has expired: ${renew}`;
+  return `The TLS certificate expires on ${expiresAt.toLocaleDateString()}: ${renew}`;
 }
 
 async function check(response: Response): Promise<void> {

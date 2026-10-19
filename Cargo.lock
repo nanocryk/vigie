@@ -2357,6 +2357,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vigie",
+ "x509-parser",
 ]
 
 [[package]]

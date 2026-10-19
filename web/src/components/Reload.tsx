@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { Client } from "@/client";
 import { useSnapshot } from "@/components/useSnapshot";
-import { type ServerStatus, fetchServerStatus } from "@/server";
+import { type ServerStatus, certWarning, fetchServerStatus } from "@/server";
 import { reload, useNewVersion } from "@/version";
 
 const UNREACHABLE_AFTER_MS = 30_000;
@@ -30,7 +30,10 @@ export function Banner({ client }: { client: Client }) {
   );
 }
 
-/** Under the shim: a server gone for a while, or one running a previous build. */
+/**
+ * Under the shim: a server gone for a while, or one running a previous build.
+ * Anywhere: a TLS certificate about to expire.
+ */
 function useServerProblem(client: Client): string | null {
   const open = useSnapshot(client).status === "open";
   const [server, setServer] = useState<ServerStatus | null>(null);
@@ -69,9 +72,12 @@ function useServerProblem(client: Client): string | null {
     };
   }, [open]);
 
-  if (server?.supervised !== true) return null;
-  if (unreachable) {
+  if (server === null) return null;
+  if (server.supervised && unreachable) {
     return "Server unreachable for 30 s: if it was restarting, it likely needs manual intervention";
   }
-  return server.staleCopy ? "Restart ran the previous build: copying the new one failed" : null;
+  if (server.supervised && server.staleCopy) {
+    return "Restart ran the previous build: copying the new one failed";
+  }
+  return server.certExpiresSoon === null ? null : certWarning(server.certExpiresSoon, Date.now());
 }

@@ -307,10 +307,21 @@ pub async fn version(State(state): State<AppState>) -> Response {
     Json(json!({"build": format!("{:016x}", hasher.finish())})).into_response()
 }
 
+/// How long before its expiry the TLS certificate is flagged.
+pub const CERT_WARNING_BEFORE: chrono::TimeDelta = chrono::TimeDelta::days(14);
+
+/// `expires_at` when it falls within `CERT_WARNING_BEFORE` of `now`, or already passed.
+pub fn cert_expires_soon(
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    expires_at.filter(|expires_at| *expires_at - now <= CERT_WARNING_BEFORE)
+}
+
 /// Whether the server can restart itself, whether it runs a previous build because
 /// copying the latest failed, whether a build differing from the running binary
-/// waits for a restart, whether a restart waits for every turn to end, and how
-/// many turns run.
+/// waits for a restart, whether a restart waits for every turn to end, how
+/// many turns run, and when a TLS certificate about to expire does.
 pub async fn server(State(state): State<AppState>) -> Response {
     let restart = state.manager.server_restart();
     let supervised = restart.supervision() == Supervision::Shim;
@@ -329,6 +340,7 @@ pub async fn server(State(state): State<AppState>) -> Response {
         "new_build": new_build,
         "pending": pending,
         "turns": turns,
+        "cert_expires_soon": cert_expires_soon(state.cert_expires_at, chrono::Utc::now()),
     }))
     .into_response()
 }

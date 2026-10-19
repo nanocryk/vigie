@@ -14,6 +14,7 @@ use tracing::{info, warn};
 
 use vigie::BASE_PATH_SLASH;
 use vigie::claude::child::Program;
+use vigie::http::api::cert_expires_soon;
 use vigie::http::auth::{Auth, LOCAL_TOKEN_TTL, Registry, local_token};
 use vigie::http::net;
 use vigie::http::push::{self, Pusher};
@@ -33,6 +34,7 @@ const WEB_DIST: &str = "web/dist";
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// Time a client gets to send a full request head (hyper's default).
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const RENEW_CERT: &str = "Renew it (`vigie tailscale` for a Tailscale one), then restart vigie.";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,6 +55,8 @@ enum Command {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
+    /// Get a Tailscale certificate for this machine and point config.json at it.
+    Tailscale,
     /// Prune stored history nothing reads anymore.
     Prune {
         #[command(subcommand)]
@@ -257,8 +261,31 @@ async fn main() -> Result<ExitCode> {
             cmd: AuthCmd::RevokeAll,
         } => run_revoke_all(),
         Command::Auth { cmd: AuthCmd::Pair } => run_pair(),
+        Command::Tailscale => run_tailscale(),
         Command::Prune { what } => run_prune(what),
     }
+}
+
+fn run_tailscale() -> Result<ExitCode> {
+    let dir = state_dir::create()?;
+    let setup = vigie::tailscale::set_up(&dir)?;
+    println!(
+        "Certificate for {} written to {}.",
+        setup.domain,
+        setup.cert_dir.display()
+    );
+    println!(
+        "{} now serves it on {}.",
+        dir.join("config.json").display(),
+        setup.bind
+    );
+    println!(
+        "Start vigie, or restart it if it runs, then open https://{}:{}{BASE_PATH_SLASH}",
+        setup.domain,
+        setup.bind.port()
+    );
+    println!("Run `vigie tailscale` again to renew the certificate before it expires.");
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_prune(what: PruneCmd) -> Result<ExitCode> {
@@ -476,6 +503,18 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
     let reachable_ips = net::all_reachable_ipv4();
     info!(interfaces = ?net::enumerate(), "network interfaces");
 
+    let tls = if settings.tls_on() {
+        let extra_sans: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
+        let (cert_path, key_path) = resolve_tls(&settings, &dir, &extra_sans)?;
+        let fingerprint = cert_fingerprint(&cert_path)?;
+        let expires_at = cert_expiry(&cert_path)?;
+        info!(%fingerprint, %expires_at, "TLS certificate");
+        Some((cert_path, key_path, fingerprint, expires_at))
+    } else {
+        None
+    };
+    let cert_expires_at = tls.as_ref().map(|(_, _, _, expires_at)| *expires_at);
+
     let store_path = Store::default_path()?;
     let store = Store::open(&store_path)?;
     spawn_pruning(store.clone());
@@ -517,6 +556,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         manager: manager.clone(),
         allowed_origins: Arc::new(allowed_origins(&settings, &reachable_ips)),
         updater,
+        cert_expires_at,
     };
 
     let app = build_app(state);
@@ -540,19 +580,9 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         })?,
     )?;
 
-    let tls = if settings.tls_on() {
-        let extra_sans: Vec<String> = reachable_ips.iter().map(|ip| ip.to_string()).collect();
-        let (cert_path, key_path) = resolve_tls(&settings, &dir, &extra_sans)?;
-        let fingerprint = cert_fingerprint(&cert_path)?;
-        info!(%fingerprint, "TLS certificate");
-        Some((cert_path, key_path, fingerprint))
-    } else {
-        None
-    };
-
     if settings.print_token {
         eprintln!("\nvigie listening on {scheme}://{bind}{BASE_PATH_SLASH}");
-        if let Some((_, _, fingerprint)) = &tls {
+        if let Some((_, _, fingerprint, _)) = &tls {
             eprintln!("TLS certificate SHA-256: {fingerprint}");
         }
         eprintln!(
@@ -573,6 +603,13 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         if !settings.tls_on() {
             eprintln!("WARNING: --http is set; traffic is plaintext.\n");
         }
+    }
+    if let Some(expires_at) = cert_expires_soon(cert_expires_at, chrono::Utc::now()) {
+        warn!(%expires_at, "TLS certificate expires soon");
+        eprintln!(
+            "WARNING: the TLS certificate expires on {}. {RENEW_CERT}\n",
+            expires_at.format("%Y-%m-%d")
+        );
     }
 
     let (stop_sender, stop) = watch::channel(false);
@@ -615,7 +652,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         }
     });
     let service = app.into_make_service_with_connect_info::<SocketAddr>();
-    let served: Result<()> = if let Some((cert_path, key_path, _)) = tls {
+    let served: Result<()> = if let Some((cert_path, key_path, _, _)) = tls {
         let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .with_context(|| format!("load TLS from {}", cert_path.display()))?;
@@ -760,6 +797,18 @@ fn cert_fingerprint(cert_path: &Path) -> Result<String> {
         .join(":"))
 }
 
+/// When the leaf certificate in `cert_path` stops being valid.
+fn cert_expiry(cert_path: &Path) -> Result<chrono::DateTime<chrono::Utc>> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+
+    let cert = CertificateDer::from_pem_file(cert_path)
+        .with_context(|| format!("read certificate {}", cert_path.display()))?;
+    let (_, parsed) = x509_parser::parse_x509_certificate(&cert)
+        .map_err(|err| anyhow::anyhow!("parse certificate {}: {err}", cert_path.display()))?;
+    chrono::DateTime::from_timestamp(parsed.validity().not_after.timestamp(), 0)
+        .context("certificate expiry out of range")
+}
+
 /// The certificate and key to serve: the provided ones, or a self-signed pair
 /// regenerated whenever the names it must cover change.
 fn resolve_tls(
@@ -854,6 +903,32 @@ mod tests {
         let closed =
             tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut rest)).await;
         assert!(closed.is_ok(), "connection still open after 10 s");
+    }
+
+    #[test]
+    fn the_expiry_is_the_certificate_not_after() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut params =
+            rcgen::CertificateParams::new(vec!["localhost".to_string()]).expect("params");
+        params.not_after = rcgen::date_time_ymd(2030, 1, 2);
+        let key = rcgen::KeyPair::generate().expect("key");
+        let cert = params.self_signed(&key).expect("cert");
+        let cert_path = tmp.path().join("cert.pem");
+        std::fs::write(&cert_path, cert.pem()).expect("write cert");
+
+        let expiry = cert_expiry(&cert_path).expect("expiry");
+
+        assert_eq!(expiry.to_rfc3339(), "2030-01-02T00:00:00+00:00");
+    }
+
+    #[test]
+    fn a_certificate_expires_soon_within_two_weeks() {
+        let now: chrono::DateTime<chrono::Utc> = "2030-01-01T00:00:00Z".parse().unwrap();
+        let at = |text: &str| Some(text.parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+        assert_eq!(cert_expires_soon(None, now), None);
+        assert_eq!(cert_expires_soon(at("2030-01-16T00:00:00Z"), now), None);
+        assert!(cert_expires_soon(at("2030-01-15T00:00:00Z"), now).is_some());
+        assert!(cert_expires_soon(at("2029-12-01T00:00:00Z"), now).is_some());
     }
 
     #[test]

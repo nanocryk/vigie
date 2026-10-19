@@ -41,6 +41,8 @@ pub struct AppState {
     pub allowed_origins: Arc<BTreeSet<String>>,
     pub pusher: Arc<Pusher>,
     pub updater: Arc<Updater>,
+    /// When the served TLS certificate stops being valid.
+    pub cert_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -82,6 +84,7 @@ impl AppState {
             allowed_origins: Arc::new(BTreeSet::from([format!("http://127.0.0.1:{port}")])),
             pusher,
             updater: Arc::new(Updater::new(dir.to_path_buf(), dir.join("last-update"))),
+            cert_expires_at: None,
         })
     }
 }

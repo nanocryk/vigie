@@ -118,33 +118,20 @@ cargo run --release -- auth revoke-all
 [Tailscale](https://tailscale.com/) puts your phone and your machine on a private network (a tailnet), and can issue a real TLS certificate for the machine's tailnet name. This is the recommended setup: nothing is exposed to the internet, and the phone trusts the certificate, so there is no warning page, and the installed app and push notifications work.
 
 1. Install Tailscale on the machine running vigie and on the phone, logged in to the same tailnet.
-2. In the Tailscale admin console, on the DNS page, enable MagicDNS and HTTPS Certificates.
-3. Find the machine's full tailnet name, for example `mybox.tail1234.ts.net`: it is listed on the Machines page of the admin console.
-4. Get a certificate for that name. `tailscale cert` writes it to the current directory, so run it from `~/.vigie`:
+2. In the Tailscale admin console, on the [DNS page](https://login.tailscale.com/admin/dns), enable MagicDNS and HTTPS Certificates.
+3. From the repository root, run:
 
    ```sh
-   cd ~/.vigie
-   tailscale cert mybox.tail1234.ts.net
+   cargo run --release -- tailscale
    ```
 
-   This writes `mybox.tail1234.ts.net.crt` and `mybox.tail1234.ts.net.key`.
+   It asks Tailscale for a certificate for the machine's tailnet name (for example `mybox.tail1234.ts.net`), stores it in `~/.vigie/tailscale/`, and writes `~/.vigie/config.json` to serve it: `cert`, `key`, the tailnet name in `public_hosts`, and `bind` on every interface (`0.0.0.0`) unless it already binds an address other than loopback. Other fields are kept. If something is missing on the Tailscale side, it says what to fix. On Linux, `tailscale cert` needs root unless your user is allowed: `sudo tailscale set --operator=$USER`.
 
-5. Point vigie at them in `~/.vigie/config.json`. Binding to the machine's Tailscale IP (shown by `tailscale ip -4`) makes vigie reachable only through the tailnet; bind `0.0.0.0:7879` instead to also reach it on the local network.
+4. Start vigie with `./serve.sh`. The startup output includes a pair URL on `https://mybox.tail1234.ts.net:7879/vigie/`; open it on the phone, or pair from an already paired device and pick the tailnet name.
 
-   ```json
-   {
-     "bind": "100.101.102.103:7879",
-     "cert": "C:\\Users\\me\\.vigie\\mybox.tail1234.ts.net.crt",
-     "key": "C:\\Users\\me\\.vigie\\mybox.tail1234.ts.net.key",
-     "public_hosts": ["mybox.tail1234.ts.net"]
-   }
-   ```
+Binding `0.0.0.0` keeps vigie reachable from this machine (`127.0.0.1`) and the local network too, where pairing guards it as everywhere else. To reach it only through the tailnet, set `bind` to the machine's Tailscale IP (shown by `tailscale ip -4`); vigie then fails to start until Tailscale is up.
 
-   A public host without a port gets the bind port.
-
-6. Start vigie. The startup output now includes a pair URL on `https://mybox.tail1234.ts.net:7879/vigie/`; open it on the phone, or pair from an already paired device and pick the tailnet name.
-
-The certificate is valid for 90 days. Renew it by running `tailscale cert` again, then restart vigie: the certificate is loaded at startup. Certificates are published in public Certificate Transparency logs, so the tailnet name becomes public, though the machine stays unreachable outside the tailnet.
+The certificate is valid for about 90 days. vigie warns at startup and in the app two weeks before it expires: run `cargo run --release -- tailscale` again, then restart vigie, which loads the certificate at startup. Certificates are published in public Certificate Transparency logs, so the tailnet name becomes public, though the machine stays unreachable outside the tailnet.
 
 ## Remote access with port forwarding
 
@@ -156,6 +143,7 @@ Without Tailscale, forward a port on the router to the machine and bind vigie to
 ## Troubleshooting
 
 - **vigie stops at startup with `no TLS certificate`:** it needs one before serving. Run `vigie tailscale`, or start with `--self-signed` (see [Quick start](#quick-start)).
+- **`vigie tailscale` fails:** its message names the missing piece: Tailscale not installed or not on the `PATH`, not logged in (`tailscale up`), or HTTPS Certificates off in the admin console.
 - **The pair URL expired or was already used:** print a new one with `cargo run --release -- auth pair` while the server runs.
 - **A blank page with a 403:** vigie only answers to the names and addresses it knows, and the log shows `forbidden (unknown host)`. Add the name you opened it with to `public_hosts`, or as a full origin to `allow_origins`.
 - **The page is unreachable from another device:** the default bind is `127.0.0.1`, reachable from this machine only. Bind the Tailscale IP or `0.0.0.0` (see [Configuration](#configuration)).
