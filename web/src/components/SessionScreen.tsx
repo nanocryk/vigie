@@ -1177,14 +1177,14 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   };
   const askGoTo = ask === undefined ? null : goToAgent(ask, viewing, entries);
 
-  // Escape closes the menu, else the commands panel, else the agents panel, else stops a running turn.
+  // Escape closes the menu, else the commands panel, else the agents panel. It
+  // never stops a turn: a stray Escape meant for another window would.
   const escape = useRef(() => {});
   useLayoutEffect(() => {
     escape.current = () => {
       if (menu.kind === "open") setMenu(closedMenu);
       else if (panel.kind !== "closed") setPanel(closedPanel);
       else if (agentsOpen) setAgentsOpen(false);
-      else if (transcript.turnOpen && !stopping) stop();
     };
   });
   useEffect(() => {
