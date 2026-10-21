@@ -577,7 +577,7 @@ export function MenuPills({
         {...{ [MENU_TOGGLE]: "" }}
         disabled={!enabled}
         onClick={() => onOpen("mode")}
-        className={`${PILL} ${modeStyle(mode)}`}
+        className={`${PILL} ${modeStyle(mode)} enabled:hover:brightness-125`}
       >
         {modeLabel(mode)}
       </button>
@@ -586,7 +586,7 @@ export function MenuPills({
         {...{ [MENU_TOGGLE]: "" }}
         disabled={!enabled}
         onClick={() => onOpen("model")}
-        className={`${PILL} max-w-[40vw] min-w-0 truncate bg-card`}
+        className={`${PILL} max-w-[40vw] min-w-0 truncate bg-card enabled:hover:bg-muted`}
       >
         {modelLabel}
       </button>
