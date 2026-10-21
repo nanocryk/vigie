@@ -11,6 +11,7 @@ import {
   openWindow,
   prependPage,
   requested,
+  trimEarlier,
   wholeHistory,
 } from "@/history";
 import { type TranscriptState, applyEvents, emptyTranscript } from "@/transcript";
@@ -198,6 +199,18 @@ export class Client {
     this.setLoaded(id, requested(loaded));
     this.send({ type: "history", session: id, before_seq: before, exchanges: HISTORY_EXCHANGES });
     this.update({});
+  }
+
+  /** Drops the earliest exchanges of a long discussion, to keep the page light. */
+  trimEarlier(id: string): void {
+    const loaded = this.loaded.get(id);
+    if (loaded === undefined || this.held.has(id)) return;
+    const next = trimEarlier(loaded);
+    if (next === loaded) return;
+    this.setLoaded(id, next);
+    const transcripts = new Map(this.snapshot.transcripts);
+    transcripts.set(id, fold(next));
+    this.update({ transcripts });
   }
 
   /**

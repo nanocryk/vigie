@@ -945,6 +945,7 @@ export function TranscriptView({
   beginning,
   request,
   onNearTop,
+  onAtBottom,
   items: allItems,
   pending,
   onRetry,
@@ -974,6 +975,8 @@ export function TranscriptView({
   request: Request;
   /** The view nears the top of what is loaded. */
   onNearTop: () => void;
+  /** The content changed, or the view returned to the bottom, while at the bottom. */
+  onAtBottom?: () => void;
   items: readonly Item[];
   pending: readonly PendingSend[];
   onRetry: (pending: PendingSend) => void;
@@ -1147,6 +1150,10 @@ export function TranscriptView({
 
   // A short window, or a page leaving the view near the top, asks for more.
   useEffect(checkTop, [items, request, checkTop]);
+
+  useEffect(() => {
+    if (atBottom.current) onAtBottom?.();
+  }, [items, jumpButton, onAtBottom]);
 
   let lastUser = items.length - 1;
   while (lastUser >= 0 && items[lastUser]?.kind !== "user") lastUser -= 1;

@@ -553,6 +553,7 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
   const transcript = snapshot.transcripts.get(id) ?? emptyTranscript;
   const history = snapshot.histories.get(id);
   const loadEarlier = useCallback(() => client.loadEarlier(id), [client, id]);
+  const trimEarlier = useCallback(() => client.trimEarlier(id), [client, id]);
   const view = snapshot.sessions?.find((session) => session.id === id) ?? null;
   useSeeCooling(useMemo(() => (view === null ? [] : [view]), [view]));
   const repo = useRepoRoot(view?.cwd ?? null);
@@ -1515,6 +1516,8 @@ export function SessionScreen({ client, id }: { client: Client; id: string }) {
         beginning={history?.beginning ?? "loaded"}
         request={history?.request ?? "idle"}
         onNearTop={loadEarlier}
+        // An agent's discussion may come from the exchanges a trim drops.
+        onAtBottom={viewing === null ? trimEarlier : undefined}
         items={shown.items}
         pending={visiblePending}
         onRetry={retry}

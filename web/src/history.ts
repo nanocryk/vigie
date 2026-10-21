@@ -79,6 +79,48 @@ export function prependPage(loaded: Loaded, page: Page): Loaded {
   };
 }
 
+/** Exchanges shown past which the earliest are dropped, down to `HISTORY_EXCHANGES`. */
+export const HELD_EXCHANGES = 2 * HISTORY_EXCHANGES;
+
+/** The host events a prelude holds the latest of. */
+const PRELUDE = new Set(["started", "permission_mode", "catalog", "restarted"]);
+
+function hostEvent(event: WireEvent): string | null {
+  return event.kind === "host" ? event.payload.event : null;
+}
+
+/**
+ * Drops the exchanges before the last `kept` once more than `held` are shown,
+ * keeping the prelude of the rest; scrolling up asks for them again.
+ */
+export function trimEarlier(
+  loaded: Loaded,
+  held = HELD_EXCHANGES,
+  kept = HISTORY_EXCHANGES,
+): Loaded {
+  if (loaded.request === "in_flight") return loaded;
+  const starts = loaded.events.filter(
+    (event) => event.seq >= loaded.firstSeq && hostEvent(event) === "user_sent",
+  );
+  const cut = starts.at(-kept)?.seq;
+  if (starts.length <= held || cut === undefined) return loaded;
+  const prelude = new Map<string, WireEvent>();
+  for (const event of loaded.events) {
+    if (event.seq >= cut) break;
+    const name = hostEvent(event);
+    if (name !== null && PRELUDE.has(name)) prelude.set(name, event);
+  }
+  return {
+    events: [
+      ...[...prelude.values()].sort((left, right) => left.seq - right.seq),
+      ...loaded.events.filter((event) => event.seq >= cut),
+    ],
+    firstSeq: cut,
+    beginning: "not_loaded",
+    request: "idle",
+  };
+}
+
 /** The transcript of the events held. */
 export function fold(loaded: Loaded): TranscriptState {
   return applyEvents({ ...emptyTranscript, firstSeq: loaded.firstSeq }, loaded.events);

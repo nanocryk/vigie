@@ -14,6 +14,7 @@ import {
   openWindow,
   prependPage,
   requested,
+  trimEarlier,
   wholeHistory,
 } from "@/history";
 import {
@@ -1008,6 +1009,29 @@ describe("paged history", () => {
     expect(state.items.some((item) => item.kind === "restart")).toBe(false);
     expect(deliveries(state.items)).toEqual(["received"]);
     expect(state.catalog?.commands.map((command) => command.name)).toEqual(["two"]);
+  });
+
+  it("a trim keeps the last exchanges as a window of them shows, and pages restore the rest", () => {
+    const all = discussion();
+    const full = applyEvents(emptyTranscript, all);
+    const end = (all.at(-1)?.seq ?? 0) + 1;
+    const exchanges = all.filter((event) => isHost(event, "user_sent")).length;
+    expect(exchanges).toBeGreaterThan(2);
+    const whole = appendEvents(wholeHistory, all);
+    expect(trimEarlier(whole, exchanges, 1)).toBe(whole);
+    expect(trimEarlier(requested(whole), exchanges - 1, 1).request).toBe("in_flight");
+
+    let loaded = trimEarlier(whole, exchanges - 1, 2);
+    const window = serverPage(all, end, 2);
+    expect(loaded).toEqual({
+      ...appendEvents(openWindow(window.firstSeq, false), window.events),
+      beginning: "not_loaded",
+    });
+
+    for (let before = nextRequest(loaded); before !== null; before = nextRequest(loaded)) {
+      loaded = prependPage(requested(loaded), serverPage(all, before, 2));
+    }
+    expect({ ...fold(loaded), firstSeq: 0 }).toEqual(full);
   });
 
   it("asks one page at a time, and a stale page only ends the request", () => {
