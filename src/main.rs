@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::io::IsTerminal;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -466,10 +467,24 @@ fn run_pair() -> Result<ExitCode> {
         "Pair URL (single use, expires in {} minutes):",
         LOCAL_TOKEN_TTL.as_secs() / 60
     );
+    let color = use_color(&std::io::stdout());
     for url in &info.urls {
-        println!("  {url}#auth={token}");
+        println!("  {}", highlight(&format!("{url}#auth={token}"), color));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Color only a terminal, and honor `NO_COLOR` (https://no-color.org).
+fn use_color(stream: &impl IsTerminal) -> bool {
+    stream.is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+}
+
+fn highlight(text: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[1;36m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
 }
 
 async fn serve(args: ServeArgs) -> Result<ExitCode> {
@@ -589,8 +604,10 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
             "Pair URL (single use, expires in {} minutes; `vigie auth pair` prints a new one):",
             LOCAL_TOKEN_TTL.as_secs() / 60
         );
+        let color = use_color(&std::io::stderr());
         for url in &pair_urls {
-            eprintln!("  {url}#auth={}", auth.startup_token);
+            let link = format!("{url}#auth={}", auth.startup_token);
+            eprintln!("  {}", highlight(&link, color));
         }
         eprintln!();
         if !reachable_ips.is_empty() && !bind.ip().is_loopback() {
