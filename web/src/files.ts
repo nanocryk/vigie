@@ -353,6 +353,8 @@ export interface ExplorerTab {
   /** The attachment row the open file was opened from, to step through. */
   attachments: AttachmentGroup | null;
   scroll: number;
+  /** Counts opens from outside the explorer, so reopening the shown file reloads it. */
+  opened: number;
 }
 
 export interface ExplorerState {
@@ -379,6 +381,7 @@ function freeTab(): ExplorerTab {
     line: null,
     attachments: null,
     scroll: 0,
+    opened: 0,
   };
 }
 
@@ -438,7 +441,9 @@ export function closeTab(state: ExplorerState, id: string): ExplorerState {
 export function updateTab(
   state: ExplorerState,
   id: string,
-  patch: Partial<Pick<ExplorerTab, "folder" | "diff" | "file" | "line" | "attachments" | "scroll">>,
+  patch: Partial<
+    Pick<ExplorerTab, "folder" | "diff" | "file" | "line" | "attachments" | "scroll" | "opened">
+  >,
 ): ExplorerState {
   // A patch setting the file drops the attachment row unless it names one.
   const full =
@@ -481,6 +486,7 @@ export function openSessionTab(state: ExplorerState, session: string, root: stri
     line: null,
     attachments: null,
     scroll: 0,
+    opened: 0,
   };
   return selectTab({ ...state, tabs: [...state.tabs, tab] }, tab.id);
 }
@@ -500,6 +506,7 @@ export function openFileInLastFree(
     line,
     attachments,
     scroll: 0,
+    opened: activeTab(next).opened + 1,
   });
 }
 
@@ -531,6 +538,7 @@ export function openSessionFile(
     line,
     attachments,
     scroll: 0,
+    opened: activeTab(next).opened + 1,
   });
 }
 
@@ -599,7 +607,7 @@ function parseAttachments(raw: unknown, file: string | null): AttachmentGroup | 
 
 function parseTab(raw: unknown): ExplorerTab | null {
   if (!isRecord(raw)) return null;
-  const { id, folder, diff, file, line, scroll } = raw;
+  const { id, folder, diff, file, line, scroll, opened } = raw;
   const owner = parseOwner(raw["owner"]);
   if (typeof id !== "string" || owner === null) return null;
   const open = typeof file === "string" ? file : null;
@@ -612,6 +620,7 @@ function parseTab(raw: unknown): ExplorerTab | null {
     line: typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null,
     attachments: parseAttachments(raw["attachments"], open),
     scroll: typeof scroll === "number" && Number.isFinite(scroll) ? scroll : 0,
+    opened: typeof opened === "number" && Number.isInteger(opened) && opened >= 0 ? opened : 0,
   };
 }
 

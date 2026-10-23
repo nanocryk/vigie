@@ -1488,7 +1488,7 @@ export function Explorer({ client }: { client: Client }) {
       </div>
       {tab.file !== null ? (
         <FileViewer
-          key={`${tab.id}:${tab.file}`}
+          key={`${tab.id}:${tab.file}:${tab.opened}`}
           path={tab.file}
           line={tab.line}
           backTo={tab.diff !== null ? "Diff" : "Folder"}

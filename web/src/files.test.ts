@@ -167,6 +167,17 @@ describe("tabs", () => {
     });
   });
 
+  it("counts each open of the shown file, so the viewer reloads it", () => {
+    const once = openSessionFile(initialState(), "s1", "C:\\p", "C:\\p\\a.ts");
+    const twice = openSessionFile(once, "s1", "C:\\p", "C:\\p\\a.ts");
+    expect(activeTab(twice).opened).toBe(activeTab(once).opened + 1);
+    const free = openFileInLastFree(
+      openFileInLastFree(initialState(), "C:\\p\\a.ts"),
+      "C:\\p\\a.ts",
+    );
+    expect(activeTab(free).opened).toBe(2);
+  });
+
   it("opens a folder, any file and diff closed, in the session's tab or the last free one", () => {
     let session = openSessionFile(initialState(), "s1", "C:\\p", "C:\\p\\a.ts", 12);
     session = openSessionFolderAt(session, "s1", "C:\\p", "C:\\p\\src");
