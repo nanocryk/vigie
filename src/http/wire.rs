@@ -66,7 +66,8 @@ pub enum Subscription {
         session: Uuid,
         #[serde(default)]
         after_seq: u64,
-        /// With `after_seq` 0: send only the last exchanges, preceded by `window`.
+        /// Send only the last exchanges, preceded by `window`, when they start
+        /// after `after_seq + 1` or `after_seq` is 0.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exchanges: Option<u32>,
     },

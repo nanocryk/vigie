@@ -1772,7 +1772,7 @@ async fn a_resubscribe_after_a_reconnect_sends_only_what_came_after() {
             &Subscription::Subscribe {
                 session: id,
                 after_seq: 5,
-                exchanges: Some(1),
+                exchanges: Some(6),
             }
             .into(),
         )
@@ -1782,5 +1782,33 @@ async fn a_resubscribe_after_a_reconnect_sends_only_what_came_after() {
     }
     assert!(client.windows.is_empty());
     assert_eq!(seqs(&client.events), (6..=last).collect::<Vec<_>>());
+    assert_eq!(client.synced, [last]);
+}
+
+#[tokio::test]
+async fn a_resubscribe_missing_more_than_the_window_opens_a_new_one() {
+    let server = Server::start(SCRIPT).await;
+    let (id, events) = long_discussion(&server).await;
+    let last = events.last().unwrap().seq;
+    let mut client = server.client().await;
+    client
+        .send(
+            &Subscription::Subscribe {
+                session: id,
+                after_seq: 5,
+                exchanges: Some(2),
+            }
+            .into(),
+        )
+        .await;
+    while client.synced.is_empty() {
+        client.pump().await;
+    }
+    let first = expected_start(&events, u64::MAX, 2);
+    assert!(first > 6);
+    assert_eq!(client.windows, [(first, false)]);
+    let mut expected = expected_prelude(&events, first);
+    expected.extend(first..=last);
+    assert_eq!(seqs(&client.events), expected);
     assert_eq!(client.synced, [last]);
 }

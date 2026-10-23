@@ -203,7 +203,7 @@ impl Connection {
                     self.manager.clone(),
                     session,
                     after_seq,
-                    exchanges.filter(|_| after_seq == 0),
+                    exchanges,
                     self.out.clone(),
                 ));
                 self.subscriptions.insert(session, task);
@@ -406,8 +406,8 @@ async fn running(manager: &SessionManager, id: Uuid) -> Result<Session> {
 struct Gone;
 
 /// Forwards the events of one session after `after_seq`, or of its last
-/// `exchanges` exchanges, following it across child restarts, until the socket
-/// goes away or the task is aborted.
+/// `exchanges` exchanges when those start later, following it across child
+/// restarts, until the socket goes away or the task is aborted.
 async fn stream_session(
     manager: SessionManager,
     id: Uuid,
@@ -525,7 +525,8 @@ impl Forwarder {
     }
 
     /// Sends `window` and the prelude of the last `exchanges` exchanges, and moves
-    /// `sent` to just before them. A failed read leaves `sent`: the whole history follows.
+    /// `sent` to just before them, unless the events after a nonzero `sent` already
+    /// start within them. A failed read leaves `sent`: everything after it follows.
     async fn open_window(&mut self, exchanges: u32) -> Result<(), Gone> {
         let start = match self
             .manager
@@ -544,6 +545,9 @@ impl Forwarder {
                     .await;
             }
         };
+        if self.sent > 0 && start.first_seq <= self.sent + 1 {
+            return Ok(());
+        }
         self.send(ServerMessage::Window {
             session: self.id,
             first_seq: start.first_seq,

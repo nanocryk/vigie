@@ -132,10 +132,12 @@ export class Client {
   private received = new Map<string, number>();
   private queued = new Map<string, WireEvent[]>();
   /**
-   * Sessions opened without a transcript: their history is applied at once on
-   * `synced`, so the view opens on its end instead of growing page by page.
+   * Sessions subscribed and not yet `synced`: what they receive is applied at
+   * once on `synced`, so the view lands on its end instead of growing page by page.
    */
   private held = new Set<string>();
+  /** Held sessions whose transcript a `window` replaces on `synced`. */
+  private reopened = new Set<string>();
   /** The events behind each transcript, refolded when an earlier page arrives. */
   private loaded = new Map<string, Loaded>();
   private frame: number | null = null;
@@ -173,7 +175,6 @@ export class Client {
 
   openSession(id: string): void {
     this.subscribed.add(id);
-    if (!this.snapshot.transcripts.has(id)) this.held.add(id);
     this.send(this.subscription(id));
   }
 
@@ -215,11 +216,15 @@ export class Client {
 
   /**
    * A session without a transcript yet starts over on its last exchanges; one
-   * with a transcript asks for what came after it.
+   * with a transcript asks for what came after it, which the server swaps for
+   * its last exchanges when more came. Held until `synced` either way.
    */
   private subscription(id: string): ClientMessage {
-    if (!this.held.has(id)) {
-      return { type: "subscribe", session: id, after_seq: this.received.get(id) ?? 0 };
+    this.held.add(id);
+    this.reopened.delete(id);
+    const after = this.received.get(id);
+    if (this.snapshot.transcripts.has(id) && after !== undefined) {
+      return { type: "subscribe", session: id, after_seq: after, exchanges: HISTORY_EXCHANGES };
     }
     this.received.delete(id);
     this.queued.delete(id);
@@ -442,9 +447,12 @@ export class Client {
         if (this.held.delete(message.session)) this.flush(message.session);
         return;
       case "window":
-        // A fresh stream: anything left from an earlier subscription goes.
+        // A fresh stream: anything left from an earlier subscription goes, the
+        // transcript shown included once `synced` brings its replacement.
         this.received.delete(message.session);
         this.queued.delete(message.session);
+        this.held.add(message.session);
+        if (this.snapshot.transcripts.has(message.session)) this.reopened.add(message.session);
         this.setLoaded(message.session, openWindow(message.first_seq, message.start_reached));
         return;
       case "page": {
@@ -501,9 +509,15 @@ export class Client {
   /** Applies the queued events of sessions not held; `synced` also creates its transcript. */
   private flush(synced?: string): void {
     const ready = [...this.queued].filter(([session]) => !this.held.has(session));
-    const created = synced !== undefined && !this.snapshot.transcripts.has(synced);
+    const reopened = [...this.reopened].filter((session) => !this.held.has(session));
+    const created =
+      synced !== undefined && (!this.snapshot.transcripts.has(synced) || reopened.includes(synced));
     if (ready.length === 0 && !created) return;
     const transcripts = new Map(this.snapshot.transcripts);
+    for (const session of reopened) {
+      this.reopened.delete(session);
+      transcripts.delete(session);
+    }
     for (const [session, events] of ready) {
       const loaded = this.loaded.get(session) ?? wholeHistory;
       const base = transcripts.get(session) ?? { ...emptyTranscript, firstSeq: loaded.firstSeq };
