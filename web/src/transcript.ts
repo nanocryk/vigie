@@ -155,6 +155,8 @@ type ItemBody =
       note?: string;
     }
   | { kind: "notice"; key: string; tone: "info" | "error"; text: string; detail: string | null }
+  /** The CLI's login expired: a way to log in again. */
+  | { kind: "login_needed"; key: string }
   | {
       kind: "restart";
       key: string;
@@ -479,6 +481,7 @@ const STOPPED: Record<StopReason, string> = {
   kill: "Stopped from Home",
   revoke: "Grants revoked",
   shutdown: "Server stopped",
+  login: "Stopped to load the new login",
 };
 const SUMMARY_LIMIT = 300;
 const UNKNOWN_MESSAGE = "?";
@@ -1280,6 +1283,9 @@ class Draft {
         this.answered(false);
         this.openTurn();
         this.assistant(line.messageId, line.content, key);
+        if (line.error === "authentication_failed") {
+          this.add({ kind: "login_needed", key: `${key}:login` });
+        }
         return;
       case "system":
         if (line.task !== null) {

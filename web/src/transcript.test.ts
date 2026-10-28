@@ -122,6 +122,7 @@ type Shape =
   | ["user" | "claude" | "thinking", string]
   | ["tool", string, string, string]
   | ["notice", string]
+  | ["login_needed"]
   | ["restart", string, string | null]
   | ["agent", string]
   | ["brief", string]
@@ -150,6 +151,8 @@ function shape(item: Item): Shape {
       return ["tool", item.name, item.summary, item.status];
     case "notice":
       return ["notice", item.text];
+    case "login_needed":
+      return ["login_needed"];
     case "restart":
       return ["restart", restartLabel(item), item.seed];
   }
@@ -752,6 +755,29 @@ describe("restarts", () => {
     );
   });
 
+  it("an expired login offers to log in again after the CLI's message", () => {
+    const failed = (seq: number, error: string | undefined): WireEvent =>
+      event(seq, "line", {
+        type: "assistant",
+        message: {
+          id: `m${seq}`,
+          model: "<synthetic>",
+          role: "assistant",
+          content: [{ type: "text", text: "Failed to authenticate: OAuth session expired" }],
+        },
+        parent_tool_use_id: null,
+        ...(error === undefined ? {} : { error, is_api_error_message: true }),
+      });
+    const state = applyEvents(emptyTranscript, [
+      failed(1, "authentication_failed"),
+      failed(2, "rate_limit"),
+      failed(3, undefined),
+    ]);
+    expect(state.items.map(shape).filter(([kind]) => kind !== "claude")).toEqual([
+      ["login_needed"],
+    ]);
+  });
+
   it("a stop a client asked for says why, not how", () => {
     const exited = (seq: number, reason?: string): WireEvent =>
       event(seq, "host", {
@@ -760,11 +786,17 @@ describe("restarts", () => {
         stderr_tail: [],
         ...(reason === undefined ? {} : { reason }),
       });
-    const state = applyEvents(emptyTranscript, [exited(1, "revoke"), exited(2, "kill"), exited(3)]);
+    const state = applyEvents(emptyTranscript, [
+      exited(1, "revoke"),
+      exited(2, "kill"),
+      exited(3),
+      exited(4, "login"),
+    ]);
     expect(state.items.map(shape)).toEqual([
       ["notice", "Grants revoked"],
       ["notice", "Stopped from Home"],
       ["notice", "Claude process ended (code 0)"],
+      ["notice", "Stopped to load the new login"],
     ]);
 
     const shutdown = applyEvents(emptyTranscript, [

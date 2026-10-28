@@ -313,6 +313,8 @@ pub enum StopReason {
     Revoke,
     /// The server is shutting down.
     Shutdown,
+    /// Stopped after a login so the next send runs on the new credentials.
+    Login,
 }
 
 #[cfg(test)]

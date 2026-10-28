@@ -1,5 +1,12 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
+import {
+  CLAUDE_SECTION,
+  type ClaudeAccount,
+  fetchClaudeAccount,
+  startLogin,
+  submitLoginCode,
+} from "@/claudeLogin";
 import type { Client } from "@/client";
 import { Devices } from "@/components/Devices";
 import { SettingsSection } from "@/components/SettingsSection";
@@ -564,6 +571,141 @@ function ServerRestart({ updated }: { updated: boolean }) {
   );
 }
 
+function accountSummary(account: ClaudeAccount | null): string {
+  if (account === null) return "Checking the account...";
+  if (!account.loggedIn) return "Logged out.";
+  const plan = account.subscription === null ? "" : ` (${account.subscription} plan)`;
+  return `Logged in as ${account.email ?? "an unknown account"}${plan}. Log in again when turns fail to authenticate.`;
+}
+
+function ClaudeLogin() {
+  const [account, setAccount] = useState<ClaudeAccount | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchClaudeAccount()
+      .then((fresh) => {
+        if (!cancelled) setAccount(fresh);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const start = () => {
+    setBusy(true);
+    setError(null);
+    setLoggedIn(false);
+    setCode("");
+    startLogin()
+      .then(setUrl)
+      .catch((err: unknown) => setError(errorMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    submitLoginCode(code.trim())
+      .then(() => {
+        setUrl(null);
+        setLoggedIn(true);
+        return fetchClaudeAccount().then(setAccount);
+      })
+      .catch((err: unknown) => {
+        setUrl(null);
+        setError(errorMessage(err));
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const body = url !== null || loggedIn || error !== null;
+  return (
+    <SettingsSection
+      id={CLAUDE_SECTION}
+      title="Claude account"
+      summary={accountSummary(account)}
+      forceOpen={body}
+      action={
+        url === null && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={start}
+            className={`${BUTTON} shrink-0 hover:bg-muted`}
+          >
+            {busy ? "Starting..." : "Log in again"}
+          </button>
+        )
+      }
+    >
+      {body && (
+        <>
+          {url !== null && (
+            <form onSubmit={submit} className="space-y-2">
+              <p className="text-sm voice-ui">
+                1.{" "}
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline underline-offset-2"
+                >
+                  Open the login page
+                </a>{" "}
+                and approve.
+                <br />
+                2. Copy the code it shows and paste it here.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  aria-label="Login code"
+                  placeholder="Code"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded-[5px] border bg-background px-2 py-1 text-sm voice-code"
+                />
+                <button
+                  type="submit"
+                  disabled={busy || code.trim() === ""}
+                  className={`${BUTTON} shrink-0 border-primary bg-primary text-primary-foreground`}
+                >
+                  {busy ? "Logging in..." : "Log in"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setUrl(null)}
+                  className={`${BUTTON} shrink-0 hover:bg-muted`}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+          {loggedIn && (
+            <p className="text-sm voice-ui">
+              Logged in. Idle discussions restart on their next message to use the new login.
+            </p>
+          )}
+          {error !== null && <p className="text-xs voice-ui text-destructive">{error}</p>}
+        </>
+      )}
+    </SettingsSection>
+  );
+}
+
 export function DeviceSettings({ client }: { client: Client }) {
   const snapshot = useSnapshot(client);
   const [updated, setUpdated] = useState(false);
@@ -582,6 +724,7 @@ export function DeviceSettings({ client }: { client: Client }) {
           <Swipes />
           <Notifications />
           <Devices />
+          <ClaudeLogin />
           <Update onBuilt={setUpdated} />
           <ServerRestart updated={updated} />
         </div>

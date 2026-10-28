@@ -21,7 +21,9 @@ import { formatDuration, formatExact, formatStamp } from "@/format";
 import { AttachmentChip, LatestHashes } from "@/components/Attachments";
 import { changeExplorer, openFileInLastFree } from "@/files";
 import { formatSpan } from "@/gauges";
+import { CLAUDE_SECTION } from "@/claudeLogin";
 import { navigate } from "@/route";
+import { openSection } from "@/sectionsOpen";
 import type { BackgroundView, HeldMessage, HeldMode } from "@/wire";
 import type { Beginning, Request } from "@/history";
 import {
@@ -720,6 +722,22 @@ const ItemView = memo(function ItemView({
         </details>
       );
     }
+    case "login_needed":
+      return (
+        <div className="flex items-center justify-center gap-2 px-1 text-xs voice-ui text-destructive">
+          <span>Claude is logged out.</span>
+          <button
+            type="button"
+            onClick={() => {
+              openSection(CLAUDE_SECTION);
+              navigate({ kind: "settings" });
+            }}
+            className="rounded-[5px] border px-2 text-primary"
+          >
+            Log in again
+          </button>
+        </div>
+      );
     case "agent":
       return (
         <div className={`${TOOL_SUMMARY} cursor-default border-l-2 border-ring text-sm`}>

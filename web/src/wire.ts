@@ -302,11 +302,14 @@ export type ClientMessage =
 
 export type RestartMode = "continue" | "blank" | "clear";
 
-/** Why a live child was stopped: from Home, to drop the granted folders, or the server stopping. */
-export type StopReason = "kill" | "revoke" | "shutdown";
+/**
+ * Why a live child was stopped: from Home, to drop the granted folders, the
+ * server stopping, or a login so the next message runs on the new credentials.
+ */
+export type StopReason = "kill" | "revoke" | "shutdown" | "login";
 
 function stopReason(raw: unknown): StopReason | null {
-  return raw === "kill" || raw === "revoke" || raw === "shutdown" ? raw : null;
+  return raw === "kill" || raw === "revoke" || raw === "shutdown" || raw === "login" ? raw : null;
 }
 
 export type Command = Extract<ClientMessage, { client_id: string }>;
@@ -1356,6 +1359,8 @@ export type CliLine =
       parentToolUseId: string | null;
       messageId: string | null;
       content: ContentBlock[];
+      /** Set on a message the CLI wrote for a failed request: `authentication_failed`, ... */
+      error: string | null;
     }
   | { type: "stream_event"; parentToolUseId: string | null; event: StreamEvent }
   | { type: "result"; subtype: string; isError: boolean }
@@ -1522,6 +1527,7 @@ export function parseCliLine(raw: unknown): CliLine {
         parentToolUseId,
         messageId: stringOrNull(message["id"]),
         content: message["content"].map(parseContentBlock),
+        error: stringOrNull(raw["error"]),
       };
     }
     case "stream_event":

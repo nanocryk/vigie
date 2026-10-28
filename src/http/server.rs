@@ -15,6 +15,7 @@ use axum::{
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
+use crate::claude::login::Login;
 use crate::http::auth::{self, Auth};
 use crate::http::push::{self, Pusher};
 use crate::http::update::{self, Updater};
@@ -43,6 +44,7 @@ pub struct AppState {
     pub updater: Arc<Updater>,
     /// When the served TLS certificate stops being valid.
     pub cert_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub login: Arc<Login>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -73,6 +75,7 @@ impl AppState {
         let vapid = Vapid::load_or_generate(dir)?;
         let pusher = Arc::new(Pusher::new(vapid, store.clone(), Arc::clone(&auth))?);
         let restart = ServerRestart::new(Supervision::Shim);
+        let login = Arc::new(Login::new(program.clone()));
         let manager = SessionManager::start(store, program, dir, restart).await?;
         Ok(Self {
             auth,
@@ -85,6 +88,7 @@ impl AppState {
             pusher,
             updater: Arc::new(Updater::new(dir.to_path_buf(), dir.join("last-update"))),
             cert_expires_at: None,
+            login,
         })
     }
 }
@@ -132,6 +136,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/server", get(api::server))
         .route("/api/server/restart", post(api::restart_server))
         .route("/api/server/restart/cancel", post(api::cancel_restart))
+        .route("/api/claude/account", get(api::claude_account))
+        .route("/api/claude/login", post(api::claude_login))
+        .route("/api/claude/login/code", post(api::claude_login_code))
         .route("/api/update", get(update::status_route))
         .route("/api/update/check", post(update::check_route))
         .route("/api/update/run", post(update::run_route))
@@ -279,6 +286,9 @@ mod auth_gate_tests {
             (Method::GET, "/api/server"),
             (Method::POST, "/api/server/restart"),
             (Method::POST, "/api/server/restart/cancel"),
+            (Method::GET, "/api/claude/account"),
+            (Method::POST, "/api/claude/login"),
+            (Method::POST, "/api/claude/login/code"),
             (Method::GET, "/api/update"),
             (Method::POST, "/api/update/check"),
             (Method::POST, "/api/update/run"),

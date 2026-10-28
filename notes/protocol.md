@@ -43,6 +43,16 @@ Line-delimited JSON on stdin/stdout, the same wire protocol the Agent SDKs use. 
 - `rate_limit_event.rate_limit_info`: `status` (`allowed`, `allowed_warning`, `rejected`), `resetsAt`, `rateLimitType` (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_overage_included`, `overage`), `utilization`, `surpassedThreshold`, `overageStatus`, `isUsingOverage`, `overageInUse`, `errorCode: "credits_required"`.
 - `get_usage` response `rate_limits`: `limits[]` rows (`kind`, `group`, `percent`, `resets_at`, `scope.model` / `scope.surface`, `severity`, `is_active`) and `extra_usage` (`is_enabled`, `monthly_limit`, `used_credits`, `utilization`). `rate_limits_available` is false for API key sessions.
 - Billing context (2026-09-27): the move of `-p` / Agent SDK usage to a separate credit, announced 2026-05-13, was paused on 2026-06-15; usage still draws from the subscription limits.
+- Expired OAuth (CLI 2.1.285, seen on a freshly launched child): a synthetic `assistant` line (`model: "<synthetic>"`) with top-level `error: "authentication_failed"` and `is_api_error_message: true`, its text `Failed to authenticate: OAuth session expired and could not be refreshed`; then `result` with `is_error: true`, `subtype: "success"`, `terminal_reason: "api_error"`.
+
+## Login
+
+CLI 2.1.285, no terminal attached.
+
+- `claude auth status --json`: `loggedIn`, `authMethod` (`claude.ai`), `apiProvider`, `email`, `orgId`, `orgName`, `subscriptionType` (`max`).
+- `claude auth login --claudeai` prints `Opening browser to sign in…`, then `If the browser didn't open, visit: <url>` with the manual code redirect (`platform.claude.com/oauth/code/callback`), then `Paste code here if prompted > ` without a newline, and reads the code from stdin. It also opens a browser on its own machine.
+- A rejected code: `Login failed: Request failed with status code 400`, exit 1. The previous login stays.
+- vigie runs the login from Device settings: it shows the URL, takes the code the approval page gives, writes it to stdin, then stops idle children so their next message resumes on the new credentials.
 
 ## Observed
 

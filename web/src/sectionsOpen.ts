@@ -46,6 +46,10 @@ export function useOpenSections(): OpenSections {
   return useSyncExternalStore(subscribe, snapshot);
 }
 
+export function openSection(id: string): void {
+  if (!snapshot().has(id)) toggleSection(id);
+}
+
 export function toggleSection(id: string): void {
   current = toggledSections(snapshot(), id);
   try {

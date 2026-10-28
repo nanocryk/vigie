@@ -19,7 +19,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::claude::login::Submitted;
 use crate::http::wire::{CreateSession, SessionList, SessionView};
+use crate::session::StopReason;
 use crate::session::manager::SessionManager;
 use crate::session::server_restart::{RestartState, RunningBuild, Supervision};
 use crate::store::{MessageQuery, SessionRow, snippet};
@@ -357,6 +359,59 @@ pub async fn restart_server(State(state): State<AppState>) -> Result<Response, A
         return Err(ApiError::new(StatusCode::CONFLICT, "not_supervised"));
     }
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+/// `api/claude/account`: the account the CLI is logged in to.
+pub async fn claude_account(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let account = state
+        .login
+        .account()
+        .await
+        .map_err(|err| ApiError::internal("claude account", err))?;
+    Ok(Json(account).into_response())
+}
+
+/// `api/claude/login`: starts a login and answers the URL that gives its code.
+pub async fn claude_login(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let url = state
+        .login
+        .start()
+        .await
+        .map_err(|err| ApiError::internal("claude login", err))?;
+    Ok(Json(json!({ "url": url })).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginCode {
+    code: String,
+}
+
+/// `api/claude/login/code`: ends the running login with `code`. On success the
+/// idle children stop, so their next message runs on the new credentials.
+pub async fn claude_login_code(
+    State(state): State<AppState>,
+    Json(request): Json<LoginCode>,
+) -> Result<Response, ApiError> {
+    let code = request.code.trim();
+    if code.is_empty() || code.contains(char::is_whitespace) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_code"));
+    }
+    let submitted = state
+        .login
+        .submit(code)
+        .await
+        .map_err(|err| ApiError::internal("claude login code", err))?;
+    match submitted {
+        Submitted::LoggedIn => {
+            state.manager.stop_idle(StopReason::Login).await;
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+        Submitted::Rejected(message) => Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: Cow::Owned(message),
+        }),
+        Submitted::NoLogin => Err(ApiError::new(StatusCode::CONFLICT, "no_login")),
+    }
 }
 
 async fn session_views(manager: &SessionManager) -> anyhow::Result<Vec<SessionView>> {

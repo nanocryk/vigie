@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use vigie::BASE_PATH_SLASH;
 use vigie::claude::child::Program;
+use vigie::claude::login::Login;
 use vigie::http::api::cert_expires_soon;
 use vigie::http::auth::{Auth, LOCAL_TOKEN_TTL, Registry, local_token};
 use vigie::http::net;
@@ -572,6 +573,7 @@ async fn serve(args: ServeArgs) -> Result<ExitCode> {
         allowed_origins: Arc::new(allowed_origins(&settings, &reachable_ips)),
         updater,
         cert_expires_at,
+        login: Arc::new(Login::new(manager.program().clone())),
     };
 
     let app = build_app(state);

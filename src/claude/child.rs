@@ -188,6 +188,16 @@ pub fn env(
     vars
 }
 
+/// The environment of a child outside any session: `parent` minus the stripped variables.
+pub fn plain_env(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    parent
+        .into_iter()
+        .filter(|(name, _)| !is_stripped(name))
+        .collect()
+}
+
 /// Keeps a Ctrl+C in the server's console from reaching the child, which would
 /// exit before the server's shutdown could stop it with a reason.
 #[cfg(windows)]
@@ -235,11 +245,23 @@ impl Child {
     ) -> Result<Self> {
         let mut command = Command::new(&program.path);
         command
-            .args(&program.leading_args)
-            .args(cli_args)
             .current_dir(cwd)
             .env_clear()
-            .envs(env(std::env::vars_os(), host_session))
+            .envs(env(std::env::vars_os(), host_session));
+        Self::launch(command, program, cli_args)
+    }
+
+    /// Runs `program` with `args` outside any session, as the `auth` subcommands are.
+    pub fn spawn_plain(program: &Program, args: Vec<OsString>) -> Result<Self> {
+        let mut command = Command::new(&program.path);
+        command.env_clear().envs(plain_env(std::env::vars_os()));
+        Self::launch(command, program, args)
+    }
+
+    fn launch(mut command: Command, program: &Program, args: Vec<OsString>) -> Result<Self> {
+        command
+            .args(&program.leading_args)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -2,6 +2,7 @@
 //! replays recordings in its place.
 
 pub mod child;
+pub mod login;
 pub mod protocol;
 #[cfg(any(test, feature = "test-support"))]
 pub mod replay;

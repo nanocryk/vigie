@@ -233,6 +233,10 @@ impl SessionManager {
         &self.inner.restart
     }
 
+    pub fn program(&self) -> &Program {
+        &self.inner.program
+    }
+
     pub fn subscribe_notices(&self) -> broadcast::Receiver<Notice> {
         self.inner.notices.subscribe()
     }
@@ -519,6 +523,28 @@ impl SessionManager {
         drop(live);
         self.inner.signals.session(id);
         Ok(())
+    }
+
+    /// Stops every child that runs neither a turn nor a background task, as `kill`
+    /// does; the next send resumes it.
+    pub async fn stop_idle(&self, reason: StopReason) {
+        let mut live = self.inner.live.lock().await;
+        let idle: Vec<Uuid> = live
+            .iter()
+            .filter(|(_, session)| {
+                !session.is_closed() && session.status().borrow().activity == Activity::Idle
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &idle {
+            if let Some(session) = live.remove(id) {
+                session.stop_for(reason).await;
+            }
+        }
+        drop(live);
+        for id in idle {
+            self.inner.signals.session(id);
+        }
     }
 
     /// Fails with `wire::SESSION_LIVE` while the child runs.
