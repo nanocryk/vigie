@@ -40,6 +40,8 @@ use crate::store::{BashAnswer, SessionState, Store};
 const STDERR_TAIL: usize = 50;
 /// Time a child gets to exit after its stdin closes before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(10);
+/// Time a turn interrupted by a stop gets to end before the child is killed.
+const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 const STDERR_DRAIN: Duration = Duration::from_secs(1);
 const FIRST_PARTY: &str = "firstParty";
 /// `apiKeySource` of a claude.ai OAuth session.
@@ -194,6 +196,8 @@ pub struct Actor {
     permission_mode: Option<PermissionMode>,
     next_request: u64,
     state: State,
+    /// A stop interrupted the turn; stdin closes once it ends.
+    interrupting: bool,
     kill_at: Option<Instant>,
     stderr_tail: VecDeque<String>,
 }
@@ -235,6 +239,7 @@ impl Actor {
             permission_mode: None,
             next_request: 0,
             state: State::Ready,
+            interrupting: false,
             kill_at: None,
             stderr_tail: VecDeque::new(),
         }
@@ -281,7 +286,7 @@ impl Actor {
                 },
                 command = commands.recv(), if ready => match command {
                     Some(command) => self.on_command(command).await,
-                    None => self.begin_stop(None),
+                    None => self.begin_stop(None).await,
                 },
                 _ = tokio::time::sleep_until(kill_at.unwrap_or_else(Instant::now)), if kill_at.is_some() => {
                     self.child.kill();
@@ -310,6 +315,10 @@ impl Actor {
         if let Some(line) = &parsed {
             self.tracker.on_line(line);
             self.publish_status();
+            if self.interrupting && !self.tracker.turn() {
+                self.interrupting = false;
+                self.close_stdin();
+            }
         }
         let event = self.emit(EventBody::Line(Box::new(Line { raw, parsed })));
         if let EventBody::Line(line) = &event.body
@@ -666,7 +675,7 @@ impl Actor {
             } => {
                 let _ = reply.send(self.relay(task_id, message, client_id).await);
             }
-            Command::Stop(reason) => self.begin_stop(reason),
+            Command::Stop(reason) => self.begin_stop(reason).await,
         }
     }
 
@@ -978,7 +987,10 @@ impl Actor {
             .position(|ask| ask.request_id == request_id)
     }
 
-    fn begin_stop(&mut self, reason: Option<StopReason>) {
+    /// A running turn is interrupted, queued messages dropped, before stdin closes:
+    /// closing it mid-turn fails the pending tool call, which the CLI answers with a
+    /// model request.
+    async fn begin_stop(&mut self, reason: Option<StopReason>) {
         if self.state == State::Stopping {
             return;
         }
@@ -988,6 +1000,28 @@ impl Actor {
             self.emit_host(HostEvent::Stopping { reason });
         }
         self.end = Some(SessionState::Stopped);
+        if !self.tracker.turn() {
+            self.close_stdin();
+            return;
+        }
+        let request_id = self.next_request_id();
+        let interrupt = Outbound::ControlRequest(ControlRequest::new(
+            request_id,
+            HostRequest::interrupt(Some(true)),
+        ));
+        match self.write(interrupt).await {
+            Ok(()) => {
+                self.interrupting = true;
+                self.kill_at = Some(Instant::now() + INTERRUPT_GRACE);
+            }
+            Err(err) => {
+                tracing::warn!("interrupt before stop: {err:#}");
+                self.child.kill();
+            }
+        }
+    }
+
+    fn close_stdin(&mut self) {
         self.child.close_stdin();
         self.kill_at = Some(Instant::now() + STOP_GRACE);
     }

@@ -133,8 +133,11 @@ class Session:
     def _answer(self, msg, policy):
         req = msg["request"]
         if req.get("subtype") == "can_use_tool" and policy is not None:
+            response = policy(req)
+            if response is None:
+                return
             reply = {"subtype": "success", "request_id": msg["request_id"],
-                     "response": policy(req)}
+                     "response": response}
         else:
             reply = {"subtype": "error", "request_id": msg["request_id"],
                      "error": f"spike driver has no handler for {req.get('subtype')}"}
@@ -192,6 +195,11 @@ class Session:
 
 def allow(req):
     return {"behavior": "allow", "updatedInput": req["input"]}
+
+
+def hold(req):
+    """Leaves the ask unanswered."""
+    return None
 
 
 def deny_with(message):
@@ -445,6 +453,30 @@ def stoptool(s, cwd):
     s.pump(lambda m: m.get("type") == "result", allow, 120)
 
 
+def is_ask(msg):
+    return (msg.get("type") == "control_request"
+            and msg["request"].get("subtype") == "can_use_tool")
+
+
+def hold_an_ask(s):
+    s.control("initialize")
+    s.user("Use the Bash tool to run exactly: echo spike-stop. Then reply done.")
+    s.pump(is_ask, hold)
+    s.drain(2, hold)
+
+
+def closeask(s, cwd):
+    hold_an_ask(s)
+    s.note("closing stdin with the ask pending")
+
+
+def stopask(s, cwd):
+    hold_an_ask(s)
+    s.note("interrupt dropping queued messages with the ask pending, then closing stdin")
+    s.control("interrupt", hold, cancel_queued=True)
+    s.pump(lambda m: m.get("type") == "result", hold, 30)
+
+
 def posix_rule_path(path):
     """`C:\\a\\b` as `//c/a/b`, the form the CLI's own rule suggestions use."""
     drive, rest = str(path).split(":", 1)
@@ -505,7 +537,8 @@ def filerules(s, cwd):
 
 
 SCENARIOS = {f.__name__: f for f in (basic, permissions, plan, interrupt, background, cd,
-                                     context, grants, agents, filerules, midturn, stoptool)}
+                                     context, grants, agents, filerules, midturn, stoptool,
+                                     closeask, stopask)}
 FLAGS_BY_SCENARIO = {"agents": ("--forward-subagent-text",),
                      "stoptool": ("--forward-subagent-text",)}
 

@@ -987,6 +987,11 @@ async fn an_interrupted_turn_holds_its_turn_end_messages() {
             .held
             .is_empty()
     );
+    let mut status = session.status();
+    tokio::time::timeout(TIMEOUT, status.wait_for(|status| !status.turn))
+        .await
+        .expect("the last turn never ended")
+        .unwrap();
     stop(&session).await;
     manager.shutdown().await.unwrap();
     let stored = manager.events_after(id, 0, ALL).await.unwrap();
@@ -1031,7 +1036,19 @@ fn user_script(text: &str) -> String {
     let user = serde_json::json!({"t": 0, "dir": "in", "msg": {"type": "user",
         "message": {"role": "user", "content": text}, "parent_tool_use_id": null,
         "session_id": "s"}});
-    format!("{}\n{user}", INIT_SCRIPT.trim())
+    let interrupt = serde_json::json!({"t": 0, "dir": "in", "msg": {"type": "control_request",
+        "request_id": "int", "request": {"subtype": "interrupt", "cancel_queued": true}}});
+    let receipt = serde_json::json!({"t": 0, "dir": "out", "msg": {"type": "control_response",
+        "response": {"subtype": "success", "request_id": "int",
+            "response": {"still_queued": []}}}});
+    let result = serde_json::json!({"t": 0, "dir": "out", "msg": {"type": "result",
+        "subtype": "error_during_execution", "is_error": true, "duration_ms": 1,
+        "duration_api_ms": 1, "num_turns": 1, "stop_reason": null, "total_cost_usd": 0,
+        "usage": {}, "session_id": "s", "uuid": "u9"}});
+    format!(
+        "{}\n{user}\n{interrupt}\n{receipt}\n{result}",
+        INIT_SCRIPT.trim()
+    )
 }
 
 #[tokio::test]

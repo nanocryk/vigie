@@ -832,6 +832,9 @@ const NOTE_SCRIPT: &str = r#"
 {"t": 0, "dir": "in", "msg": {"type": "user", "message": {"role": "user", "content": "(Note attached to my approval of your Bash call) Then run the tests."}, "parent_tool_use_id": null, "session_id": "s", "priority": "next"}}
 {"t": 0, "dir": "out", "msg": {"type": "control_request", "request_id": "cli-2", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "a"}, "tool_use_id": "t2"}}}
 {"t": 0, "dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cli-2", "response": {"behavior": "allow", "updatedInput": {"file_path": "a"}}}}}
+{"t": 0, "dir": "in", "msg": {"type": "control_request", "request_id": "int", "request": {"subtype": "interrupt", "cancel_queued": true}}}
+{"t": 0, "dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "int", "response": {"still_queued": []}}}}
+{"t": 0, "dir": "out", "msg": {"type": "result", "subtype": "error_during_execution", "is_error": true, "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": null, "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": "u9"}}
 "#;
 
 #[tokio::test]
@@ -946,6 +949,14 @@ fn relay_script(wrapped: &str) -> String {
         serde_json::json!({"dir": "out", "msg": {"type": "system", "subtype": "task_notification",
             "task_id": "a1", "tool_use_id": "t1", "status": "stopped", "summary": "sleeper",
             "session_id": "s", "uuid": "u6"}}),
+        serde_json::json!({"dir": "in", "msg": {"type": "control_request", "request_id": "int",
+            "request": {"subtype": "interrupt", "cancel_queued": true}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "control_response", "response": {
+            "subtype": "success", "request_id": "int", "response": {"still_queued": []}}}}),
+        serde_json::json!({"dir": "out", "msg": {"type": "result",
+            "subtype": "error_during_execution", "is_error": true, "duration_ms": 1,
+            "duration_api_ms": 1, "num_turns": 1, "stop_reason": null, "total_cost_usd": 0,
+            "usage": {}, "session_id": "s", "uuid": "u7"}}),
     ];
     steps
         .iter()
