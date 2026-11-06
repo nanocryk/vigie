@@ -33,8 +33,8 @@ export interface SessionView {
   context: ContextView | null;
   /** Main-conversation requests per finished turn; null before the first turn. */
   calls_per_message: number | null;
-  /** What a restart would keep, measured after each turn; null before. */
-  restart: RestartMeasure | null;
+  /** Set while restarting the discussion is worthwhile. */
+  restart_advice: RestartAdvice | null;
   /** Display name; null shows the folder name. */
   name: string | null;
   /** Null while the discussion is not archived. */
@@ -149,14 +149,13 @@ export interface ContextView {
 }
 
 /** See `notes/restart-advice.md`. */
-export interface RestartMeasure {
-  /** Prompt tokens when the oldest exchange a seed carries started. */
-  window_start_tokens: number;
-  seed_tokens: number;
-  /** The files the seeded exchanges touched, which a fresh session reads again. */
-  reread_tokens: number;
-  /** Mean cost of the seeded exchanges' main calls besides cache reads, in base input tokens. */
-  other_cost_per_call: number;
+export interface RestartAdvice {
+  /** Share of the context older than what a restart keeps, 0 to 1. */
+  stale_share: number;
+  /** Messages after which restarting first costs less. */
+  messages: number;
+  /** How much less each call costs after a restart. */
+  ratio: number;
 }
 
 export interface ContextCategory {
@@ -624,7 +623,7 @@ export function parseSessionView(raw: unknown, label: string): SessionView {
     cache: parseCache(value["cache"], `${label}.cache`),
     context: parseContext(value["context"], `${label}.context`),
     calls_per_message: optNum(value, "calls_per_message", label),
-    restart: parseRestart(value["restart"], `${label}.restart`),
+    restart_advice: parseRestartAdvice(value["restart_advice"], `${label}.restart_advice`),
     name: optStr(value, "name", label),
     archived_at: optStr(value, "archived_at", label),
     scratch: bool(value, "scratch", label),
@@ -736,14 +735,13 @@ function parseContext(raw: unknown, label: string): ContextView | null {
   };
 }
 
-function parseRestart(raw: unknown, label: string): RestartMeasure | null {
+function parseRestartAdvice(raw: unknown, label: string): RestartAdvice | null {
   if (raw === undefined || raw === null) return null;
   const value = record(raw, label);
   return {
-    window_start_tokens: num(value, "window_start_tokens", label),
-    seed_tokens: num(value, "seed_tokens", label),
-    reread_tokens: num(value, "reread_tokens", label),
-    other_cost_per_call: num(value, "other_cost_per_call", label),
+    stale_share: num(value, "stale_share", label),
+    messages: num(value, "messages", label),
+    ratio: num(value, "ratio", label),
   };
 }
 

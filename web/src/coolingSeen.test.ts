@@ -19,7 +19,7 @@ const session = (id: string, lastRequest: string | null): SessionView => ({
   cache: lastRequest === null ? null : { last_request_at: lastRequest, ttl_secs: 3600 },
   context: null,
   calls_per_message: null,
-  restart: null,
+  restart_advice: null,
   name: null,
   archived_at: null,
   scratch: false,

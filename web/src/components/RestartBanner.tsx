@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import { CloseIcon } from "@/components/Explorer";
 import { useClock } from "@/components/useNow";
-import { cacheGauge, formatRatio, restartAdvice } from "@/gauges";
+import { cacheGauge, formatRatio } from "@/gauges";
 import { adviceHidden, dismissAdvice, forgetDismissal, useDismissals } from "@/restartDismissals";
 import type { SessionView } from "@/wire";
 
@@ -24,7 +24,7 @@ export function RestartBanner({ session }: { session: SessionView | null }) {
 
   if (session === null || session.context === null || hidden) return null;
   if (cacheGauge(session.cache, now, session.updated_at).kind === "cold") return null;
-  const advice = restartAdvice(session.context, session.calls_per_message, session.restart);
+  const advice = session.restart_advice;
   if (advice === null) return null;
   const tokens = session.context.used_tokens;
   return (
@@ -33,7 +33,7 @@ export function RestartBanner({ session }: { session: SessionView | null }) {
       <button
         type="button"
         onClick={() => dismissAdvice(session.id, tokens)}
-        title={`${Math.round(advice.staleShare * 100)}% of the context is older than the last exchanges a restart keeps. Tap to hide until the context is rebuilt.`}
+        title={`${Math.round(advice.stale_share * 100)}% of the context is older than the last exchanges a restart keeps. Tap to hide until the context is rebuilt.`}
         className="flex w-full cursor-pointer items-center gap-2 bg-primary px-3 py-1.5 text-xs voice-ui text-primary-foreground"
       >
         <span className="flex-1 text-center">

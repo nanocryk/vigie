@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::claude::child::Effort;
 use crate::claude::protocol::PermissionMode;
-use crate::session::advice::RestartMeasure;
+use crate::session::advice::{RestartAdvice, restart_advice};
 use crate::session::agents::AgentView;
 use crate::session::background::BackgroundView;
 use crate::session::gauges::{Cache, Context};
@@ -334,8 +334,8 @@ pub struct SessionView {
     pub context: Option<Context>,
     /// Main-conversation requests per finished turn; `None` before the first turn.
     pub calls_per_message: Option<f64>,
-    /// What a restart would keep, measured after each turn; `None` before.
-    pub restart: Option<RestartMeasure>,
+    /// Set while restarting the discussion is worthwhile.
+    pub restart_advice: Option<RestartAdvice>,
     /// Display name; `None` shows the folder name.
     pub name: Option<String>,
     /// `None` while the discussion is not archived.
@@ -381,9 +381,14 @@ impl SessionView {
             asks: status.map_or(0, |status| status.asks),
             permission_mode: row.permission_mode,
             cache: row.cache,
+            restart_advice: restart_advice(
+                row.context.as_ref(),
+                row.calls_per_message,
+                row.restart.as_ref(),
+            )
+            .ok(),
             context: row.context,
             calls_per_message: row.calls_per_message,
-            restart: row.restart,
             name: row.name,
             archived_at: row.archived_at,
             scratch,
