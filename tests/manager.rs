@@ -1064,6 +1064,7 @@ async fn continue_and_blank_move_the_discussion_to_fresh_claude_sessions() {
                 None,
                 row.created_at.with_timezone(&chrono::Local).date_naive(),
                 None,
+                None,
             );
     drop(store);
     let attached = vec![r"C:\uploads\a.png".to_string()];

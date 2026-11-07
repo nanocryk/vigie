@@ -784,12 +784,15 @@ impl SessionManager {
         let row = store.require_session(id).await?;
         let moved_to = moved_to.filter(|folder| *folder != row.cwd);
         let history = seed::History::from_events(&store.events_after(id, 0, u32::MAX).await?);
+        let now = Utc::now();
+        let cold_at = gauges::is_cold(row.cache.as_ref(), row.updated_at, now).then_some(now);
         let seed = match mode {
             RestartMode::Continue => Some(history.seed(
                 &row.cwd,
                 moved_to.as_deref(),
                 row.created_at.with_timezone(&Local).date_naive(),
                 plan::plans_dir().as_deref(),
+                cold_at,
             )),
             RestartMode::Blank | RestartMode::Clear => None,
         };
@@ -1266,6 +1269,7 @@ async fn measure_restart(id: Uuid, store: &Store, signals: &Signals) {
                 None,
                 row.created_at.with_timezone(&Local).date_naive(),
                 plan::plans_dir().as_deref(),
+                None,
             );
             RestartMeasure::new(&history.seed_window(), &seed)
         })

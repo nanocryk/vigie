@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use serde_json::Value;
 
 use crate::claude::protocol::{ContentBlock, Inbound, MessageContent, Usage};
@@ -71,6 +71,8 @@ enum Block {
 #[derive(Debug, Clone, PartialEq)]
 struct Exchange {
     user: String,
+    /// When the user message was received.
+    at: DateTime<Utc>,
     blocks: Vec<Block>,
     /// Prompt tokens of the exchange's first main request.
     start_prompt: Option<u64>,
@@ -132,6 +134,7 @@ impl History {
                         };
                         history.exchanges.push(Exchange {
                             user: text,
+                            at: event.time,
                             blocks: Vec::new(),
                             start_prompt: None,
                             calls: Vec::new(),
@@ -275,12 +278,14 @@ impl History {
 
     /// The seed of a discussion started on `started` in `cwd`, without `CLOSING`.
     /// `moved_to` is the folder the new session runs in when it left `cwd`.
+    /// `cold_at` is the time of a restart that came on a cold cache.
     pub fn seed(
         &self,
         cwd: &Path,
         moved_to: Option<&Path>,
         started: NaiveDate,
         plans_dir: Option<&str>,
+        cold_at: Option<DateTime<Utc>>,
     ) -> Seed {
         let total = self.exchanges.len();
         let shown = &self.exchanges[total.saturating_sub(SEED_EXCHANGES)..];
@@ -294,6 +299,15 @@ impl History {
             started.format("%Y-%m-%d"),
             total,
         );
+        if let Some(now) = cold_at
+            && let Some(last) = self.exchanges.last()
+        {
+            text.push_str(&format!(
+                " Its prompt cache had expired: the user's last message was {} ago, so it may \
+                 not be the same day.",
+                elapsed_phrase(now - last.at)
+            ));
+        }
         let plans = plans_dir.map_or(Vec::new(), |dir| self.plan_files(dir));
         if !plans.is_empty() {
             text.push_str(
@@ -409,6 +423,17 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(&text[start..end])
 }
 
+/// "3 d 4 h", "2 h 46 min", "7 min": a duration to its two largest units.
+fn elapsed_phrase(elapsed: TimeDelta) -> String {
+    let minutes = elapsed.num_minutes().max(0);
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (days, hours) {
+        (0, 0) => format!("{minutes} min"),
+        (0, _) => format!("{hours} h {minutes} min"),
+        _ => format!("{days} d {hours} h"),
+    }
+}
+
 /// " (2 of 5 sections done)" when the plan marks some `##` sections `[DONE`, else empty.
 fn plan_progress(plan: &str) -> String {
     let Ok(content) = std::fs::read_to_string(plan) else {
@@ -497,7 +522,8 @@ mod tests {
     #[tokio::test]
     async fn seed_of_the_cd_recording() {
         let events = stored_recordings(&["cd"]).await;
-        let seed = History::from_events(&events).seed(Path::new("/work/p"), None, date(), None);
+        let seed =
+            History::from_events(&events).seed(Path::new("/work/p"), None, date(), None, None);
         assert_eq!(seed.exchanges, 1);
         assert_eq!(seed.total_exchanges, 1);
         assert_eq!(
@@ -531,7 +557,7 @@ mod tests {
         let history = History::from_events(&events);
         let total = history.total_exchanges();
         assert!(total > SEED_EXCHANGES, "only {total} exchanges");
-        let seed = history.seed(Path::new("/p"), None, date(), None);
+        let seed = history.seed(Path::new("/p"), None, date(), None, None);
         assert_eq!(seed.exchanges, SEED_EXCHANGES);
         assert_eq!(seed.total_exchanges, total);
         assert_eq!(seed.text.matches("\n## Exchange ").count(), SEED_EXCHANGES);
@@ -691,7 +717,7 @@ mod tests {
                     "message": {"role": "user", "content": "synthetic"}}),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None, None);
         assert_eq!(seed.total_exchanges, 1);
         let lines: Vec<&str> = seed.text.lines().collect();
         let user_line = lines
@@ -748,7 +774,7 @@ mod tests {
             ),
             user(7, Value::String(first_message(&earlier, ""))),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None, None);
         assert_eq!(seed.total_exchanges, 3);
         assert!(
             seed.text
@@ -781,7 +807,7 @@ mod tests {
                 ),
             ),
         ];
-        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None);
+        let seed = History::from_events(&events).seed(Path::new("/p"), None, date(), None, None);
         assert!(seed.text.contains("User: /canif-suggest\n"));
         assert!(seed.text.contains("User: /review high\n"));
         assert!(!seed.text.contains("<command-"));
@@ -789,8 +815,27 @@ mod tests {
     }
 
     #[test]
+    fn a_cold_seed_says_time_has_passed() {
+        let events = [user(1, Value::String("hi".into()))];
+        let restart_at = events[0].time + TimeDelta::minutes(166);
+        let history = History::from_events(&events);
+        let seed = history.seed(Path::new("/p"), None, date(), None, Some(restart_at));
+        assert!(seed.text.contains(
+            "was restarted into this one. Its prompt cache had expired: the user's last message \
+             was 2 h 46 min ago, so it may not be the same day.\n\n"
+        ));
+        let seed = history.seed(Path::new("/p"), None, date(), None, None);
+        assert!(!seed.text.contains("expired"));
+        assert_eq!(elapsed_phrase(TimeDelta::minutes(7)), "7 min");
+        assert_eq!(
+            elapsed_phrase(TimeDelta::minutes(3 * 1440 + 250)),
+            "3 d 4 h"
+        );
+    }
+
+    #[test]
     fn an_empty_history_seeds_no_exchange() {
-        let seed = History::from_events(&[]).seed(Path::new("/p"), None, date(), None);
+        let seed = History::from_events(&[]).seed(Path::new("/p"), None, date(), None, None);
         assert_eq!((seed.exchanges, seed.total_exchanges), (0, 0));
         assert!(seed.text.ends_with(
             "(started 2026-09-27, 0 exchanges) was restarted into this one.\n\n# Recall\n\
@@ -835,7 +880,7 @@ mod tests {
             ),
         ];
         let history = History::from_events(&events);
-        let seed = history.seed(Path::new("/p"), None, date(), Some(plans));
+        let seed = history.seed(Path::new("/p"), None, date(), Some(plans), None);
         assert!(seed.text.contains(&format!(
             "was restarted into this one.\n\n# Plan files\nWritten by the previous session, \
              latest first. For reference: open one only if the user asks or the recall points \
@@ -844,14 +889,19 @@ mod tests {
             path("c.md"),
             path("b.md"),
         )));
-        let seed = history.seed(Path::new("/p"), None, date(), None);
+        let seed = history.seed(Path::new("/p"), None, date(), None, None);
         assert!(!seed.text.contains("# Plan files"));
     }
 
     #[test]
     fn a_moved_seed_names_both_folders() {
-        let seed =
-            History::from_events(&[]).seed(Path::new("/p"), Some(Path::new("/q")), date(), None);
+        let seed = History::from_events(&[]).seed(
+            Path::new("/p"),
+            Some(Path::new("/q")),
+            date(),
+            None,
+            None,
+        );
         assert!(seed.text.starts_with(
             "This is a new session. The previous vigie session in /p \
              (started 2026-09-27, 0 exchanges) was restarted into this one, which runs in /q.\n"
