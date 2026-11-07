@@ -17,6 +17,7 @@ use vigie::session::grant::GrantKind;
 use vigie::session::{
     Activity, Answer, Config, Event, EventBody, GateFailure, HostEvent, Resolution, Session,
 };
+use vigie::store::Store;
 
 use common::{TIMEOUT, fake};
 
@@ -54,6 +55,18 @@ impl Harness {
     }
 
     fn start_with_uploads(recording: &Path, uploads: Option<std::path::PathBuf>) -> Self {
+        Self::launch(recording, uploads, None)
+    }
+
+    fn start_with_history(recording: &Path, history: Store) -> Self {
+        Self::launch(recording, None, Some(history))
+    }
+
+    fn launch(
+        recording: &Path,
+        uploads: Option<std::path::PathBuf>,
+        history: Option<Store>,
+    ) -> Self {
         let cwd = tempfile::tempdir().expect("tempdir");
         let claude_session = Uuid::new_v4();
         let config = Config {
@@ -61,7 +74,7 @@ impl Harness {
             cwd: cwd.path().to_path_buf(),
             launch: Launch::New(claude_session),
             program: fake(recording),
-            history: None,
+            history,
             server_restart: None,
             last_seq: 0,
             permission_mode: None,
@@ -1660,4 +1673,186 @@ async fn reattaching_a_rewritten_path_records_each_content_hash() {
     assert_eq!(first.get(&image), Some(&digest_hex(b"first")));
     assert_eq!(second.get(&image), Some(&digest_hex(b"second")));
     harness.finish().await;
+}
+
+/// `context_usage` and `restart_session` tell the caller by the tool use id
+/// the CLI sends: a subagent gets its own context and cannot restart, the main
+/// conversation restarts only after a worthwhile verdict, and a stop cancels it.
+#[tokio::test]
+async fn the_main_conversation_restarts_after_a_worthwhile_verdict() {
+    use serde_json::json;
+    use vigie::claude::protocol::{ContextCategory, ContextUsageResponse};
+    use vigie::session::advice::RestartMeasure;
+
+    let dir = tempfile::tempdir().unwrap();
+    let record = |dir: &str, msg: Value| json!({"t": 0, "dir": dir, "msg": msg}).to_string();
+    let usage = |prompt: u64| {
+        json!({"input_tokens": 0, "output_tokens": 10, "cache_read_input_tokens": prompt,
+            "cache_creation_input_tokens": 0})
+    };
+    let assistant = |id: &str, parent: Option<&str>, prompt: u64, tools: &[(&str, &str)]| {
+        let content: Vec<Value> = tools
+            .iter()
+            .map(|(id, name)| {
+                json!({"type": "tool_use", "id": id, "name": format!("mcp__vigie__{name}"),
+                    "input": {}})
+            })
+            .collect();
+        record(
+            "out",
+            json!({"type": "assistant", "parent_tool_use_id": parent, "session_id": "s",
+                "uuid": id, "message": {"id": id, "model": "claude-opus-5-5",
+                    "content": content, "usage": usage(prompt)}}),
+        )
+    };
+    let call = |id: u64, name: &str, tool_use: &str, arguments: Value| {
+        record(
+            "out",
+            json!({"type": "control_request", "request_id": format!("mcp-{id}"), "request": {
+                "subtype": "mcp_message", "server_name": "vigie", "message": {
+                    "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments,
+                        "_meta": {"claudecode/toolUseId": tool_use}}}}}),
+        )
+    };
+    let reply = |id: u64, text: &str, is_error: bool| {
+        record(
+            "in",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": format!("mcp-{id}"), "response": {"mcp_response": {
+                    "jsonrpc": "2.0", "id": id, "result": {
+                        "content": [{"type": "text", "text": text}], "isError": is_error}}}}}),
+        )
+    };
+    let result = |uuid: &str| {
+        record(
+            "out",
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1, "stop_reason": "end_turn",
+                "total_cost_usd": 0, "usage": {}, "session_id": "s", "uuid": uuid}),
+        )
+    };
+    let script = [
+        record(
+            "in",
+            json!({"type": "control_request", "request_id": "init", "request": {
+                "subtype": "initialize", "sdkMcpServers": ["vigie"]}}),
+        ),
+        record(
+            "out",
+            json!({"type": "control_response", "response": {"subtype": "success",
+                "request_id": "init", "response": {"account": {"apiProvider": "firstParty"}}}}),
+        ),
+        assistant("m1", None, 400_000, &[]),
+        result("r1"),
+        record(
+            "in",
+            json!({"type": "user", "message": {"role": "user", "content": "go"},
+                "parent_tool_use_id": null, "session_id": "s"}),
+        ),
+        assistant(
+            "m2",
+            None,
+            400_000,
+            &[
+                ("tu-main", "context_usage"),
+                ("tu-main-restart", "restart_session"),
+            ],
+        ),
+        assistant(
+            "m3",
+            Some("agent-1"),
+            20_000,
+            &[
+                ("tu-sub", "context_usage"),
+                ("tu-sub-restart", "restart_session"),
+            ],
+        ),
+        call(1, "context_usage", "tu-sub", json!({})),
+        reply(
+            1,
+            "Context: 20k of 1000k tokens (2%), autocompact at 900k.\nThis is your own context \
+             as a subagent. No restart verdict: only the main conversation restarts the \
+             discussion.",
+            false,
+        ),
+        call(2, "restart_session", "tu-sub-restart", json!({})),
+        reply(
+            2,
+            "Only the main conversation can restart the discussion: wrap up your task instead.",
+            true,
+        ),
+        call(3, "restart_session", "tu-main-restart", json!({})),
+        reply(
+            3,
+            "No restart scheduled: `context_usage` has not said in this turn that a restart is \
+             worthwhile. Call it first.",
+            true,
+        ),
+        // Two main requests over one finished turn: 2 * 50k / (0.1 * 350k) / 2 calls.
+        call(4, "context_usage", "tu-main", json!({})),
+        reply(
+            4,
+            "Context: 400k of 1000k tokens (40%), autocompact at 900k.\nRestart worthwhile: \
+             each message should cost about 8.0 times less after it, paying back within 2 \
+             messages; 75% of the context is older than what a restart keeps. Restart with \
+             `restart_session`, only at a task boundary.",
+            false,
+        ),
+        call(
+            5,
+            "restart_session",
+            "tu-main-restart",
+            json!({"text": "Pick up the tests."}),
+        ),
+        reply(
+            5,
+            "Restart scheduled for the end of this turn: the discussion continues in a fresh \
+             session, seeded with the last exchanges and your `text`. End the turn now.",
+            false,
+        ),
+        result("r2"),
+    ];
+    let path = dir.path().join("restart.ndjson");
+    std::fs::write(&path, script.join("\n")).unwrap();
+
+    let store = Store::open(&dir.path().join("history.db")).unwrap();
+    let mut harness = Harness::start_with_history(&path, store.clone());
+    let id = harness.session.id();
+    harness.until_result().await;
+    // 27k fixed; a restart keeps it, a 3k seed and 20k of files read again.
+    let category = |name: &str, tokens: u64, kind: &str| ContextCategory {
+        name: name.into(),
+        tokens,
+        kind: kind.into(),
+    };
+    let context = ContextUsageResponse {
+        total_tokens: 400_000,
+        max_tokens: 1_000_000,
+        auto_compact_threshold: Some(900_000),
+        categories: vec![
+            category("System prompt", 27_000, "used"),
+            category("Messages", 373_000, "used"),
+            category("Free space", 600_000, "free"),
+        ],
+    };
+    store.record_context_usage(id, context).await.unwrap();
+    let measure = RestartMeasure {
+        window_start_tokens: 327_000,
+        seed_tokens: 3_000,
+        reread_tokens: 20_000,
+        other_cost_per_call: 0.0,
+    };
+    store.record_restart_measure(id, measure).await.unwrap();
+    assert_eq!(harness.session.requested_restart(), None);
+
+    harness.session.send("go", None).await.unwrap();
+    harness.until_result().await;
+    assert_eq!(
+        harness.session.requested_restart().as_deref(),
+        Some("Pick up the tests.")
+    );
+    let session = harness.session.clone();
+    harness.finish().await;
+    assert_eq!(session.requested_restart(), None);
 }

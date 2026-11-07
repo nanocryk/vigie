@@ -58,6 +58,7 @@ pub struct Session {
     status: watch::Receiver<LiveStatus>,
     agents: watch::Receiver<Vec<AgentView>>,
     background: watch::Receiver<Vec<BackgroundView>>,
+    restart: watch::Receiver<Option<String>>,
     launch_settings: ModelSettings,
     /// Set once a model or effort change was sent to the child.
     retuned: Arc<AtomicBool>,
@@ -87,11 +88,13 @@ impl Session {
         let (status_sender, status) = watch::channel(LiveStatus::default());
         let (agents_sender, agents) = watch::channel(Vec::new());
         let (background_sender, background) = watch::channel(Vec::new());
+        let (restart_sender, restart) = watch::channel(None);
         let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
         let views = Views {
             status: status_sender,
             agents: agents_sender,
             background: background_sender,
+            restart: restart_sender,
         };
         let actor = Actor::new(config, child, events.clone(), views);
         tokio::spawn(actor.run(command_receiver));
@@ -102,6 +105,7 @@ impl Session {
             status,
             agents,
             background,
+            restart,
             launch_settings,
             retuned: Arc::new(AtomicBool::new(false)),
         };
@@ -134,6 +138,12 @@ impl Session {
     /// The running background tasks, oldest first; republished on every change.
     pub fn background(&self) -> watch::Receiver<Vec<BackgroundView>> {
         self.background.clone()
+    }
+
+    /// The text of the first message after the seed, while `restart_session`
+    /// asked to restart the discussion at the end of the turn.
+    pub fn requested_restart(&self) -> Option<String> {
+        self.restart.borrow().clone()
     }
 
     /// Writes `agents::wrap` of the composed message to the main agent for agent

@@ -9,16 +9,24 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::paths::is_network_path;
+use crate::session::advice::{NoAdvice, RestartAdvice};
+use crate::session::gauges::Context;
 use crate::session::server_restart::ServerRestart;
 use crate::store::{
     BashAsk, BashAskFilter, MessageQuery, SessionRow, Store, StoredMessage, snippet,
 };
 
 pub const SERVER_NAME: &str = "vigie";
-/// The CLI's name for `set_attachments`, allowed without asking. The other tools ask.
+/// The CLI's names for the tools allowed without asking. The other tools ask.
 pub const SET_ATTACHMENTS_TOOL: &str = "mcp__vigie__set_attachments";
+pub const CONTEXT_USAGE_TOOL: &str = "mcp__vigie__context_usage";
+pub const RESTART_SESSION_TOOL: &str = "mcp__vigie__restart_session";
+/// Where the CLI puts the id of the tool use a call answers.
+const TOOL_USE_ID_META: &str = "claudecode/toolUseId";
 
 const SET_ATTACHMENTS: &str = "set_attachments";
+const CONTEXT_USAGE: &str = "context_usage";
+const RESTART_SESSION: &str = "restart_session";
 const BASH_ASKS: &str = "bash_asks";
 const BASH_ASKS_CLEAR: &str = "bash_asks_clear";
 const BASH_ASKS_FILTER: &str = "bash_asks_filter";
@@ -27,6 +35,12 @@ const HISTORY_SEARCH: &str = "history_search";
 const HISTORY_READ: &str = "history_read";
 /// Answered when the client asks for none.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// Added to the prompt by the CLI, so it reaches Claude while the tools are deferred.
+const INSTRUCTIONS: &str = "At a task boundary (work committed, a plan step done), call \
+    `context_usage`. If it says restarting is worthwhile, call `restart_session` with what to \
+    pick up next, then end the turn. During repetitive or long tasks, also call `context_usage` \
+    from time to time, so the context doesn't grow too large. In a subagent, call \
+    `context_usage` to wrap up before your context grows too large.";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
@@ -44,10 +58,35 @@ const HISTORY_SEARCH_DESCRIPTION: &str = "Search earlier vigie discussions for w
 
 const HISTORY_READ_DESCRIPTION: &str = "Read the exchanges around a message `history_search` found: the exchange holding it (a user message and the replies until the next one), with `before` exchanges before it and `after` exchanges after it. The hit is marked and cut past 2000 characters, the other messages past 600. A cut message ends with the seq and `from` that read on: with `from`, only that message is returned, from that character on.";
 
+const CONTEXT_USAGE_DESCRIPTION: &str = "Report how full your context is: tokens used, the context window, the share used and the autocompact threshold. In the main conversation it also says whether restarting the discussion with `restart_session` is worthwhile now: it is once the context is large, mostly older conversation, and a restart pays back within a few messages. A subagent gets its own context and no verdict: use it to wrap up before the context grows too large.";
+
+const RESTART_SESSION_DESCRIPTION: &str = "Restart this discussion in a fresh Claude session once this turn ends, dropping old context that no longer serves the work. The fresh session starts from a seed of the last exchanges, with `text` after it as its first message: say there what to pick up next. Call it only at a task boundary: the work committed, a plan step done, nothing half-read or half-edited. Never mid-task, even when a restart is worthwhile: the older context still serves the task under way. Main conversation only, and only after `context_usage` said in this same turn that restarting is worthwhile. End the turn right after calling it. Messages the user sends meanwhile wait for the end of the fresh session's first turn.";
+
 const RESTART_SCHEDULED: &str =
     "Restart scheduled: it happens once no turn runs in any session, so end this turn now.";
 
 const NO_RESTART: &str = "This session cannot restart the server.";
+
+/// Which agent made a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Caller {
+    Main,
+    Subagent,
+    /// No assistant line carried the call while subagents run.
+    Unknown,
+}
+
+/// What `context_usage` and `restart_session` read of the session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextState {
+    pub caller: Caller,
+    /// The caller's context; `None` while unknown.
+    pub context: Option<Context>,
+    /// The main conversation's verdict; `None` for a subagent.
+    pub advice: Option<Result<RestartAdvice, NoAdvice>>,
+    /// A positive verdict was reported earlier in this turn.
+    pub worthwhile_on_record: bool,
+}
 
 /// What one message asks of the session besides its reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +94,34 @@ pub enum Effect {
     None,
     /// The turn's attachments become these absolute paths.
     SetAttachments(Vec<String>),
+    /// The main conversation's verdict was reported: worthwhile or not.
+    Verdict(Worthwhile),
+    /// Restart the discussion at the end of the turn, this text after the seed.
+    Restart(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Worthwhile {
+    Yes,
+    No,
+}
+
+/// The tool use a `tools/call` answers, when the CLI named it.
+pub fn tool_use_id(message: &Value) -> Option<&str> {
+    message
+        .get("params")?
+        .get("_meta")?
+        .get(TOOL_USE_ID_META)?
+        .as_str()
+}
+
+/// Whether `message` calls a tool reading `ContextState`.
+pub fn reads_context(message: &Value) -> bool {
+    message.get("method").and_then(Value::as_str) == Some("tools/call")
+        && matches!(
+            message.pointer("/params/name").and_then(Value::as_str),
+            Some(CONTEXT_USAGE | RESTART_SESSION)
+        )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,12 +139,14 @@ impl Handled {
     }
 }
 
-/// Answers one JSON-RPC `message`; relative paths resolve from `cwd`.
+/// Answers one JSON-RPC `message`; relative paths resolve from `cwd`. `context`
+/// is needed only when `reads_context(message)`.
 pub async fn handle(
     message: &Value,
     cwd: &Path,
     store: Option<&Store>,
     restart: Option<&ServerRestart>,
+    context: Option<&ContextState>,
 ) -> Handled {
     let Some(id) = message.get("id").cloned() else {
         // A notification: the CLI still waits for a reply, with an empty result.
@@ -96,6 +165,7 @@ pub async fn handle(
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION")},
+                "instructions": INSTRUCTIONS,
             })))
         }
         Some("ping") => Handled::reply(success(json!({}))),
@@ -107,6 +177,8 @@ pub async fn handle(
             restart_server_tool(),
             history_search_tool(),
             history_read_tool(),
+            context_usage_tool(),
+            restart_session_tool(),
         ]}))),
         Some("tools/call") => {
             let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -134,6 +206,20 @@ pub async fn handle(
                 Some(HISTORY_READ) => {
                     Handled::reply(success(outcome(history_read(arguments, store).await)))
                 }
+                Some(CONTEXT_USAGE) => {
+                    let (text, effect) = context_usage(context);
+                    Handled {
+                        reply: success(tool_result(&text, false)),
+                        effect,
+                    }
+                }
+                Some(RESTART_SESSION) => match restart_session(arguments, context) {
+                    Ok(text) => Handled {
+                        reply: success(tool_result(RESTART_SESSION_SCHEDULED, false)),
+                        effect: Effect::Restart(text),
+                    },
+                    Err(text) => Handled::reply(success(tool_result(&text, true))),
+                },
                 name => Handled::reply(failure(
                     INVALID_PARAMS,
                     format!("unknown tool {}", name.unwrap_or("(none)")),
@@ -275,6 +361,122 @@ fn restart_server(restart: Option<&ServerRestart>) -> Result<String, String> {
     let restart = restart.ok_or_else(|| NO_RESTART.to_string())?;
     restart.when_idle().map_err(|err| format!("{err:#}"))?;
     Ok(RESTART_SCHEDULED.to_string())
+}
+
+const RESTART_SESSION_SCHEDULED: &str = "Restart scheduled for the end of this turn: the discussion continues in a fresh session, seeded with the last exchanges and your `text`. End the turn now.";
+
+const NO_CONTEXT: &str = "vigie does not know this session's context.";
+
+const UNKNOWN_CALLER: &str =
+    "vigie could not tell which agent made this call, so it reports nothing and restarts nothing.";
+
+fn context_usage_tool() -> Value {
+    json!({
+        "name": CONTEXT_USAGE,
+        "description": CONTEXT_USAGE_DESCRIPTION,
+        "inputSchema": {"type": "object", "properties": {}},
+    })
+}
+
+fn restart_session_tool() -> Value {
+    json!({
+        "name": RESTART_SESSION,
+        "description": RESTART_SESSION_DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The first message of the fresh session, after the seed: what to pick up next.",
+                },
+            },
+        },
+    })
+}
+
+/// The report, and for the main conversation the verdict to record.
+fn context_usage(state: Option<&ContextState>) -> (String, Effect) {
+    let Some(state) = state else {
+        return (NO_CONTEXT.into(), Effect::None);
+    };
+    let mut lines = vec![match &state.context {
+        Some(context) => {
+            let autocompact = context
+                .autocompact_threshold
+                .map(|threshold| format!(", autocompact at {}", kilo(threshold)))
+                .unwrap_or_default();
+            format!(
+                "Context: {} of {} tokens ({:.0}%){autocompact}.",
+                kilo(context.used_tokens),
+                kilo(context.max_tokens),
+                context.percentage
+            )
+        }
+        None => "Context: not known yet.".into(),
+    }];
+    let effect = match (&state.caller, &state.advice) {
+        (Caller::Unknown, _) => return (UNKNOWN_CALLER.into(), Effect::None),
+        (Caller::Subagent, _) => {
+            lines.push(
+                "This is your own context as a subagent. No restart verdict: only the main \
+                 conversation restarts the discussion."
+                    .into(),
+            );
+            Effect::None
+        }
+        (Caller::Main, Some(Ok(advice))) => {
+            lines.push(format!(
+                "Restart worthwhile: each message should cost about {:.1} times less after it, \
+                 paying back within {} messages; {:.0}% of the context is older than what a \
+                 restart keeps. Restart with `restart_session`, only at a task boundary.",
+                advice.ratio,
+                advice.messages,
+                advice.stale_share * 100.0
+            ));
+            Effect::Verdict(Worthwhile::Yes)
+        }
+        (Caller::Main, advice) => {
+            let reason = match advice {
+                Some(Err(reason)) => reason.to_string(),
+                _ => NoAdvice::Unmeasured.to_string(),
+            };
+            lines.push(format!("Restart not worthwhile: {reason}."));
+            Effect::Verdict(Worthwhile::No)
+        }
+    };
+    (lines.join("\n"), effect)
+}
+
+/// The text after the seed, when the restart may be scheduled.
+fn restart_session(arguments: &Value, state: Option<&ContextState>) -> Result<String, String> {
+    let text = string_argument(arguments, "text")?
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let state = state.ok_or(NO_CONTEXT)?;
+    match state.caller {
+        Caller::Main => {}
+        Caller::Subagent => {
+            return Err(
+                "Only the main conversation can restart the discussion: wrap up your task instead."
+                    .into(),
+            );
+        }
+        Caller::Unknown => return Err(UNKNOWN_CALLER.into()),
+    }
+    if !state.worthwhile_on_record {
+        return Err(
+            "No restart scheduled: `context_usage` has not said in this turn that a \
+             restart is worthwhile. Call it first."
+                .into(),
+        );
+    }
+    Ok(text)
+}
+
+/// Tokens in thousands, such as `412k`.
+fn kilo(tokens: u64) -> String {
+    format!("{}k", (tokens + 500) / 1000)
 }
 
 fn history_search_tool() -> Value {
@@ -996,7 +1198,7 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(super::handle(message, cwd, None, None))
+            .block_on(super::handle(message, cwd, None, None, None))
     }
 
     fn call(arguments: Value) -> Value {
@@ -1027,8 +1229,14 @@ mod tests {
         );
         store.record_bash_ask("ls".into(), &other, None, BashAnswer::Allowed, new);
         let run = async |name: &str, arguments: Value| {
-            let handled =
-                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
+            let handled = super::handle(
+                &call_tool(name, arguments),
+                &vigie,
+                Some(&store),
+                None,
+                None,
+            )
+            .await;
             let result = &handled.reply["result"];
             (
                 result["content"][0]["text"].as_str().unwrap().to_owned(),
@@ -1096,7 +1304,8 @@ mod tests {
             format!("{}\n  3 1/0 2026-09-20 ls", other.display())
         );
 
-        let no_history = super::handle(&call_tool(BASH_ASKS, json!({})), &vigie, None, None).await;
+        let no_history =
+            super::handle(&call_tool(BASH_ASKS, json!({})), &vigie, None, None, None).await;
         assert_eq!(no_history.reply["result"]["isError"], true);
         assert_eq!(no_history.reply["result"]["content"][0]["text"], NO_HISTORY);
     }
@@ -1116,8 +1325,14 @@ mod tests {
             store.record_bash_ask(command.into(), cwd, None, BashAnswer::Allowed, at);
         }
         let run = async |name: &str, arguments: Value| {
-            let handled =
-                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
+            let handled = super::handle(
+                &call_tool(name, arguments),
+                &vigie,
+                Some(&store),
+                None,
+                None,
+            )
+            .await;
             let result = &handled.reply["result"];
             (
                 result["content"][0]["text"].as_str().unwrap().to_owned(),
@@ -1219,8 +1434,14 @@ mod tests {
         say(here, 4, 2, false, &"c".repeat(READ_CHARS + 5));
         say(there, 1, 3, true, "prettier elsewhere");
         let run = async |name: &str, arguments: Value| {
-            let handled =
-                super::handle(&call_tool(name, arguments), &vigie, Some(&store), None).await;
+            let handled = super::handle(
+                &call_tool(name, arguments),
+                &vigie,
+                Some(&store),
+                None,
+                None,
+            )
+            .await;
             let result = &handled.reply["result"];
             (
                 result["content"][0]["text"].as_str().unwrap().to_owned(),
@@ -1372,6 +1593,7 @@ mod tests {
         assert_eq!(init.reply["id"], 1);
         assert_eq!(init.reply["result"]["protocolVersion"], "2025-03-26");
         assert_eq!(init.reply["result"]["serverInfo"]["name"], SERVER_NAME);
+        assert_eq!(init.reply["result"]["instructions"], INSTRUCTIONS);
 
         let note = handle(
             &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
@@ -1470,14 +1692,120 @@ mod tests {
         let cwd = Path::new(".");
         let message = call_tool(RESTART_SERVER, json!({}));
         let restart = ServerRestart::new(Supervision::Shim);
-        let handled = super::handle(&message, cwd, None, Some(&restart)).await;
+        let handled = super::handle(&message, cwd, None, Some(&restart), None).await;
         assert_eq!(handled.reply["result"]["isError"], false);
         assert_eq!(restart.state(), RestartState::Pending);
 
         let alone = ServerRestart::new(Supervision::None);
-        let refused = super::handle(&message, cwd, None, Some(&alone)).await;
+        let refused = super::handle(&message, cwd, None, Some(&alone), None).await;
         assert_eq!(refused.reply["result"]["isError"], true);
         assert_eq!(alone.state(), RestartState::Idle);
+    }
+
+    fn context_call(name: &str, arguments: Value, state: &ContextState) -> Handled {
+        let message = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments,
+                "_meta": {(TOOL_USE_ID_META): "toolu_1"}}});
+        assert!(reads_context(&message));
+        assert_eq!(tool_use_id(&message), Some("toolu_1"));
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(super::handle(
+                &message,
+                Path::new("."),
+                None,
+                None,
+                Some(state),
+            ))
+    }
+
+    fn main_state(advice: Result<RestartAdvice, NoAdvice>) -> ContextState {
+        ContextState {
+            caller: Caller::Main,
+            context: Some(Context {
+                autocompact_threshold: Some(900_000),
+                ..Context::estimate(412_400, 1_000_000).unwrap()
+            }),
+            advice: Some(advice),
+            worthwhile_on_record: false,
+        }
+    }
+
+    #[test]
+    fn context_usage_reports_the_verdict_to_record() {
+        let worthwhile = Ok(RestartAdvice {
+            stale_share: 0.75,
+            messages: 3,
+            ratio: 8.0,
+        });
+        let handled = context_call(CONTEXT_USAGE, json!({}), &main_state(worthwhile));
+        assert_eq!(handled.effect, Effect::Verdict(Worthwhile::Yes));
+        assert_eq!(
+            text(&handled),
+            "Context: 412k of 1000k tokens (41%), autocompact at 900k.\nRestart worthwhile: \
+             each message should cost about 8.0 times less after it, paying back within 3 \
+             messages; 75% of the context is older than what a restart keeps. Restart with \
+             `restart_session`, only at a task boundary."
+        );
+
+        let small = Err(NoAdvice::SmallContext { percentage: 12.0 });
+        let handled = context_call(CONTEXT_USAGE, json!({}), &main_state(small));
+        assert_eq!(handled.effect, Effect::Verdict(Worthwhile::No));
+        assert!(
+            text(&handled).ends_with(
+                "Restart not worthwhile: the context fills 12% of the window, under 40%: the \
+                 conversation likely still serves the task."
+            ),
+            "{}",
+            text(&handled)
+        );
+
+        let subagent = ContextState {
+            caller: Caller::Subagent,
+            advice: None,
+            ..main_state(Err(NoAdvice::Unmeasured))
+        };
+        let handled = context_call(CONTEXT_USAGE, json!({}), &subagent);
+        assert_eq!(handled.effect, Effect::None);
+        assert!(
+            text(&handled).contains("as a subagent"),
+            "{}",
+            text(&handled)
+        );
+    }
+
+    #[test]
+    fn restart_session_needs_the_main_conversation_and_a_recorded_verdict() {
+        let unrecorded = main_state(Err(NoAdvice::Unmeasured));
+        let refused = context_call(RESTART_SESSION, json!({"text": "next"}), &unrecorded);
+        assert_eq!(refused.effect, Effect::None);
+        assert_eq!(refused.reply["result"]["isError"], true);
+        assert!(
+            text(&refused).contains("Call it first"),
+            "{}",
+            text(&refused)
+        );
+
+        let recorded = ContextState {
+            worthwhile_on_record: true,
+            ..unrecorded
+        };
+        let scheduled = context_call(RESTART_SESSION, json!({"text": " next \n"}), &recorded);
+        assert_eq!(scheduled.effect, Effect::Restart("next".into()));
+        assert_eq!(scheduled.reply["result"]["isError"], false);
+        let without_text = context_call(RESTART_SESSION, json!({}), &recorded);
+        assert_eq!(without_text.effect, Effect::Restart(String::new()));
+
+        for caller in [Caller::Subagent, Caller::Unknown] {
+            let state = ContextState {
+                caller,
+                ..recorded.clone()
+            };
+            let refused = context_call(RESTART_SESSION, json!({}), &state);
+            assert_eq!(refused.effect, Effect::None);
+            assert_eq!(refused.reply["result"]["isError"], true);
+        }
     }
 
     #[test]

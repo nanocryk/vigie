@@ -601,6 +601,18 @@ impl SessionManager {
         cold: ColdCheck,
     ) -> Result<()> {
         self.unarchive(id).await?;
+        if self
+            .live(id)
+            .await
+            .is_some_and(|session| session.requested_restart().is_some())
+        {
+            self.inner
+                .store
+                .hold(id, message.text, message.attachments, HeldMode::TurnEnd)
+                .await?;
+            self.inner.signals.session(id);
+            return Ok(());
+        }
         if self.restart_pending() {
             self.inner
                 .store
@@ -979,6 +991,21 @@ async fn send_held_at_turn_ends(
             return;
         };
         let manager = SessionManager { inner };
+        let requested = match manager.live(id).await {
+            Some(session) if !exited => session.requested_restart(),
+            _ => None,
+        };
+        if let Some(text) = requested {
+            // The queued messages stay queued for the end of the restarted session's first turn.
+            let message = attachments::Message::new(text, Vec::new());
+            if let Err(err) = manager
+                .restart(id, RestartMode::Continue, None, message, None)
+                .await
+            {
+                tracing::warn!("restart session {id} as its agent asked: {err:#}");
+            }
+            return;
+        }
         if normal && !manager.restart_pending() {
             if let Err(err) = manager.send_turn_end(id).await {
                 tracing::warn!("send the held messages of session {id}: {err:#}");

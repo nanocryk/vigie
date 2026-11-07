@@ -181,6 +181,15 @@ impl Context {
     pub fn estimate(used_tokens: u64, max_tokens: u64) -> Option<Self> {
         Self::new(used_tokens, max_tokens, ContextSource::Estimate)
     }
+
+    /// This context with `used_tokens` used, its share recomputed.
+    pub fn with_used(self, used_tokens: u64) -> Self {
+        Self {
+            used_tokens,
+            percentage: used_tokens as f64 * 100.0 / self.max_tokens as f64,
+            ..self
+        }
+    }
 }
 
 #[cfg(test)]

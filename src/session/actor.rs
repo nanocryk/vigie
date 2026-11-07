@@ -14,7 +14,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::activity::{ActivityTracker, LiveStatus};
-use super::agents::{self, AgentTracker, AgentView, Relay, RelayFilter};
+use super::agents::{self, AgentState, AgentTracker, AgentView, Relay, RelayFilter};
 use super::background::{BackgroundTracker, BackgroundView};
 use super::danger::Danger;
 use super::events::{
@@ -22,17 +22,17 @@ use super::events::{
     StopReason,
 };
 use super::fanout::{self, FanoutGate, FanoutOffer, Remember};
-use super::gauges::FIVE_MINUTE_TTL_SECS;
+use super::gauges::{self, FIVE_MINUTE_TTL_SECS, MainRequest};
 use super::grant::{self, FileOffer, Granted, Steps};
 use super::handle::Config;
 use super::plan::PlanTracker;
 use super::server_restart::ServerRestart;
-use super::{attachments, danger, mcp, seed};
+use super::{advice, attachments, danger, mcp, seed};
 use crate::claude::child::{Child, Launch};
 use crate::claude::protocol::{
-    CanUseTool, CliRequest, ControlRequest, ControlResponse, HookCallback, HookOutput, HostRequest,
-    Inbound, InitializeResponse, Outbound, PermissionMode, PermissionResult, Priority,
-    SetPermissionModeResponse, System, UserMessage,
+    CanUseTool, CliRequest, ContentBlock, ControlRequest, ControlResponse, HookCallback,
+    HookOutput, HostRequest, Inbound, InitializeResponse, Outbound, PermissionMode,
+    PermissionResult, Priority, SetPermissionModeResponse, System, UserMessage,
 };
 use crate::claude::tools::{self, ASK_USER_QUESTION, EXIT_PLAN_MODE, SEND_MESSAGE};
 use crate::store::{BashAnswer, SessionState, Store};
@@ -82,6 +82,8 @@ pub struct Views {
     pub status: watch::Sender<LiveStatus>,
     pub agents: watch::Sender<Vec<AgentView>>,
     pub background: watch::Sender<Vec<BackgroundView>>,
+    /// Set by `restart_session` until the manager restarts the discussion.
+    pub restart: watch::Sender<Option<String>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -190,6 +192,13 @@ pub struct Actor {
     uploads: Option<PathBuf>,
     /// Set by `set_attachments`, announced and cleared when the turn ends.
     turn_attachments: Vec<String>,
+    /// Calls of vigie's context tools this turn, by tool use id: the subagent
+    /// making it, `None` for the main conversation.
+    context_callers: HashMap<String, Option<String>>,
+    /// Newest prompt tokens per agent, `None` keying the main conversation.
+    newest_prompts: HashMap<Option<String>, u64>,
+    /// `context_usage` found a restart worthwhile this turn.
+    worthwhile_on_record: bool,
     /// Keyed by request id.
     pending: HashMap<String, PendingRequest>,
     /// Last mode announced with `HostEvent::PermissionMode`.
@@ -235,6 +244,9 @@ impl Actor {
             steps: Steps::default(),
             uploads: config.uploads,
             turn_attachments: Vec::new(),
+            context_callers: HashMap::new(),
+            newest_prompts: HashMap::new(),
+            worthwhile_on_record: false,
             pending: HashMap::new(),
             permission_mode: None,
             next_request: 0,
@@ -387,7 +399,23 @@ impl Actor {
             {
                 self.fail_gate(GateFailure::Overage);
             }
+            Inbound::Assistant(assistant) => {
+                let agent = &assistant.parent_tool_use_id;
+                if let Some(request) = MainRequest::from_any_assistant(assistant) {
+                    self.newest_prompts
+                        .insert(agent.clone(), request.prompt_tokens);
+                }
+                for block in &assistant.message.content {
+                    if let ContentBlock::ToolUse { id, name, .. } = block
+                        && (name == mcp::CONTEXT_USAGE_TOOL || name == mcp::RESTART_SESSION_TOOL)
+                    {
+                        self.context_callers.insert(id.clone(), agent.clone());
+                    }
+                }
+            }
             Inbound::Result(_) => {
+                self.context_callers.clear();
+                self.worthwhile_on_record = false;
                 if let Some(history) = &self.history {
                     history.prune_turn_streams(self.id, self.pruned_seq + 1..=self.seq);
                     self.pruned_seq = self.seq;
@@ -487,15 +515,29 @@ impl Actor {
             }
             CliRequest::McpMessage(message) => {
                 let response = if message.server_name == mcp::SERVER_NAME {
+                    let context = if mcp::reads_context(&message.message) {
+                        Some(self.context_state(&message.message).await)
+                    } else {
+                        None
+                    };
                     let handled = mcp::handle(
                         &message.message,
                         &self.cwd,
                         self.history.as_ref(),
                         self.server_restart.as_ref(),
+                        context.as_ref(),
                     )
                     .await;
-                    if let mcp::Effect::SetAttachments(paths) = handled.effect {
-                        self.turn_attachments = paths;
+                    match handled.effect {
+                        mcp::Effect::None => {}
+                        mcp::Effect::SetAttachments(paths) => self.turn_attachments = paths,
+                        mcp::Effect::Verdict(worthwhile) => {
+                            self.worthwhile_on_record = worthwhile == mcp::Worthwhile::Yes;
+                        }
+                        mcp::Effect::Restart(text) => {
+                            self.worthwhile_on_record = false;
+                            self.views.restart.send_replace(Some(text));
+                        }
                     }
                     ControlResponse::mcp(request.request_id.clone(), handled.reply)
                 } else {
@@ -535,6 +577,64 @@ impl Actor {
                     tracing::warn!("answer control request {subtype}: {err:#}");
                 }
             }
+        }
+    }
+
+    /// What `context_usage` and `restart_session` read: the caller, its context
+    /// from its newest prompt, and the main conversation's verdict.
+    async fn context_state(&self, message: &Value) -> mcp::ContextState {
+        let subagents_run = self
+            .agents
+            .agents()
+            .iter()
+            .any(|agent| agent.state == AgentState::Running);
+        let agent = match mcp::tool_use_id(message).and_then(|id| self.context_callers.get(id)) {
+            Some(agent) => Some(agent.clone()),
+            None if !subagents_run => Some(None),
+            None => None,
+        };
+        let row = match &self.history {
+            Some(history) => history.session(self.id).await.unwrap_or_else(|err| {
+                tracing::warn!("read session {}: {err:#}", self.id);
+                None
+            }),
+            None => None,
+        };
+        let stored = row.as_ref().and_then(|row| row.context.clone());
+        let newest = agent
+            .as_ref()
+            .and_then(|agent| self.newest_prompts.get(agent).copied());
+        let (caller, context, advice) = match agent {
+            Some(None) => {
+                let context = match (stored, newest) {
+                    (Some(context), Some(used)) => Some(context.with_used(used)),
+                    (context, _) => context,
+                };
+                let advice = row.as_ref().map(|row| {
+                    advice::restart_advice(
+                        context.as_ref(),
+                        row.calls_per_message,
+                        row.restart.as_ref(),
+                    )
+                });
+                (mcp::Caller::Main, context, advice)
+            }
+            Some(Some(_)) => {
+                let context = stored.zip(newest).and_then(|(stored, used)| {
+                    Some(gauges::Context {
+                        autocompact_threshold: stored.autocompact_threshold,
+                        ..gauges::Context::estimate(used, stored.max_tokens)?
+                    })
+                });
+                (mcp::Caller::Subagent, context, None)
+            }
+            None => (mcp::Caller::Unknown, None, None),
+        };
+        mcp::ContextState {
+            caller,
+            context,
+            advice,
+            worthwhile_on_record: self.worthwhile_on_record,
         }
     }
 
@@ -646,6 +746,9 @@ impl Actor {
                 let _ = reply.send(self.send_user(message, seed, client_id, None).await);
             }
             Command::Control { request, reply } => {
+                if matches!(request, HostRequest::Interrupt { .. }) {
+                    self.views.restart.send_replace(None);
+                }
                 let request_id = self.next_request_id();
                 let kind = RequestKind::of(&request);
                 let line =
@@ -996,6 +1099,7 @@ impl Actor {
         }
         self.state = State::Stopping;
         self.stop_reason = reason;
+        self.views.restart.send_replace(None);
         if let Some(reason) = reason {
             self.emit_host(HostEvent::Stopping { reason });
         }

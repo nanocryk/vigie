@@ -23,7 +23,7 @@ Prices in base input units: cache read 0.1, 1 hour cache write 2, 5 minute write
 
 `K*` counts API calls; a message makes several (one per tool round trip). Messages = `ceil(K* / calls_per_message)`.
 
-A restart is worthwhile when the stale share is at least `STALE_MIN_SHARE`, messages at most `ADVICE_MAX_MESSAGES` and `C` at least `ADVICE_MIN_FILL` of the context window. The floor keeps working context: older messages often still serve the task under way, so a restart that pays back quickly is still not advised on a small context. The server decides, in `src/session/advice.rs`, from the context and the measures taken after each turn, and sends the positive verdict as the session's `restart_advice`. The banner shows it; the `context_usage` MCP tool reports it, with the reason when it is negative.
+A restart is worthwhile when the stale share is at least `STALE_MIN_SHARE`, messages at most `ADVICE_MAX_MESSAGES` and `C` at least `ADVICE_MIN_FILL` of the context window. The floor keeps working context: older messages often still serve the task under way, so a restart that pays back quickly is still not advised on a small context. The server decides, in `src/session/advice.rs`, from the context and the measures taken after each turn, and sends the positive verdict as the session's `restart_advice`. The banner shows it; the `context_usage` MCP tool reports it, with the reason when it is negative. Called during a turn, the tool counts the newest main prompt as `C`, while the categories and the measures stay those of the last turn's end.
 
 ## Calls per message
 
