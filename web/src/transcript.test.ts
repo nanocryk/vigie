@@ -1546,6 +1546,11 @@ describe("askSummary", () => {
     expect(askSummary("Bash", { command: long })).toBe(long);
   });
 
+  it("shows a session restart as its text alone", () => {
+    const text = "Continue the plan.\nRead the notes first.";
+    expect(askSummary("mcp__vigie__restart_session", { text })).toBe(text);
+  });
+
   it("reveals direction overrides and zero-width marks", () => {
     const tricky = "ls \u202Etxt.exe\u202C a\u200Bb";
     expect(hiddenCount(tricky)).toBe(3);

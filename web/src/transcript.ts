@@ -567,6 +567,7 @@ function questionCount(input: unknown): string | null {
 
 export const HISTORY_SEARCH_TOOL = "mcp__vigie__history_search";
 export const HISTORY_READ_TOOL = "mcp__vigie__history_read";
+export const RESTART_SESSION_TOOL = "mcp__vigie__restart_session";
 
 /** Where a `history_search` call looks; `warning` when it leaves the session's folder. */
 export function historyScope(
@@ -644,6 +645,8 @@ function summaryOf(name: string, input: unknown, cwd: string | null): string | n
       if (from !== null) return `a message, from character ${from}`;
       return `${historyReadRange(input)} a message`;
     }
+    case RESTART_SESSION_TOOL:
+      return field(input, "text");
     case "Bash": {
       const command = field(input, "command");
       const background = isRecord(input) && input["run_in_background"] === true;
