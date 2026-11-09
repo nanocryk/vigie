@@ -42,7 +42,7 @@ const CARGO_RUN_ENV_PREFIX: &str = "CARGO_PKG_";
 /// Set to false so claude.ai connectors are not loaded; an unauthorized one otherwise gets reported by the model.
 const CONNECTORS_ENV: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 
-const FLAGS: [&str; 15] = [
+const FLAGS: [&str; 14] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -57,7 +57,6 @@ const FLAGS: [&str; 15] = [
     "--allowedTools",
     mcp::SET_ATTACHMENTS_TOOL,
     mcp::CONTEXT_USAGE_TOOL,
-    mcp::RESTART_SESSION_TOOL,
 ];
 
 const LINE_BUFFER: usize = 1024;
